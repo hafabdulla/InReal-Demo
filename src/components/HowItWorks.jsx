@@ -270,7 +270,6 @@ function StepRow({ step, index }) {
           {step.type === 'render-earn' && <EarnDashboardRender />}
           {step.type === 'render-grow' && <GrowDashboardRender />}
         </div>
-        <div className="absolute -top-3 lg:-top-6 -left-1 lg:-left-2 text-[4rem] lg:text-[8rem] font-bold text-ir-teal/[0.08] leading-none font-mono select-none pointer-events-none">{step.number}</div>
       </motion.div>
 
       <motion.div variants={fadeUp} className="lg:[direction:ltr]">
