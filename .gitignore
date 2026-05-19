@@ -21,3 +21,7 @@ uploads/
 /.env.development.local
 /.env.test.local
 /.env.production.local
+render.yaml
+vercel.json
+infra/DEPLOY_RENDER_VERCEL.md
+infra/vercel-env.example
