@@ -38,19 +38,32 @@ const pool = new Pool({
 
 app.use(cors({
   origin: (origin, callback) => {
-    const allowedOrigins = [
+    // Allow requests with no origin (server-to-server, curl, Postman)
+    if (!origin) return callback(null, true);
+
+    const defaults = [
       'http://localhost:3000',
       'http://localhost:3001',
       'http://127.0.0.1:3000',
       'http://127.0.0.1:3001',
-      process.env.FRONTEND_URL,
-    ].filter(Boolean);
+    ];
 
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+    // Support comma-separated FRONTEND_URL env var; normalize by stripping trailing slashes
+    const fromEnv = (process.env.FRONTEND_URL || '')
+      .split(',')
+      .map(s => s.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+
+    const allowedOrigins = [...defaults, ...fromEnv];
+
+    // Allow vercel preview domains automatically (convenient for demos)
+    const isVercelPreview = origin.endsWith('.vercel.app') || origin.endsWith('.vercel.sh');
+
+    if (allowedOrigins.includes(origin.replace(/\/$/, '')) || isVercelPreview) {
+      return callback(null, true);
     }
+
+    return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
 }));
