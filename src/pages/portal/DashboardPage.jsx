@@ -11,6 +11,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
+import { getApiBase } from '@/lib/utils';
 
 const fadeUp = {
   initial: { opacity: 0, y: 20 },
@@ -38,18 +39,14 @@ export default function DashboardPage() {
 
       try {
         // Fetch portfolio data
-        const portfolioRes = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/user/${user.UserID}/portfolio`
-        );
+        const portfolioRes = await fetch(`${getApiBase()}/api/user/${user.UserID}/portfolio`);
         const portfolioJson = await portfolioRes.json();
         if (portfolioJson.success) {
           setPortfolioData(portfolioJson.data);
         }
 
         // Fetch distributions
-        const distRes = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/user/${user.UserID}/distributions`
-        );
+        const distRes = await fetch(`${getApiBase()}/api/user/${user.UserID}/distributions`);
         const distJson = await distRes.json();
         if (distJson.success) {
           setDistributions(distJson.data.slice(0, 5));

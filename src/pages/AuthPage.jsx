@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { Toaster } from "@/components/ui/toaster";
 import { useAuth } from "@/contexts/SQLServerAuthContext";
+import { getApiBase } from '@/lib/utils';
 
 // Comprehensive country codes list (sorted alphabetically by country name)
 const countryCodes = [
@@ -333,7 +334,7 @@ export default function AuthPage() {
         const countryCode = countryCodeMap[selectedCountry?.country] || selectedCountry?.code?.replace('+', '').substring(0, 2).toUpperCase() || 'US';
 
         // Call backend signup API
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/auth/signup`, {
+        const response = await fetch(`${getApiBase()}/api/auth/signup`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

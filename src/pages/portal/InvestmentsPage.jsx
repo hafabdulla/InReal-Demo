@@ -12,6 +12,7 @@ import {
   PieChart,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
+import { getApiBase } from '@/lib/utils';
 
 const allocationColors = ['bg-teal-500', 'bg-blue-500', 'bg-violet-500', 'bg-amber-500'];
 
@@ -26,9 +27,7 @@ export default function InvestmentsPage() {
       if (!user?.UserID) return;
 
       try {
-        const res = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/user/${user.UserID}/portfolio`
-        );
+        const res = await fetch(`${getApiBase()}/api/user/${user.UserID}/portfolio`);
         const data = await res.json();
         if (data.success && data.data.investments) {
           // Add status to each investment for filtering
