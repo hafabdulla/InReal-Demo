@@ -14,7 +14,7 @@
     "dev:backend:pg": "node server.postgres.js",
     "db:setup:pg": "node tools/setup-postgres-db.js",
     "dev:backend:watch": "node --watch server.js",
-    "build": "node tools/generate-llms.js || true && vite build",
+    "build": "node tools/generate-llms.js || true && npx vite build",
     "preview": "vite preview --host :: --port 3000",
     "lint": "eslint . --quiet"
   },
