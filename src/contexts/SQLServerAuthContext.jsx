@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { useToast } from '@/components/ui/use-toast';
+import { getApiBase } from '@/lib/utils';
 
 const AuthContext = createContext(undefined);
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_BASE_URL = getApiBase();
 
 export const AuthProvider = ({ children }) => {
   const { toast } = useToast();
