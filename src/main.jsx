@@ -2,7 +2,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import App from '@/App';
+import App from './App';
 import AuthPage from '@/pages/AuthPage';
 import PortalLayout from '@/pages/portal/PortalLayout';
 import DashboardPage from '@/pages/portal/DashboardPage';
