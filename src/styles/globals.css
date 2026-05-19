@@ -1,0 +1,268 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --ir-dark: #0F0F0F;
+    --ir-white: #FFFFFF;
+    --ir-teal: #01CED1;
+    --ir-teal-muted: #00B8BB;
+    --ir-positive: #10B981;
+    --ir-negative: #EF4444;
+    --ir-caution: #F59E0B;
+    --ir-border-dark: #262626;
+    --ir-border-light: #E5E5E5;
+    --ir-surface-light: #FAFAFA;
+    --ir-text-secondary: #737373;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background-color: rgba(1, 206, 209, 0.2);
+    color: #0F0F0F;
+  }
+}
+
+@layer components {
+  .ir-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 bg-ir-teal text-ir-dark font-medium px-6 py-3 rounded-ir transition-all duration-300 ease-out hover:bg-ir-teal-muted hover:shadow-[0_6px_28px_rgba(1,_206,_209,_0.3)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ir-teal focus-visible:ring-offset-2 focus-visible:ring-offset-ir-white;
+  }
+
+  .ir-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 bg-transparent text-ir-teal font-medium border border-ir-teal px-6 py-3 rounded-ir transition-all duration-300 ease-out hover:bg-ir-teal/[0.08] hover:shadow-[0_4px_20px_rgba(1,_206,_209,_0.15)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ir-teal focus-visible:ring-offset-2;
+  }
+
+  .ir-btn-dark {
+    @apply inline-flex items-center justify-center gap-2 bg-ir-dark text-white font-medium px-6 py-3 rounded-ir transition-all duration-300 ease-out hover:bg-ir-teal hover:text-ir-dark active:scale-[0.97];
+  }
+
+  .ir-btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 bg-transparent text-ir-dark/60 font-medium px-6 py-3 rounded-ir transition-all duration-300 ease-out hover:bg-ir-dark/[0.04] hover:text-ir-dark active:scale-[0.97];
+  }
+
+  .ir-card-elevated {
+    @apply bg-white border border-ir-border-light rounded-ir-lg p-6 shadow-[0_2px_8px_rgba(0,_0,_0,_0.04),_0_0_0_1px_rgba(0,_0,_0,_0.02)] transition-all duration-300 hover:border-ir-teal/30 hover:shadow-[0_16px_48px_rgba(1,_206,_209,_0.12),_0_0_0_1px_rgba(1,_206,_209,_0.08)];
+  }
+
+  .ir-card-solid {
+    @apply bg-white border border-ir-border-light rounded-ir-lg shadow-[0_4px_16px_rgba(0,_0,_0,_0.05),_0_0_0_1px_rgba(0,_0,_0,_0.02)];
+  }
+
+  .ir-overline {
+    @apply text-overline uppercase text-ir-teal tracking-[0.1em] font-medium;
+  }
+
+  .ir-section {
+    @apply relative py-14 md:py-20 lg:py-28 px-5 md:px-6;
+  }
+
+  .ir-container {
+    @apply max-w-[1200px] mx-auto;
+  }
+
+  .ir-teal-text {
+    @apply text-ir-teal;
+  }
+
+  .ir-section-alt {
+    @apply bg-ir-surface-light;
+  }
+
+  .ir-section-title {
+    @apply text-[clamp(1.875rem,_7vw,_4rem)] font-bold tracking-[-0.025em] text-ir-dark leading-[1.1];
+  }
+}
+
+@layer utilities {
+  /* Border Radius Utilities */
+  .rounded-ir {
+    border-radius: 12px;
+  }
+
+  .rounded-ir-lg {
+    border-radius: 16px;
+  }
+
+  /* Typography Utilities */
+  .text-h1 {
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+  }
+
+  .text-h2 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+
+  .text-h3 {
+    font-size: clamp(1.5rem, 4vw, 2rem);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+  }
+
+  .text-h4 {
+    font-size: clamp(1.25rem, 3vw, 1.5rem);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .text-body {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+
+  .text-body-sm {
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  .text-caption {
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+
+  .text-overline {
+    font-size: 0.75rem;
+    line-height: 1.2;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* Background Color Utilities */
+  .bg-ir-dark {
+    background-color: var(--ir-dark);
+  }
+
+  .bg-ir-white {
+    background-color: var(--ir-white);
+  }
+
+  .bg-ir-teal {
+    background-color: var(--ir-teal);
+  }
+
+  .bg-ir-teal-muted {
+    background-color: var(--ir-teal-muted);
+  }
+
+  .bg-ir-surface-light {
+    background-color: var(--ir-surface-light);
+  }
+
+  .bg-ir-positive {
+    background-color: var(--ir-positive);
+  }
+
+  .bg-ir-negative {
+    background-color: var(--ir-negative);
+  }
+
+  .bg-ir-caution {
+    background-color: var(--ir-caution);
+  }
+
+  /* Text Color Utilities */
+  .text-ir-dark {
+    color: var(--ir-dark);
+  }
+
+  .text-ir-white {
+    color: var(--ir-white);
+  }
+
+  .text-ir-teal {
+    color: var(--ir-teal);
+  }
+
+  .text-ir-teal-muted {
+    color: var(--ir-teal-muted);
+  }
+
+  .text-ir-positive {
+    color: var(--ir-positive);
+  }
+
+  .text-ir-negative {
+    color: var(--ir-negative);
+  }
+
+  .text-ir-caution {
+    color: var(--ir-caution);
+  }
+
+  .text-ir-text-secondary {
+    color: var(--ir-text-secondary);
+  }
+
+  /* Border Color Utilities */
+  .border-ir-border-dark {
+    border-color: var(--ir-border-dark);
+  }
+
+  .border-ir-border-light {
+    border-color: var(--ir-border-light);
+  }
+
+  .border-ir-teal {
+    border-color: var(--ir-teal);
+  }
+
+  /* Additional Utilities */
+  .ir-depth-line {
+    @apply bg-gradient-to-r from-ir-teal/40 via-ir-teal/15 to-transparent;
+  }
+
+  .ir-accent-bar {
+    @apply w-10 h-[3px] bg-ir-teal rounded-full;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAFAFA;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D4D4D4;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #01CED1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

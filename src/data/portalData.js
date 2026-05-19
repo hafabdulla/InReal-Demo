@@ -1,0 +1,138 @@
+
+export const availableProperties = [
+  {
+    id: 'prop-1',
+    name: 'Skyline Tower Residence',
+    location: 'Manhattan, New York',
+    description: 'Premium luxury apartments in the heart of Manhattan with stunning skyline views. This property features state-of-the-art amenities, 24/7 concierge service, and proximity to Central Park.',
+    investmentAmount: 50000,
+    expectedReturn: 12.5,
+    image: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800',
+    propertyType: 'Residential',
+    totalValue: 15000000,
+    fundingProgress: 67,
+    investors: 342,
+    completionDate: '2027-Q2'
+  },
+  {
+    id: 'prop-2',
+    name: 'Marina Bay Commercial Hub',
+    location: 'Singapore',
+    description: 'Modern commercial complex in Singapore\'s prime business district. Features cutting-edge office spaces, retail units, and excellent connectivity to public transport.',
+    investmentAmount: 75000,
+    expectedReturn: 15.2,
+    image: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800',
+    propertyType: 'Commercial',
+    totalValue: 28000000,
+    fundingProgress: 82,
+    investors: 567,
+    completionDate: '2026-Q4'
+  },
+  {
+    id: 'prop-3',
+    name: 'Green Valley Eco Resort',
+    location: 'Bali, Indonesia',
+    description: 'Sustainable luxury resort development featuring eco-friendly villas, organic restaurants, and wellness facilities. Perfect blend of nature and modern amenities.',
+    investmentAmount: 35000,
+    expectedReturn: 10.8,
+    image: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?w=800',
+    propertyType: 'Hospitality',
+    totalValue: 8500000,
+    fundingProgress: 45,
+    investors: 198,
+    completionDate: '2027-Q3'
+  },
+  {
+    id: 'prop-4',
+    name: 'Urban Loft Complex',
+    location: 'Berlin, Germany',
+    description: 'Contemporary loft-style apartments in Berlin\'s trendy Kreuzberg district. Industrial-chic design meets modern comfort with rooftop gardens and communal spaces.',
+    investmentAmount: 40000,
+    expectedReturn: 11.5,
+    image: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=800',
+    propertyType: 'Residential',
+    totalValue: 12000000,
+    fundingProgress: 56,
+    investors: 287,
+    completionDate: '2026-Q3'
+  },
+  {
+    id: 'prop-5',
+    name: 'Tech Park Innovation Center',
+    location: 'Austin, Texas',
+    description: 'State-of-the-art technology campus designed for startups and established tech companies. Features collaborative workspaces, innovation labs, and networking facilities.',
+    investmentAmount: 100000,
+    expectedReturn: 16.3,
+    image: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=800',
+    propertyType: 'Commercial',
+    totalValue: 35000000,
+    fundingProgress: 73,
+    investors: 421,
+    completionDate: '2027-Q1'
+  },
+  {
+    id: 'prop-6',
+    name: 'Coastal View Apartments',
+    location: 'Barcelona, Spain',
+    description: 'Mediterranean luxury apartments with panoramic sea views. Walking distance to beaches, restaurants, and cultural attractions. Premium finishes throughout.',
+    investmentAmount: 60000,
+    expectedReturn: 13.7,
+    image: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=800',
+    propertyType: 'Residential',
+    totalValue: 18500000,
+    fundingProgress: 61,
+    investors: 312,
+    completionDate: '2026-Q4'
+  }
+];
+
+export const userInvestments = [
+  {
+    id: 'inv-1',
+    propertyId: 'prop-2',
+    propertyName: 'Marina Bay Commercial Hub',
+    location: 'Singapore',
+    investedAmount: 75000,
+    currentValue: 82350,
+    performance: 9.8,
+    purchaseDate: '2025-08-15',
+    status: 'Active',
+    expectedReturn: 15.2,
+    image: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800',
+    propertyType: 'Commercial',
+    dividendsPaid: 3250,
+    nextDividendDate: '2026-07-01'
+  },
+  {
+    id: 'inv-2',
+    propertyId: 'prop-1',
+    propertyName: 'Skyline Tower Residence',
+    location: 'Manhattan, New York',
+    investedAmount: 50000,
+    currentValue: 53750,
+    performance: 7.5,
+    purchaseDate: '2025-10-22',
+    status: 'Active',
+    expectedReturn: 12.5,
+    image: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800',
+    propertyType: 'Residential',
+    dividendsPaid: 1875,
+    nextDividendDate: '2026-06-15'
+  },
+  {
+    id: 'inv-3',
+    propertyId: 'prop-4',
+    propertyName: 'Urban Loft Complex',
+    location: 'Berlin, Germany',
+    investedAmount: 40000,
+    currentValue: 42800,
+    performance: 7.0,
+    purchaseDate: '2025-11-10',
+    status: 'Active',
+    expectedReturn: 11.5,
+    image: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=800',
+    propertyType: 'Residential',
+    dividendsPaid: 1400,
+    nextDividendDate: '2026-08-10'
+  }
+];

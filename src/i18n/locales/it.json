@@ -1,0 +1,217 @@
+{
+  "nav": {
+    "howItWorks": "Come Funziona",
+    "properties": "Proprietà",
+    "whyInReal": "Perché InReal",
+    "faq": "FAQ",
+    "contact": "Contatti",
+    "investNow": "Investi Ora",
+    "loginSignup": "Accedi / Registrati",
+    "language": "Lingua"
+  },
+  "hero": {
+    "title": "Guadagna con gli Immobili",
+    "subtitle": "Inizia a investire da $250",
+    "description": "Investi in modo frazionato in proprietà ad alto rendimento, gestite professionalmente dall'acquisto, affitto e vendita.",
+    "viewProperties": "Vedi Proprietà",
+    "howItWorks": "Come Funziona"
+  },
+  "mission": {
+    "tagline": "La Nostra Missione",
+    "title": "Semplificare gli Investimenti Immobiliari Globali",
+    "description": "InReal è stata fondata per abbattere le barriere alla proprietà immobiliare internazionale. Forniamo una piattaforma sicura, trasparente e completamente gestita che permette a chiunque di costruire un portafoglio immobiliare globale, partendo da soli $250. Il nostro obiettivo è rendere la creazione di ricchezza attraverso gli immobili accessibile a tutti, ovunque."
+  },
+  "usps": {
+    "lowEntry": {
+      "title": "Ingresso Basso",
+      "description": "Inizia a investire da soli $250."
+    },
+    "fullyManaged": {
+      "title": "Gestione Completa",
+      "description": "Reddito passivo senza complicazioni."
+    },
+    "spvBacked": {
+      "title": "Supporto SPV",
+      "description": "Struttura legale sicura e protetta."
+    },
+    "transparentReturns": {
+      "title": "Rendimenti Trasparenti",
+      "description": "Monitora performance e distribuzioni facilmente."
+    }
+  },
+  "howItWorks": {
+    "tagline": "COME FUNZIONA",
+    "title": "Tre Semplici Passi",
+    "steps": {
+      "invest": {
+        "title": "Investi",
+        "description": "Esplora proprietà selezionate e acquista quote in modo sicuro in pochi minuti."
+      },
+      "earn": {
+        "title": "Guadagna",
+        "description": "Ricevi reddito passivo dai rendimenti degli affitti e dall'apprezzamento della proprietà."
+      },
+      "exit": {
+        "title": "Esci",
+        "description": "Vendi le tue quote sul nostro mercato secondario o beneficia della vendita della proprietà."
+      }
+    }
+  },
+  "properties": {
+    "tagline": "OPPORTUNITÀ IN EVIDENZA",
+    "title": "Attualmente in Raccolta Fondi",
+    "minInvestment": "Investimento Min.",
+    "returns": "Rendimenti",
+    "investors": "Investitori",
+    "funded": "Finanziato",
+    "viewDetails": "Vedi Dettagli",
+    "investNow": "Investi Ora",
+    "scheduleCall": "Prenota una Chiamata",
+    "aboutProperty": "Informazioni sulla Proprietà",
+    "totalReturns": "Rendimenti Totali",
+    "rentalYield": "Rendimento Locativo",
+    "propertyType": "Tipo di Proprietà",
+    "size": "Dimensione",
+    "bedrooms": "Camere",
+    "bathrooms": "Bagni",
+    "yearBuilt": "Anno di Costruzione",
+    "totalUnits": "Unità Totali",
+    "appreciation": "Apprezzamento",
+    "amenities": "Servizi"
+  },
+  "comparison": {
+    "tagline": "CONFRONTO",
+    "title": "Perché InReal si Distingue",
+    "features": {
+      "minInvestment": "Investimento Minimo",
+      "propertySelection": "Selezione Proprietà",
+      "management": "Gestione",
+      "legalProtection": "Protezione Legale",
+      "liquidity": "Liquidità",
+      "returns": "Rendimenti",
+      "globalAccess": "Accesso Globale"
+    },
+    "inreal": {
+      "propertySelection": "Proprietà selezionate di alto valore",
+      "management": "Senza stress",
+      "legalProtection": "Responsabilità limitata",
+      "liquidity": "Opzioni flessibili",
+      "globalAccess": "Acquisto facile ovunque"
+    },
+    "traditional": {
+      "header": "Tradizionale",
+      "propertySelection": "Scelte limitate",
+      "management": "Richiede tempo",
+      "legalProtection": "Esposizione completa",
+      "liquidity": "Limitata"
+    }
+  },
+  "testimonials": {
+    "tagline": "Storie degli Investitori",
+    "title": "Cosa Dicono i Nostri Investitori",
+    "switchToSingle": "Passa a Vista Singola",
+    "switchToDual": "Passa a Vista Doppia"
+  },
+  "faq": {
+    "tagline": "DOMANDE FREQUENTI",
+    "title": "Serve Aiuto?",
+    "questions": {
+      "q1": {
+        "question": "Cos'è l'investimento immobiliare frazionato?",
+        "answer": "L'investimento immobiliare frazionato ti permette di possedere una parte di una proprietà invece dell'intera proprietà. Con InReal, puoi investire anche solo $500 per possedere quote in immobili premium, rendendolo accessibile a tutti."
+      },
+      "q2": {
+        "question": "Come protegge il mio investimento la struttura SPV?",
+        "answer": "Ogni proprietà è detenuta in un Veicolo a Scopo Speciale (SPV), un'entità legale creata specificamente per quella proprietà. Questa struttura fornisce protezione legale, separa la proprietà da altri asset e garantisce diritti di proprietà chiari per tutti gli investitori."
+      },
+      "q3": {
+        "question": "Quando e come ricevo i rendimenti?",
+        "answer": "I rendimenti vengono distribuiti secondo un programma, tipicamente trimestrale. Ricevi sia distribuzioni del reddito da affitto che potenziale apprezzamento quando la proprietà viene venduta. Tutte le distribuzioni vengono effettuate direttamente sul tuo conto."
+      },
+      "q4": {
+        "question": "Posso vendere le mie quote?",
+        "answer": "Sì, InReal fornisce un mercato secondario dove puoi mettere in vendita le tue quote ad altri investitori. Sebbene non sia liquido come le azioni, questo fornisce un'opzione di uscita prima della vendita della proprietà."
+      },
+      "q5": {
+        "question": "Quali sono i rischi coinvolti?",
+        "answer": "Come tutti gli investimenti, l'immobiliare comporta rischi tra cui fluttuazioni di mercato, variazioni del valore della proprietà e variabilità del reddito da affitto. Tuttavia, il nostro processo di selezione curato, la gestione professionale e le opzioni di diversificazione aiutano a mitigare questi rischi."
+      },
+      "q6": {
+        "question": "Come vengono selezionate le proprietà?",
+        "answer": "Il nostro team esperto conduce una due diligence approfondita su ogni proprietà, analizzando posizione, tendenze di mercato, potenziale locativo e prospettive di crescita. Solo le proprietà che soddisfano i nostri rigorosi criteri vengono offerte agli investitori."
+      }
+    }
+  },
+  "contact": {
+    "tagline": "Contattaci",
+    "title": "Mettiti in Contatto",
+    "form": {
+      "name": "Nome Completo",
+      "email": "Indirizzo Email",
+      "message": "Messaggio",
+      "submit": "Invia Messaggio"
+    }
+  },
+  "footer": {
+    "tagline": "Investimenti Immobiliari Frazionati",
+    "company": {
+      "title": "Azienda",
+      "about": "Chi Siamo",
+      "howItWorks": "Come Funziona",
+      "properties": "Proprietà",
+      "contact": "Contatti"
+    },
+    "resources": {
+      "title": "Risorse",
+      "faq": "FAQ",
+      "blog": "Blog",
+      "investmentGuide": "Guida agli Investimenti",
+      "helpCenter": "Centro Assistenza"
+    },
+    "legal": {
+      "title": "Legale",
+      "terms": "Termini di Servizio",
+      "privacy": "Politica sulla Privacy",
+      "riskDisclosure": "Informativa sui Rischi",
+      "compliance": "Conformità"
+    },
+    "copyright": "Tutti i diritti riservati.",
+    "disclaimer": "L'investimento comporta rischi. Le performance passate non garantiscono risultati futuri."
+  },
+  "auth": {
+    "login": "Accedi",
+    "signup": "Registrati",
+    "welcomeBack": "Bentornato",
+    "signInDescription": "Accedi per visualizzare il tuo portafoglio di investimenti",
+    "createAccount": "Crea Account",
+    "joinInvestors": "Unisciti a migliaia di investitori globali",
+    "email": "Email",
+    "password": "Password",
+    "confirmPassword": "Conferma Password",
+    "fullName": "Nome Completo",
+    "phoneNumber": "Numero di Telefono",
+    "forgotPassword": "Password dimenticata?",
+    "signIn": "Accedi",
+    "signingIn": "Accesso in corso...",
+    "creatingAccount": "Creazione account...",
+    "noAccount": "Non hai un account?",
+    "haveAccount": "Hai già un account?",
+    "backToHome": "Torna alla Home",
+    "termsTitle": "Termini e Condizioni",
+    "termsIntro": "Creando un account con InReal, accetti i seguenti termini:",
+    "term1": "Hai almeno 18 anni.",
+    "term2": "Fornirai informazioni accurate e complete.",
+    "term3": "Comprendi che gli investimenti immobiliari comportano rischi.",
+    "term4": "Accetti la nostra Politica sulla Privacy e la Politica sui Cookie.",
+    "term5": "Acconsenti a ricevere comunicazioni da InReal.",
+    "term6": "Comprendi che la verifica KYC sarà richiesta per gli investimenti.",
+    "scrollTerms": "Scorri per leggere tutti i termini prima di accettare",
+    "agreeTerms": "Accetto i Termini e Condizioni e la Politica sulla Privacy",
+    "scrollToEnable": "(Scorri i termini sopra per abilitare)",
+    "passwordMinLength": "Deve essere di almeno 8 caratteri",
+    "searchCountry": "Cerca paese...",
+    "totalInvested": "Totale Investito",
+    "activeInvestors": "Investitori Attivi",
+    "avgReturns": "Rendimenti Medi"
+  }
+}

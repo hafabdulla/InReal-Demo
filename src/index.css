@@ -1,0 +1,440 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  :root {
+    --background: 240 0% 96%; /* #F5F5F5 off-white as base */
+    --foreground: 0 0% 17%; /* #2B2B2B modern-grey */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 17%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 17%;
+    --primary: 181 100% 41%; /* HSL for #00CED1 */
+    --primary-foreground: 0 0% 17%; /* #2B2B2B modern-grey */
+    --secondary: 0 0% 55%; /* #8C8C8C slate-grey */
+    --secondary-foreground: 0 0% 96%; /* #F5F5F5 off-white */
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9.8%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 17% / 0.1;
+    --input: 0 0% 89.8%;
+    --ring: 181 100% 41%; /* HSL for #00CED1 */
+    --radius: 0.5rem;
+
+    /* InReal Brand Colors */
+    --ir-teal: 181 100% 41%;
+    --ir-teal-muted: 181 80% 50%;
+    --ir-dark: 0 0% 17%;
+    --ir-white: 0 0% 100%;
+    --ir-border-light: 0 0% 90%;
+    --ir-border-dark: 0 0% 25%;
+    --ir-surface-light: 0 0% 96%;
+    --ir-positive: 142 76% 36%;
+    --ir-negative: 0 84% 60%;
+    --ir-caution: 38 92% 50%;
+
+    /* Portal-specific Dark Theme Tokens */
+    --portal-bg-primary: 0 0% 6%; /* #0F0F0F */
+    --portal-bg-secondary: 0 0% 11%; /* #1C1C1C */
+    --portal-bg-tertiary: 0 0% 15%; /* #262626 */
+    --portal-surface-elevated: 0 0% 13%; /* #212121 */
+    --portal-text-primary: 0 0% 96%; /* #F5F5F5 */
+    --portal-text-secondary: 0 0% 63%; /* #A1A1A1 */
+    --portal-text-tertiary: 0 0% 45%; /* #737373 */
+    --portal-border-subtle: 0 0% 20%; /* #333333 */
+    --portal-border-default: 0 0% 25%; /* #404040 */
+    --portal-teal-primary: 181 100% 41%; /* #01CED1 */
+    --portal-teal-hover: 181 100% 35%; /* #00B8BB */
+    --portal-teal-muted: 181 50% 30%; /* Darker teal */
+    --portal-success: 142 76% 36%; /* #10B981 */
+    --portal-error: 0 84% 60%; /* #EF4444 */
+    --portal-warning: 38 92% 50%; /* #F59E0B */
+    --portal-info: 199 89% 48%; /* #0EA5E9 */
+  }
+
+  .dark {
+    --background: 0 0% 5.5%; /* #0E0E0E charcoal-black */
+    --foreground: 0 0% 96%; /* #F5F5F5 off-white */
+    --card: 0 0% 11%; /* #1C1C1C deep-graphite */
+    --card-foreground: 0 0% 96%;
+    --popover: 0 0% 5.5%;
+    --popover-foreground: 0 0% 96%;
+    --secondary: 0 0% 17%; /* #2B2B2B modern-grey */
+    --secondary-foreground: 0 0% 96%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 98%;
+    --border: 0 0% 17%;
+    --input: 0 0% 17%;
+    --ring: 181 100% 41%; /* HSL for #00CED1 */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Ubuntu', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Cantarell', sans-serif;
+    font-weight: 400; /* Ubuntu Regular */
+  }
+  
+  h1 {
+    @apply text-4xl md:text-5xl lg:text-6xl;
+    font-weight: 700; /* Ubuntu Bold */
+  }
+  
+  h2 {
+    @apply text-3xl md:text-4xl;
+    font-weight: 500; /* Ubuntu Medium */
+  }
+
+  h3 {
+    @apply text-xl;
+    font-weight: 500; /* Ubuntu Medium */
+  }
+}
+
+@layer components {
+  .tagline {
+    @apply text-xl font-bold;
+  }
+  .tagline-lg {
+    @apply text-2xl font-bold;
+  }
+
+  /* Portal-specific components */
+  .portal-card {
+    @apply rounded-xl p-6 transition-all duration-300;
+    background-color: hsl(var(--portal-bg-secondary));
+    border: 1px solid hsl(var(--portal-border-subtle));
+  }
+
+  .portal-card-elevated {
+    @apply portal-card;
+    background-color: hsl(var(--portal-surface-elevated));
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  }
+
+  .portal-card-hover {
+    @apply hover:border-[#01CED1] hover:shadow-[0_8px_24px_rgba(1,206,209,0.15)];
+  }
+
+  .portal-sidebar-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300 text-sm font-medium;
+    color: hsl(var(--portal-text-secondary));
+  }
+
+  .portal-sidebar-link:hover {
+    background-color: hsl(var(--portal-bg-tertiary));
+    color: hsl(var(--portal-text-primary));
+  }
+
+  .portal-sidebar-link-active {
+    background-color: hsl(var(--portal-teal-muted));
+    color: #01CED1;
+  }
+
+  .portal-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    background-color: #01CED1;
+    color: #0F0F0F;
+  }
+
+  .portal-btn-primary:hover {
+    background-color: #00B8BB;
+    box-shadow: 0 8px 24px rgba(1, 206, 209, 0.3);
+  }
+
+  .portal-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    background-color: transparent;
+    border: 1px solid #01CED1;
+    color: #01CED1;
+  }
+
+  .portal-btn-secondary:hover {
+    background-color: rgba(1, 206, 209, 0.1);
+  }
+
+  .portal-input {
+    @apply w-full px-4 py-3 rounded-lg transition-all duration-300 text-sm;
+    background-color: hsl(var(--portal-bg-tertiary));
+    border: 1px solid hsl(var(--portal-border-subtle));
+    color: hsl(var(--portal-text-primary));
+  }
+
+  .portal-input:focus {
+    outline: none;
+    border-color: #01CED1;
+    box-shadow: 0 0 0 3px rgba(1, 206, 209, 0.1);
+  }
+
+  .portal-input::placeholder {
+    color: hsl(var(--portal-text-tertiary));
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* InReal Button Styles */
+  .ir-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    @apply bg-[#00CED1] text-[#2B2B2B] hover:bg-[#00A3A6] hover:shadow-[0_8px_24px_rgba(0,206,209,0.25)];
+    @apply focus:outline-none focus:ring-2 focus:ring-[#00CED1] focus:ring-offset-2;
+  }
+
+  .ir-btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    @apply bg-transparent text-[#2B2B2B] border border-[#2B2B2B]/20 hover:border-[#00CED1] hover:text-[#00CED1];
+    @apply focus:outline-none focus:ring-2 focus:ring-[#00CED1] focus:ring-offset-2;
+  }
+
+  .ir-btn-dark {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    @apply bg-[#2B2B2B] text-white hover:bg-[#0E0E0E] hover:shadow-lg;
+    @apply focus:outline-none focus:ring-2 focus:ring-[#00CED1] focus:ring-offset-2;
+  }
+
+  /* Section Styles */
+  .ir-section {
+    @apply py-16 md:py-24 lg:py-32;
+  }
+
+  .ir-section-alt {
+    @apply bg-[#F5F5F5];
+  }
+
+  .ir-container {
+    @apply max-w-[1440px] mx-auto px-5 md:px-8 lg:px-12;
+  }
+
+  /* Text Styles */
+  .ir-teal-text {
+    @apply text-[#00CED1];
+  }
+
+  .ir-gradient-text {
+    @apply bg-gradient-to-r from-[#00CED1] via-[#00A3A6] to-[#00CED1] bg-clip-text text-transparent;
+  }
+
+  .ir-overline {
+    @apply text-xs md:text-sm font-bold uppercase tracking-wider text-[#00CED1];
+  }
+
+  .ir-section-title {
+    @apply text-3xl md:text-4xl lg:text-5xl font-bold text-[#2B2B2B] leading-tight;
+  }
+
+  /* Typography Scale */
+  .text-h4 {
+    @apply text-lg md:text-xl font-medium;
+  }
+
+  .text-body {
+    @apply text-base;
+  }
+
+  .text-body-sm {
+    @apply text-sm;
+  }
+
+  .text-caption {
+    @apply text-xs;
+  }
+
+  /* Card Styles */
+  .ir-card-elevated {
+    @apply bg-white rounded-xl md:rounded-2xl p-6 md:p-8 shadow-[0_4px_16px_rgba(0,0,0,0.06)] border border-[#F5F5F5];
+    @apply transition-all duration-300;
+  }
+
+  .ir-card-hover {
+    @apply hover:shadow-[0_12px_32px_rgba(0,206,209,0.15)] hover:scale-[1.02];
+  }
+
+  /* Border Radius */
+  .rounded-ir {
+    @apply rounded-lg;
+  }
+
+  .rounded-ir-lg {
+    @apply rounded-xl;
+  }
+
+  /* Depth & Lines */
+  .ir-depth-line {
+    @apply bg-gradient-to-r from-transparent via-[#2B2B2B]/10 to-transparent;
+  }
+
+  /* Color Utilities */
+  .bg-ir-white {
+    background-color: hsl(var(--ir-white));
+  }
+
+  .bg-ir-teal {
+    background-color: hsl(var(--ir-teal));
+  }
+
+  .bg-ir-dark {
+    background-color: hsl(var(--ir-dark));
+  }
+
+  .bg-ir-surface-light {
+    background-color: hsl(var(--ir-surface-light));
+  }
+
+  .text-ir-teal {
+    color: hsl(var(--ir-teal));
+  }
+
+  .text-ir-teal-muted {
+    color: hsl(var(--ir-teal-muted));
+  }
+
+  .text-ir-dark {
+    color: hsl(var(--ir-dark));
+  }
+
+  .text-ir-white {
+    color: hsl(var(--ir-white));
+  }
+
+  .text-ir-positive {
+    color: hsl(var(--ir-positive));
+  }
+
+  .text-ir-negative {
+    color: hsl(var(--ir-negative));
+  }
+
+  .border-ir-border-light {
+    border-color: hsl(var(--ir-border-light));
+  }
+
+  .border-ir-border-dark {
+    border-color: hsl(var(--ir-border-dark));
+  }
+
+  .border-ir-teal {
+    border-color: hsl(var(--ir-teal));
+  }
+
+  .bg-ir-caution {
+    background-color: hsl(var(--ir-caution));
+  }
+
+  /* Portal Color Utilities */
+  .bg-portal-primary {
+    background-color: hsl(var(--portal-bg-primary));
+  }
+
+  .bg-portal-secondary {
+    background-color: hsl(var(--portal-bg-secondary));
+  }
+
+  .bg-portal-tertiary {
+    background-color: hsl(var(--portal-bg-tertiary));
+  }
+
+  .text-portal-primary {
+    color: hsl(var(--portal-text-primary));
+  }
+
+  .text-portal-secondary {
+    color: hsl(var(--portal-text-secondary));
+  }
+
+  .text-portal-tertiary {
+    color: hsl(var(--portal-text-tertiary));
+  }
+
+  .border-portal-subtle {
+    border-color: hsl(var(--portal-border-subtle));
+  }
+
+  .border-portal-default {
+    border-color: hsl(var(--portal-border-default));
+  }
+
+  /* Animation Utilities */
+  @keyframes glow-pulse {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 8px rgba(0, 206, 209, 0.6);
+    }
+    50% {
+      opacity: 0.7;
+      box-shadow: 0 0 16px rgba(0, 206, 209, 0.8);
+    }
+  }
+
+  .animate-glow-pulse {
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+}
+
+/* Custom Scrollbar Styles - Applied Globally */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1C1C1C;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #00CED1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4682B4;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #00CED1 #1C1C1C;
+}
+
+/* Keep the class for backwards compatibility */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #1C1C1C;
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #00CED1;
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #4682B4;
+}
+
+/* Firefox scrollbar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #00CED1 #1C1C1C;
+}

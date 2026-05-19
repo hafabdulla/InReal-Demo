@@ -1,0 +1,217 @@
+{
+  "nav": {
+    "howItWorks": "How It Works",
+    "properties": "Properties",
+    "whyInReal": "Why InReal",
+    "faq": "FAQ",
+    "contact": "Contact",
+    "investNow": "Invest Now",
+    "loginSignup": "Login / Sign Up",
+    "language": "Language"
+  },
+  "hero": {
+    "title": "Earn Income with Real Estate",
+    "subtitle": "Start investing from $250",
+    "description": "Invest fractionally in high-yield properties, professionally managed through purchase, rental, & sale.",
+    "viewProperties": "View Properties",
+    "howItWorks": "How It Works"
+  },
+  "mission": {
+    "tagline": "Our Mission",
+    "title": "Simplifying Global Real Estate Investment",
+    "description": "InReal was founded to break down the barriers to international property ownership. We provide a secure, transparent, and fully managed platform that empowers anyone to build a global real estate portfolio, starting with just $250. Our goal is to make wealth-building through property accessible to everyone, everywhere."
+  },
+  "usps": {
+    "lowEntry": {
+      "title": "Low Entry",
+      "description": "Start investing from just $250."
+    },
+    "fullyManaged": {
+      "title": "Fully Managed",
+      "description": "Passive income without the hassle."
+    },
+    "spvBacked": {
+      "title": "SPV-Backed",
+      "description": "Secure, bankruptcy-remote legal structure."
+    },
+    "transparentReturns": {
+      "title": "Transparent Returns",
+      "description": "Track performance and distributions easily."
+    }
+  },
+  "howItWorks": {
+    "tagline": "HOW IT WORKS",
+    "title": "Three Simple Steps",
+    "steps": {
+      "invest": {
+        "title": "Invest",
+        "description": "Browse curated properties and purchase shares securely in minutes."
+      },
+      "earn": {
+        "title": "Earn",
+        "description": "Receive passive income from rental yields and property appreciation."
+      },
+      "exit": {
+        "title": "Exit",
+        "description": "Sell your shares on our secondary market or benefit from the property sale."
+      }
+    }
+  },
+  "properties": {
+    "tagline": "FEATURED OPPORTUNITIES",
+    "title": "Currently Fundraising",
+    "minInvestment": "Min. Investment",
+    "returns": "Returns",
+    "investors": "Investors",
+    "funded": "Funded",
+    "viewDetails": "View Details",
+    "investNow": "Invest Now",
+    "scheduleCall": "Schedule a Call",
+    "aboutProperty": "About This Property",
+    "totalReturns": "Total Returns",
+    "rentalYield": "Rental Yield",
+    "propertyType": "Property Type",
+    "size": "Size",
+    "bedrooms": "Bedrooms",
+    "bathrooms": "Bathrooms",
+    "yearBuilt": "Year Built",
+    "totalUnits": "Total Units",
+    "appreciation": "Appreciation",
+    "amenities": "Amenities"
+  },
+  "comparison": {
+    "tagline": "COMPARISON",
+    "title": "Why InReal Stands Out",
+    "features": {
+      "minInvestment": "Minimum Investment",
+      "propertySelection": "Property Selection",
+      "management": "Management",
+      "legalProtection": "Legal Protection",
+      "liquidity": "Liquidity",
+      "returns": "Returns",
+      "globalAccess": "Global Access"
+    },
+    "inreal": {
+      "propertySelection": "High value Selected properties",
+      "management": "Stress free",
+      "legalProtection": "Limited liability",
+      "liquidity": "Flexible options",
+      "globalAccess": "Easy purchase everywhere"
+    },
+    "traditional": {
+      "header": "Traditional",
+      "propertySelection": "Limited Choices",
+      "management": "Time consuming",
+      "legalProtection": "Full exposure",
+      "liquidity": "Limited"
+    }
+  },
+  "testimonials": {
+    "tagline": "Investor Stories",
+    "title": "What Our Investors Say",
+    "switchToSingle": "Switch to Single Row View",
+    "switchToDual": "Switch to Dual Row View"
+  },
+  "faq": {
+    "tagline": "FREQUENTLY ASKED QUESTIONS",
+    "title": "Need Help?",
+    "questions": {
+      "q1": {
+        "question": "What is fractional real estate investment?",
+        "answer": "Fractional real estate investment allows you to own a portion of a property rather than the entire property. With InReal, you can invest as little as $500 to own shares in premium real estate, making it accessible to everyone."
+      },
+      "q2": {
+        "question": "How does the SPV structure protect my investment?",
+        "answer": "Each property is held in a Special Purpose Vehicle (SPV), a legal entity created specifically for that property. This structure provides legal protection, separates the property from other assets, and ensures clear ownership rights for all investors."
+      },
+      "q3": {
+        "question": "When and how do I receive returns?",
+        "answer": "Returns are distributed on a scheduled basis, typically quarterly. You receive both rental income distributions and potential appreciation when the property is sold. All distributions are made directly to your account."
+      },
+      "q4": {
+        "question": "Can I sell my shares?",
+        "answer": "Yes, InReal provides a secondary market where you can list your shares for sale to other investors. While not as liquid as stocks, this provides an exit option before the property is sold."
+      },
+      "q5": {
+        "question": "What are the risks involved?",
+        "answer": "Like all investments, real estate carries risks including market fluctuations, property value changes, and rental income variability. However, our curated selection process, professional management, and diversification options help mitigate these risks."
+      },
+      "q6": {
+        "question": "How are properties selected?",
+        "answer": "Our expert team conducts thorough due diligence on every property, analyzing location, market trends, rental potential, and growth prospects. Only properties meeting our strict criteria are offered to investors."
+      }
+    }
+  },
+  "contact": {
+    "tagline": "Contact Us",
+    "title": "Get In Touch",
+    "form": {
+      "name": "Full Name",
+      "email": "Email Address",
+      "message": "Message",
+      "submit": "Send Message"
+    }
+  },
+  "footer": {
+    "tagline": "Fractional Property Investments",
+    "company": {
+      "title": "Company",
+      "about": "About Us",
+      "howItWorks": "How It Works",
+      "properties": "Properties",
+      "contact": "Contact"
+    },
+    "resources": {
+      "title": "Resources",
+      "faq": "FAQ",
+      "blog": "Blog",
+      "investmentGuide": "Investment Guide",
+      "helpCenter": "Help Center"
+    },
+    "legal": {
+      "title": "Legal",
+      "terms": "Terms of Service",
+      "privacy": "Privacy Policy",
+      "riskDisclosure": "Risk Disclosure",
+      "compliance": "Compliance"
+    },
+    "copyright": "All rights reserved.",
+    "disclaimer": "Investment involves risk. Past performance does not guarantee future results."
+  },
+  "auth": {
+    "login": "Login",
+    "signup": "Sign Up",
+    "welcomeBack": "Welcome Back",
+    "signInDescription": "Sign in to access your investment portfolio",
+    "createAccount": "Create Account",
+    "joinInvestors": "Join thousands of global investors",
+    "email": "Email",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "fullName": "Full Name",
+    "phoneNumber": "Phone Number",
+    "forgotPassword": "Forgot password?",
+    "signIn": "Sign In",
+    "signingIn": "Signing in...",
+    "creatingAccount": "Creating Account...",
+    "noAccount": "Don't have an account?",
+    "haveAccount": "Already have an account?",
+    "backToHome": "Back to Home",
+    "termsTitle": "Terms and Conditions",
+    "termsIntro": "By creating an account with InReal, you agree to the following terms:",
+    "term1": "You are at least 18 years of age.",
+    "term2": "You will provide accurate and complete information.",
+    "term3": "You understand that real estate investments carry risks.",
+    "term4": "You agree to our Privacy Policy and Cookie Policy.",
+    "term5": "You consent to receive communications from InReal.",
+    "term6": "You understand KYC verification will be required for investments.",
+    "scrollTerms": "Scroll to read all terms before agreeing",
+    "agreeTerms": "I agree to the Terms and Conditions and Privacy Policy",
+    "scrollToEnable": "(Please scroll through the terms above to enable)",
+    "passwordMinLength": "Must be at least 8 characters",
+    "searchCountry": "Search country...",
+    "totalInvested": "Total Invested",
+    "activeInvestors": "Active Investors",
+    "avgReturns": "Avg. Returns"
+  }
+}
