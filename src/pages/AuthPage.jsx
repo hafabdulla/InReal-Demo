@@ -259,12 +259,16 @@ export default function AuthPage() {
       newErrors.email = "Please enter a valid email";
     }
 
+    if (!loginForm.password) {
+      newErrors.password = "Password is required";
+    }
+
     setErrors(newErrors);
 
     if (Object.keys(newErrors).length === 0) {
       setIsLoading(true);
       // Call SQL Server auth API
-      const { error } = await signIn(loginForm.email);
+      const { error } = await signIn(loginForm.email, loginForm.password);
       setIsLoading(false);
 
       if (!error) {
@@ -343,6 +347,7 @@ export default function AuthPage() {
             firstName,
             lastName,
             email: signupForm.email,
+            password: signupForm.password,
             phoneCode: selectedCountry?.code || '+1',
             phone: signupForm.phone,
             countryCode: countryCode
@@ -568,15 +573,40 @@ export default function AuthPage() {
                 </div>
 
                 {/* Password */}
-                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-6">
-                  <p className="text-sm text-blue-400">
-                    <strong>Demo Mode:</strong> Enter any of these demo emails to login:
+                <div>
+                  <label className="block text-sm font-medium text-off-white mb-2">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-grey" />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      value={loginForm.password}
+                      onChange={(e) =>
+                        setLoginForm({ ...loginForm, password: e.target.value })
+                      }
+                      className={`w-full bg-deep-graphite border ${errors.password ? "border-red-500" : "border-modern-grey/50"
+                        } rounded-xl py-4 pl-12 pr-12 text-off-white placeholder-slate-grey focus:outline-none focus:border-primary-accent transition-colors`}
+                      placeholder="Enter your password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-grey hover:text-off-white transition-colors"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+                  {errors.password && (
+                    <p className="text-red-500 text-xs mt-1">{errors.password}</p>
+                  )}
+                  <p className="text-slate-grey text-xs mt-1">
+                    Demo users can use <span className="text-off-white">Demo123!</span>
                   </p>
-                  <ul className="text-xs text-slate-grey mt-2 space-y-1">
-                    <li>• sarah.chen@email.com</li>
-                    <li>• james.smith@email.com</li>
-                    <li>• michael.johnson@email.com</li>
-                  </ul>
                 </div>
 
                 {/* Submit Button */}

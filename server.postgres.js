@@ -9,7 +9,7 @@ import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
-import { randomUUID } from 'crypto';
+import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual } from 'crypto';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
@@ -93,6 +93,22 @@ function parseDescription(description) {
 
 async function ensureUploadDirs() {
   await fs.mkdir(proofsDir, { recursive: true });
+}
+
+function hashPassword(password, salt = randomBytes(16).toString('hex')) {
+  const hash = pbkdf2Sync(password, salt, 120000, 64, 'sha512').toString('hex');
+  return { salt, hash };
+}
+
+function verifyPassword(password, salt, expectedHash) {
+  const actualHash = pbkdf2Sync(password, salt, 120000, 64, 'sha512');
+  const expected = Buffer.from(expectedHash, 'hex');
+  return expected.length === actualHash.length && timingSafeEqual(expected, actualHash);
+}
+
+async function ensureAuthColumns() {
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_salt TEXT`);
 }
 
 async function verifyUserAndProperty(userId, propertyId) {
@@ -210,8 +226,12 @@ app.get('/api/properties/:id', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const email = req.body.email;
+    const password = req.body.password;
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+    if (!password) {
+      return res.status(400).json({ success: false, error: 'Password is required' });
     }
 
     const users = await q(
@@ -228,6 +248,8 @@ app.post('/api/auth/login', async (req, res) => {
         total_invested AS "TotalInvested",
         portfolio_value AS "PortfolioValue",
         total_distributions AS "TotalDistributions",
+        password_hash AS "PasswordHash",
+        password_salt AS "PasswordSalt",
         created_at AS "CreatedAt"
       FROM users
       WHERE email = $1 AND is_active = true AND is_deleted = false`,
@@ -243,6 +265,23 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Identity not verified' });
     }
 
+    const hasStoredPassword = Boolean(user.PasswordHash && user.PasswordSalt);
+    const demoPassword = 'Demo123!';
+
+    if (hasStoredPassword) {
+      const isValid = verifyPassword(password, user.PasswordSalt, user.PasswordHash);
+      if (!isValid) {
+        return res.status(401).json({ success: false, error: 'Invalid email or password' });
+      }
+    } else if (password !== demoPassword) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password' });
+    } else {
+      const { salt, hash } = hashPassword(password);
+      await q('UPDATE users SET password_hash = $2, password_salt = $3, updated_at = NOW() WHERE user_id = $1', [user.UserID, hash, salt]);
+    }
+
+    await q('UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE user_id = $1', [user.UserID]);
+
     res.json({
       success: true,
       data: user,
@@ -255,8 +294,8 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { firstName, lastName, email, phoneCode, phone, countryCode } = req.body;
-    if (!firstName || !lastName || !email || !phoneCode || !phone || !countryCode) {
+    const { firstName, lastName, email, phoneCode, phone, countryCode, password } = req.body;
+    if (!firstName || !lastName || !email || !phoneCode || !phone || !countryCode || !password) {
       return res.status(400).json({ success: false, error: 'All fields are required' });
     }
 
@@ -266,19 +305,22 @@ app.post('/api/auth/signup', async (req, res) => {
     }
 
     const fullPhoneNumber = `${phoneCode} ${phone}`;
+    const { salt, hash } = hashPassword(password);
     const inserted = await q(
       `INSERT INTO users (
         email, first_name, last_name, country_code, phone_number,
+        password_hash, password_salt,
         accreditation_status, kyc_status, identity_verified, bank_account_linked,
         total_invested, portfolio_value, total_distributions,
         is_active, is_deleted, created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5,
+        $6, $7,
         'Verified', 'Approved', true, true,
         0, 0, 0,
         true, false, NOW(), NOW()
       ) RETURNING user_id AS "UserID"`,
-      [email, firstName, lastName, countryCode, fullPhoneNumber]
+      [email, firstName, lastName, countryCode, fullPhoneNumber, hash, salt]
     );
 
     const newUserId = inserted[0].UserID;
@@ -724,6 +766,7 @@ async function startServer() {
   try {
     await q('SELECT 1');
     await ensureUploadDirs();
+    await ensureAuthColumns();
 
     const server = app.listen(PORT, () => {
       console.log(`\nPostgres API Server running on http://localhost:${PORT}`);
