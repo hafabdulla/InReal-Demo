@@ -6,9 +6,9 @@ INSERT INTO users (
   total_invested, portfolio_value, total_distributions,
   preferred_markets, investment_style, is_active, is_deleted
 ) VALUES
-('sarah.chen@email.com', 'Sarah', 'Chen', '+65 91234567', 'SG', 'Verified', 'Approved', TRUE, TRUE, 45000, 48250, 2250, 'Bangkok,Dubai', 'Balanced', TRUE, FALSE),
-('james.smith@email.com', 'James', 'Smith', '+66 812345678', 'TH', 'Verified', 'Approved', TRUE, TRUE, 30000, 31800, 1200, 'Bangkok', 'Conservative', TRUE, FALSE),
-('michael.johnson@email.com', 'Michael', 'Johnson', '+39 3331234567', 'IT', 'Verified', 'Approved', TRUE, TRUE, 62000, 66750, 3450, 'Italy,Bangkok', 'Aggressive', TRUE, FALSE)
+('sarah.chen@email.com', 'Sarah', 'Chen', '+65 91234567', 'SG', 'Verified', 'Approved', TRUE, TRUE, 150000, 156200, 6200, 'Bangkok,Dubai', 'Balanced', TRUE, FALSE),
+('james.smith@email.com', 'James', 'Smith', '+66 812345678', 'TH', 'Verified', 'Approved', TRUE, TRUE, 100000, 103900, 3900, 'Bangkok', 'Conservative', TRUE, FALSE),
+('michael.johnson@email.com', 'Michael', 'Johnson', '+39 3331234567', 'IT', 'Verified', 'Approved', TRUE, TRUE, 0, 0, 0, 'Italy,Bangkok', 'Aggressive', TRUE, FALSE)
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO properties (
@@ -58,7 +58,10 @@ INSERT INTO investor_distributions (
   investment_id, distribution_id, amount_received, distribution_date, status
 )
 SELECT i.investment_id, d.distribution_id,
-       CASE WHEN i.fractions_owned = 120 THEN 765.96 ELSE 510.64 END,
+      CASE
+        WHEN i.fractions_owned = 120 THEN 3829.80
+        ELSE 2553.20
+      END,
        '2026-03-28',
        'Completed'
 FROM investments i

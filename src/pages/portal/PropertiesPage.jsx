@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import {
@@ -7,8 +7,7 @@ import {
   MapPin,
   ArrowRight,
 } from 'lucide-react';
-import PortalLayout from '@/pages/portal/PortalLayout';
-import { availableProperties } from '@/data/portalData';
+import { getApiBase } from '@/lib/utils';
 
 const categories = ['All', 'Residential', 'Commercial', 'Hospitality'];
 const statuses = ['All', 'Funding', 'Funded'];
@@ -16,28 +15,64 @@ const statuses = ['All', 'Funding', 'Funded'];
 export default function PropertiesPage() {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedStatus, setSelectedStatus] = useState('Funding');
+  const [properties, setProperties] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  // Transform availableProperties to match the expected format
-  const allProperties = availableProperties.map(p => ({
-    id: p.id,
-    title: p.name,
-    name: p.name,
-    location: p.location,
-    country: p.location.split(', ').pop(),
-    returns: `${p.expectedReturn}%`,
-    annualReturn: `${p.expectedReturn}%`,
-    image: p.image,
-    propertyType: p.propertyType,
-    status: p.fundingProgress >= 100 ? 'Funded' : 'Funding',
-    funded: p.fundingProgress,
-    rentalYield: `${(p.expectedReturn * 0.6).toFixed(1)}%`,
-    minInvestment: `$${(p.investmentAmount / 100).toLocaleString()}`,
-    propertyValue: `$${(p.totalValue / 1000000).toFixed(1)}M`,
-    appreciation: `${(p.expectedReturn * 0.4).toFixed(1)}%`,
-    investors: p.investors,
-    completionDate: p.completionDate,
-    description: p.description
-  }));
+  useEffect(() => {
+    const loadProperties = async () => {
+      try {
+        setLoading(true);
+        setError('');
+
+        const response = await fetch(`${getApiBase()}/api/properties`);
+        const payload = await response.json();
+
+        if (!payload.success) {
+          throw new Error(payload.error || 'Failed to load properties');
+        }
+
+        const mapped = (payload.data || []).map((property) => {
+          const propertyValue = Number(property.PropertyValue) || 0;
+          const fractionPrice = Number(property.FractionPrice) || 0;
+          const totalFractions = Number(property.TotalFractions) || 0;
+          const fractionsSold = Number(property.FractionsSold) || 0;
+          const fundingProgress = totalFractions > 0 ? Math.round((fractionsSold / totalFractions) * 100) : 0;
+
+          return {
+            id: String(property.PropertyID),
+            title: property.PropertyName,
+            name: property.PropertyName,
+            location: `${property.City}, ${property.Country}`,
+            country: property.Country,
+            returns: `${Number(property.ProjectedAnnualYield) || 0}%`,
+            annualReturn: `${Number(property.ProjectedAnnualYield) || 0}%`,
+            image: property.ImageURL || '/placeholder-property.jpg',
+            propertyType: property.PropertyType,
+            status: property.Status === 'Funded' ? 'Funded' : 'Funding',
+            funded: fundingProgress,
+            rentalYield: `${Number(property.MonthlyRentalIncome) > 0 && propertyValue > 0 ? ((Number(property.MonthlyRentalIncome) * 12) / propertyValue * 100).toFixed(1) : Number(property.ProjectedAnnualYield || 0).toFixed(1)}%`,
+            minInvestment: fractionPrice ? `$${fractionPrice.toLocaleString('en-US')}` : '$0',
+            propertyValue: propertyValue ? `$${propertyValue.toLocaleString('en-US')}` : '$0',
+            appreciation: `${Math.max(0, (Number(property.ProjectedAnnualYield) || 0) * 0.4).toFixed(1)}%`,
+            investors: fractionsSold,
+            completionDate: property.AcquisitionDate || '',
+            description: property.PropertyDescription || '',
+          };
+        });
+
+        setProperties(mapped);
+      } catch (err) {
+        setError(err.message || 'Failed to load properties');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProperties();
+  }, []);
+
+  const allProperties = properties;
 
   const sortedProperties = [...allProperties].sort((a, b) => {
     if (a.status === b.status) return b.funded - a.funded;
@@ -53,6 +88,25 @@ export default function PropertiesPage() {
     const matchesStatus = selectedStatus === 'All' || p.status === selectedStatus;
     return matchesCategory && matchesStatus;
   });
+
+  if (loading) {
+    return (
+      <div className="p-6 md:p-8">
+        <p className="text-gray-500">Loading properties...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 md:p-8">
+        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
+          <p className="text-gray-900 font-semibold">Unable to load properties</p>
+          <p className="text-gray-500 mt-2">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 md:p-8 space-y-6">

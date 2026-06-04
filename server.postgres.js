@@ -69,11 +69,53 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsRoot));
 
 async function q(text, params = []) {
   const result = await pool.query(text, params);
   return result.rows;
+}
+
+async function getUserFinancialSummary(userId) {
+  const rows = await q(
+    `SELECT
+      u.user_id AS "UserID",
+      u.email AS "Email",
+      u.first_name AS "FirstName",
+      u.last_name AS "LastName",
+      u.country_code AS "CountryCode",
+      u.accreditation_status AS "AccreditationStatus",
+      u.kyc_status AS "KYCStatus",
+      u.identity_verified AS "IdentityVerified",
+      u.bank_account_linked AS "BankAccountLinked",
+      COUNT(DISTINCT i.property_id) AS "PropertiesOwned",
+      COALESCE(SUM(i.investment_amount), 0) AS "TotalInvested",
+      COALESCE(SUM(i.distribution_earned), 0) AS "TotalDistributions",
+      COALESCE(SUM(i.investment_amount + i.distribution_earned), 0) AS "PortfolioValue",
+      0::numeric AS "AvailableBalance",
+      u.created_at AS "CreatedAt"
+    FROM users u
+    LEFT JOIN investments i
+      ON u.user_id = i.user_id
+      AND i.status = 'Active'
+      AND i.is_deleted = false
+    WHERE u.user_id = $1
+      AND u.is_deleted = false
+      AND u.is_active = true
+    GROUP BY
+      u.user_id,
+      u.email,
+      u.first_name,
+      u.last_name,
+      u.country_code,
+      u.accreditation_status,
+      u.kyc_status,
+      u.identity_verified,
+      u.bank_account_linked,
+      u.created_at`,
+    [userId]
+  );
+
+  return rows[0] || null;
 }
 
 function generateTransferReference() {
@@ -89,6 +131,22 @@ function parseDescription(description) {
   } catch {
     return { rawDescription: description };
   }
+}
+
+function getAuthenticatedUserId(req) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const match = /^demo-token-(\d+)$/i.exec(token);
+  return match ? Number(match[1]) : null;
+}
+
+function requireAuthenticatedUserId(req, res) {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
+    return null;
+  }
+  return userId;
 }
 
 async function ensureUploadDirs() {
@@ -245,9 +303,6 @@ app.post('/api/auth/login', async (req, res) => {
         kyc_status AS "KYCStatus",
         identity_verified AS "IdentityVerified",
         bank_account_linked AS "BankAccountLinked",
-        total_invested AS "TotalInvested",
-        portfolio_value AS "PortfolioValue",
-        total_distributions AS "TotalDistributions",
         password_hash AS "PasswordHash",
         password_salt AS "PasswordSalt",
         created_at AS "CreatedAt"
@@ -280,11 +335,18 @@ app.post('/api/auth/login', async (req, res) => {
       await q('UPDATE users SET password_hash = $2, password_salt = $3, updated_at = NOW() WHERE user_id = $1', [user.UserID, hash, salt]);
     }
 
+    const summary = await getUserFinancialSummary(user.UserID);
     await q('UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE user_id = $1', [user.UserID]);
 
     res.json({
       success: true,
-      data: user,
+      data: {
+        ...user,
+        TotalInvested: summary?.TotalInvested ?? 0,
+        PortfolioValue: summary?.PortfolioValue ?? 0,
+        TotalDistributions: summary?.TotalDistributions ?? 0,
+        PropertiesOwned: summary?.PropertiesOwned ?? 0,
+      },
       token: `demo-token-${user.UserID}`,
     });
   } catch (error) {
@@ -335,18 +397,23 @@ app.post('/api/auth/signup', async (req, res) => {
         kyc_status AS "KYCStatus",
         identity_verified AS "IdentityVerified",
         bank_account_linked AS "BankAccountLinked",
-        total_invested AS "TotalInvested",
-        portfolio_value AS "PortfolioValue",
-        total_distributions AS "TotalDistributions",
         created_at AS "CreatedAt"
       FROM users
       WHERE user_id = $1`,
       [newUserId]
     );
 
+    const summary = await getUserFinancialSummary(newUserId);
+
     res.json({
       success: true,
-      data: newUsers[0],
+      data: {
+        ...newUsers[0],
+        TotalInvested: summary?.TotalInvested ?? 0,
+        PortfolioValue: summary?.PortfolioValue ?? 0,
+        TotalDistributions: summary?.TotalDistributions ?? 0,
+        PropertiesOwned: summary?.PropertiesOwned ?? 0,
+      },
       message: 'Account created successfully. Please verify your identity to start investing.',
       token: `demo-token-${newUserId}`,
     });
@@ -358,29 +425,16 @@ app.post('/api/auth/signup', async (req, res) => {
 app.get('/api/user/:userId/portfolio', async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
 
-    const summaryRows = await q(
-      `SELECT
-        u.user_id AS "UserID",
-        u.email AS "Email",
-        u.first_name AS "FirstName",
-        u.last_name AS "LastName",
-        COUNT(DISTINCT i.property_id) AS "PropertiesOwned",
-        COALESCE(SUM(i.investment_amount), 0) AS "TotalInvested",
-        COALESCE(SUM(i.distribution_earned), 0) AS "TotalDistributions",
-        COALESCE(u.portfolio_value, 0) AS "PortfolioValue",
-        0::numeric AS "AvailableBalance"
-      FROM users u
-      LEFT JOIN investments i
-        ON u.user_id = i.user_id
-        AND i.status = 'Active'
-        AND i.is_deleted = false
-      WHERE u.user_id = $1 AND u.is_deleted = false AND u.is_active = true
-      GROUP BY u.user_id, u.email, u.first_name, u.last_name, u.portfolio_value`,
-      [userId]
-    );
+    if (authenticatedUserId !== userId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
 
-    if (summaryRows.length === 0) {
+    const summaryRow = await getUserFinancialSummary(userId);
+
+    if (!summaryRow) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
@@ -406,7 +460,7 @@ app.get('/api/user/:userId/portfolio', async (req, res) => {
       [userId]
     );
 
-    res.json({ success: true, data: { summary: summaryRows[0], investments } });
+    res.json({ success: true, data: { summary: summaryRow, investments } });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -415,6 +469,13 @@ app.get('/api/user/:userId/portfolio', async (req, res) => {
 app.get('/api/user/:userId/distributions', async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
+    if (authenticatedUserId !== userId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
     const distributions = await q(
       `SELECT
         id.investor_distribution_id AS "InvestorDistributionID",
@@ -452,8 +513,6 @@ app.get('/api/users', async (req, res) => {
         country_code AS "CountryCode",
         accreditation_status AS "AccreditationStatus",
         kyc_status AS "KYCStatus",
-        total_invested AS "TotalInvested",
-        total_distributions AS "TotalDistributions",
         created_at AS "CreatedAt"
       FROM users
       WHERE is_deleted = false
@@ -469,16 +528,23 @@ app.get('/api/users', async (req, res) => {
 
 app.post('/api/investment-intents', async (req, res) => {
   try {
-    const userId = parseInt(req.body.userId);
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
     const propertyId = parseInt(req.body.propertyId);
     const amount = Number(req.body.amount);
     const currency = (req.body.currency || 'USD').toUpperCase();
+    const bodyUserId = parseInt(req.body.userId);
 
-    if (!userId || !propertyId || !amount || amount <= 0) {
+    if (bodyUserId && bodyUserId !== authenticatedUserId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    if (!propertyId || !amount || amount <= 0) {
       return res.status(400).json({ success: false, error: 'userId, propertyId and amount are required' });
     }
 
-    await verifyUserAndProperty(userId, propertyId);
+    await verifyUserAndProperty(authenticatedUserId, propertyId);
 
     const referenceCode = generateTransferReference();
     const intentDescription = {
@@ -504,7 +570,7 @@ app.post('/api/investment-intents', async (req, res) => {
         description, status, transaction_date, created_at
       ) VALUES ($1, 'InvestmentIntent', $2, $3, $4, $5::jsonb, 'Pending', NOW(), NOW())
       RETURNING transaction_id AS "TransactionID"`,
-      [userId, amount, currency, propertyId, JSON.stringify(intentDescription)]
+      [authenticatedUserId, amount, currency, propertyId, JSON.stringify(intentDescription)]
     );
 
     res.status(201).json({
@@ -526,6 +592,9 @@ app.post('/api/investment-intents', async (req, res) => {
 
 app.post('/api/investment-intents/:reference/proof', async (req, res) => {
   try {
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
     const { reference } = req.params;
     const { proofBase64, fileName, mimeType = 'application/octet-stream' } = req.body;
 
@@ -534,7 +603,7 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     }
 
     const txRows = await q(
-      `SELECT transaction_id, description, status
+      `SELECT transaction_id, user_id, description, status
        FROM transactions
        WHERE transaction_type = 'InvestmentIntent'
        ORDER BY created_at DESC
@@ -544,6 +613,10 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     const target = txRows.find((row) => parseDescription(row.description).referenceCode === reference);
     if (!target) {
       return res.status(404).json({ success: false, error: 'Investment intent not found for reference' });
+    }
+
+    if (target.user_id !== authenticatedUserId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
     }
 
     await ensureUploadDirs();
@@ -560,7 +633,7 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
       originalFileName: fileName,
       mimeType,
       uploadedAt: new Date().toISOString(),
-      publicPath: `/uploads/proofs/${safeFileName}`,
+      downloadPath: `/api/investment-intents/${reference}/proof`,
     };
 
     await q(
@@ -577,10 +650,51 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
         referenceCode: reference,
         proofStatus: 'Submitted',
         workflowStatus: 'PendingOpsReview',
-        proofPath: parsed.proof.publicPath,
+        proofPath: parsed.proof.downloadPath,
       },
     });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/investment-intents/:reference/proof', async (req, res) => {
+  try {
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
+    const { reference } = req.params;
+    const txRows = await q(
+      `SELECT transaction_id, user_id, description
+       FROM transactions
+       WHERE transaction_type = 'InvestmentIntent'
+       ORDER BY created_at DESC
+       LIMIT 300`
+    );
+
+    const target = txRows.find((row) => parseDescription(row.description).referenceCode === reference);
+    if (!target) {
+      return res.status(404).json({ success: false, error: 'Investment intent not found for reference' });
+    }
+
+    if (target.user_id !== authenticatedUserId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const parsed = parseDescription(target.description);
+    const proof = parsed.proof;
+    if (!proof?.fileName) {
+      return res.status(404).json({ success: false, error: 'Proof file not found' });
+    }
+
+    const absolutePath = path.join(proofsDir, proof.fileName);
+    await fs.access(absolutePath);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.download(absolutePath, proof.originalFileName || proof.fileName);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ success: false, error: 'Proof file not found' });
+    }
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -590,6 +704,13 @@ app.get('/api/user/:userId/intents', async (req, res) => {
     const userId = parseInt(req.params.userId);
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
+    if (authenticatedUserId !== userId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
     }
 
     const rows = await q(

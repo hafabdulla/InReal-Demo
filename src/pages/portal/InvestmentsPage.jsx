@@ -17,23 +17,38 @@ import { getApiBase } from '@/lib/utils';
 const allocationColors = ['bg-teal-500', 'bg-blue-500', 'bg-violet-500', 'bg-amber-500'];
 
 export default function InvestmentsPage() {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [investments, setInvestments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('active');
 
   useEffect(() => {
     const fetchInvestments = async () => {
-      if (!user?.UserID) return;
+      if (!user?.UserID || !session?.token) {
+        setLoading(false);
+        return;
+      }
 
       try {
-        const res = await fetch(`${getApiBase()}/api/user/${user.UserID}/portfolio`);
+        const authHeaders = session?.token
+          ? { Authorization: `Bearer ${session.token}` }
+          : {};
+
+        const res = await fetch(`${getApiBase()}/api/user/${user.UserID}/portfolio`, {
+          headers: authHeaders,
+        });
         const data = await res.json();
         if (data.success && data.data.investments) {
-          // Add status to each investment for filtering
-          const investmentsWithStatus = data.data.investments.map(inv => ({
+          // Normalize numeric fields and add status for filtering
+          const investmentsWithStatus = data.data.investments.map((inv) => ({
             ...inv,
-            status: 'Active' // All from portfolio are active
+            // Ensure numeric fields are numbers (pg returns numeric as strings)
+            InvestmentAmount: Number(inv.InvestmentAmount) || 0,
+            DistributionEarned: Number(inv.DistributionEarned) || 0,
+            FractionsOwned: Number(inv.FractionsOwned || inv.fractions_owned) || 0,
+            // Provide both `status` and `Status` keys used in different places
+            status: inv.Status || inv.status || 'Active',
+            Status: inv.Status || inv.status || 'Active',
           }));
           setInvestments(investmentsWithStatus);
         }
@@ -45,7 +60,7 @@ export default function InvestmentsPage() {
     };
 
     fetchInvestments();
-  }, [user]);
+  }, [user, session]);
 
   if (loading) {
     return (
@@ -61,7 +76,10 @@ export default function InvestmentsPage() {
 
   // Compute totals from actual data
   const totalInvested = investments.reduce((sum, inv) => sum + (inv.InvestmentAmount || 0), 0);
-  const totalCurrentValue = investments.reduce((sum, inv) => sum + (inv.InvestmentAmount || 0), 0); // Using same as invested for now
+  const totalCurrentValue = investments.reduce(
+    (sum, inv) => sum + (inv.InvestmentAmount || 0) + (inv.DistributionEarned || 0),
+    0
+  );
   const totalDistributions = investments.reduce((sum, inv) => sum + (inv.DistributionEarned || 0), 0);
   const totalReturnsPct = totalInvested > 0 ? ((totalCurrentValue - totalInvested) / totalInvested) * 100 : 0;
 
@@ -72,8 +90,14 @@ export default function InvestmentsPage() {
     color: allocationColors[i % allocationColors.length],
   }));
 
-  const fmt = (n) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const fmtInt = (n) => `$${n.toLocaleString('en-US')}`;
+  const fmt = (n) => {
+    const v = Number(n) || 0;
+    return `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+  const fmtInt = (n) => {
+    const v = Number(n) || 0;
+    return `$${v.toLocaleString('en-US')}`;
+  };
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -198,16 +222,18 @@ export default function InvestmentsPage() {
                       <p className="text-sm font-semibold text-gray-900 mt-0.5">{fmt(inv.InvestmentAmount)}</p>
                     </div>
                     <div className="bg-gray-50 rounded-xl p-3">
+                      <p className="text-xs text-gray-400">Current Value</p>
+                      <p className="text-sm font-semibold text-gray-900 mt-0.5">
+                        {fmt((inv.InvestmentAmount || 0) + (inv.DistributionEarned || 0))}
+                      </p>
+                    </div>
+                    <div className="bg-gray-50 rounded-xl p-3">
                       <p className="text-xs text-gray-400">Fractions Owned</p>
                       <p className="text-sm font-semibold text-gray-900 mt-0.5">{inv.FractionsOwned}</p>
                     </div>
                     <div className="bg-gray-50 rounded-xl p-3">
-                      <p className="text-xs text-gray-400">Annual Yield</p>
-                      <p className="text-sm font-semibold text-primary-accent mt-0.5">{inv.ProjectedAnnualYield}%</p>
-                    </div>
-                    <div className="bg-gray-50 rounded-xl p-3">
                       <p className="text-xs text-gray-400">Total Distributions</p>
-                      <p className="text-sm font-semibold text-emerald-600 mt-0.5">{fmt(inv.DistributionEarned)}</p>
+                      <p className="text-sm font-semibold text-primary-accent mt-0.5">{fmt(inv.DistributionEarned)}</p>
                     </div>
                   </div>
                 </div>

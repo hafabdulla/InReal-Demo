@@ -12,6 +12,7 @@ yarn-debug.log*
 yarn-error.log*
 coverage/
 uploads/
+outputs/
 /.history/
 /*.tgz
 /.parcel-cache

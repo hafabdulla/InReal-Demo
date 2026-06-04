@@ -39,6 +39,22 @@ function parseDescription(description) {
   }
 }
 
+function getAuthenticatedUserId(req) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const match = /^demo-token-(\d+)$/i.exec(token);
+  return match ? Number(match[1]) : null;
+}
+
+function requireAuthenticatedUserId(req, res) {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
+    return null;
+  }
+  return userId;
+}
+
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
@@ -60,7 +76,6 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsRoot));
 
 // Database configuration
 const dbConfig = {
@@ -411,6 +426,11 @@ app.post('/api/auth/signup', async (req, res) => {
 app.get('/api/user/:userId/portfolio', async (req, res) => {
   try {
     const { userId } = req.params;
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+    if (authenticatedUserId !== parseInt(userId)) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
     
     // Get user portfolio summary
     const summary = await queryDatabase(`
@@ -464,6 +484,11 @@ app.get('/api/user/:userId/portfolio', async (req, res) => {
 app.get('/api/user/:userId/distributions', async (req, res) => {
   try {
     const { userId } = req.params;
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+    if (authenticatedUserId !== parseInt(userId)) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
     
     const distributions = await queryDatabase(`
       SELECT TOP 24
@@ -582,16 +607,23 @@ app.get('/api/users', async (req, res) => {
  */
 app.post('/api/investment-intents', async (req, res) => {
   try {
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
     const userId = parseInt(req.body.userId);
     const propertyId = parseInt(req.body.propertyId);
     const amount = Number(req.body.amount);
     const currency = (req.body.currency || 'USD').toUpperCase();
 
-    if (!userId || !propertyId || !amount || amount <= 0) {
+    if (userId && userId !== authenticatedUserId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    if (!propertyId || !amount || amount <= 0) {
       return res.status(400).json({ success: false, error: 'userId, propertyId and amount are required' });
     }
 
-    await verifyUserAndProperty(userId, propertyId);
+    await verifyUserAndProperty(authenticatedUserId, propertyId);
 
     const referenceCode = generateTransferReference();
     const intentDescription = {
@@ -638,7 +670,7 @@ app.post('/api/investment-intents', async (req, res) => {
       SELECT SCOPE_IDENTITY() AS TransactionID;
       `,
       {
-        userId,
+        userId: authenticatedUserId,
         amount,
         currency,
         propertyId,
@@ -672,6 +704,9 @@ app.post('/api/investment-intents', async (req, res) => {
  */
 app.post('/api/investment-intents/:reference/proof', async (req, res) => {
   try {
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
     const { reference } = req.params;
     const { proofBase64, fileName, mimeType = 'application/octet-stream' } = req.body;
 
@@ -693,6 +728,10 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Investment intent not found for reference' });
     }
 
+    if (target.UserID !== authenticatedUserId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
     await ensureUploadDirs();
     const safeFileName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const absolutePath = path.join(proofsDir, safeFileName);
@@ -708,7 +747,7 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
       originalFileName: fileName,
       mimeType,
       uploadedAt: new Date().toISOString(),
-      publicPath: `/uploads/proofs/${safeFileName}`
+      downloadPath: `/api/investment-intents/${reference}/proof`
     };
 
     await queryDatabase(
@@ -730,10 +769,56 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
         referenceCode: reference,
         proofStatus: 'Submitted',
         workflowStatus: 'PendingOpsReview',
-        proofPath: parsed.proof.publicPath
+        proofPath: parsed.proof.downloadPath
       }
     });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/investment-intents/:reference/proof
+ * Download transfer proof if the caller owns the intent
+ */
+app.get('/api/investment-intents/:reference/proof', async (req, res) => {
+  try {
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+
+    const { reference } = req.params;
+    const txRows = await queryDatabase(
+      `
+      SELECT TOP 1 TransactionID, UserID, Description
+      FROM Transactions
+      WHERE TransactionType = 'InvestmentIntent'
+      ORDER BY CreatedAt DESC
+      `
+    );
+
+    const target = txRows.find((row) => parseDescription(row.Description).referenceCode === reference);
+    if (!target) {
+      return res.status(404).json({ success: false, error: 'Investment intent not found for reference' });
+    }
+
+    if (target.UserID !== authenticatedUserId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const parsed = parseDescription(target.Description);
+    const proof = parsed.proof;
+    if (!proof?.fileName) {
+      return res.status(404).json({ success: false, error: 'Proof file not found' });
+    }
+
+    const absolutePath = path.join(proofsDir, proof.fileName);
+    await fs.access(absolutePath);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.download(absolutePath, proof.originalFileName || proof.fileName);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ success: false, error: 'Proof file not found' });
+    }
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -747,6 +832,12 @@ app.get('/api/user/:userId/intents', async (req, res) => {
     const userId = parseInt(req.params.userId);
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
+    const authenticatedUserId = requireAuthenticatedUserId(req, res);
+    if (!authenticatedUserId) return;
+    if (authenticatedUserId !== userId) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
     }
 
     const rows = await queryDatabase(

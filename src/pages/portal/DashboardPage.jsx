@@ -19,7 +19,7 @@ const fadeUp = {
 };
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [portfolioData, setPortfolioData] = useState(null);
   const [distributions, setDistributions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,18 +35,29 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!user?.UserID) return;
+      if (!user?.UserID || !session?.token) {
+        setLoading(false);
+        return;
+      }
 
       try {
         // Fetch portfolio data
-        const portfolioRes = await fetch(`${getApiBase()}/api/user/${user.UserID}/portfolio`);
+        const authHeaders = session?.token
+          ? { Authorization: `Bearer ${session.token}` }
+          : {};
+
+        const portfolioRes = await fetch(`${getApiBase()}/api/user/${user.UserID}/portfolio`, {
+          headers: authHeaders,
+        });
         const portfolioJson = await portfolioRes.json();
         if (portfolioJson.success) {
           setPortfolioData(portfolioJson.data);
         }
 
         // Fetch distributions
-        const distRes = await fetch(`${getApiBase()}/api/user/${user.UserID}/distributions`);
+        const distRes = await fetch(`${getApiBase()}/api/user/${user.UserID}/distributions`, {
+          headers: authHeaders,
+        });
         const distJson = await distRes.json();
         if (distJson.success) {
           setDistributions(distJson.data.slice(0, 5));
