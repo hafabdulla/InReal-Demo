@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   last_login_at TIMESTAMPTZ,
   is_active BOOLEAN DEFAULT TRUE,
-  is_deleted BOOLEAN DEFAULT FALSE
+  is_deleted BOOLEAN DEFAULT FALSE,
+  role VARCHAR(20) NOT NULL DEFAULT 'user'
 );
 
 CREATE TABLE IF NOT EXISTS properties (

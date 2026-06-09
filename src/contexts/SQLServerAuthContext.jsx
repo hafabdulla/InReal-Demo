@@ -98,16 +98,19 @@ export const AuthProvider = ({ children }) => {
     });
   }, [toast]);
 
+  const isAdmin = user?.Role === 'admin';
+
   const value = useMemo(
     () => ({
       user,
       session,
       loading,
       isAuthenticated,
+      isAdmin,
       signIn,
       signOut,
     }),
-    [user, session, loading, isAuthenticated, signIn, signOut]
+    [user, session, loading, isAuthenticated, isAdmin, signIn, signOut]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

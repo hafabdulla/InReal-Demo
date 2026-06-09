@@ -111,8 +111,12 @@ export default function PortalLayout({ children }) {
                 <User className="w-5 h-5 text-[#0F0F0F]" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-portal-primary truncate">Demo User</p>
-                <p className="text-xs text-portal-tertiary truncate">demo@inreal.com</p>
+                <p className="text-sm font-medium text-portal-primary truncate">
+                  {user?.FirstName && user?.LastName
+                    ? `${user.FirstName} ${user.LastName}`
+                    : user?.Email || 'User'}
+                </p>
+                <p className="text-xs text-portal-tertiary truncate">{user?.Email || ''}</p>
               </div>
             </div>
             <button

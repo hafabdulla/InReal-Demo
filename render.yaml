@@ -6,7 +6,7 @@ services:
     repo: https://github.com/hafabdulla/InReal-Demo.git
     branch: main
     buildCommand: "npm install --include=dev"
-    startCommand: "node server.postgres.js"
+    startCommand: "node server.js"
     envVars:
       - key: DATABASE_URL
         value: ""

@@ -13,7 +13,7 @@ const schemaPath = path.join(rootDir, 'database', 'pg', '01-create-schema-postgr
 const seedPath = path.join(rootDir, 'database', 'pg', '02-seed-demo-data-postgres.sql');
 
 if (!process.env.DATABASE_URL) {
-  console.error('Missing DATABASE_URL. Set it in .env before running db:setup:pg.');
+  console.error('Missing DATABASE_URL. Set it in .env before running npm run db:setup.');
   process.exit(1);
 }
 
