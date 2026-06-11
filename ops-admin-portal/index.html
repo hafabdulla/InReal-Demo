@@ -20,7 +20,7 @@
       <div class="auth-card">
         <p class="eyebrow">Operations</p>
         <h2>Sign in</h2>
-        <p class="auth-copy">Staff accounts with the admin role can access this workspace.</p>
+        <p class="auth-copy">Operations workspace — authorized staff only.</p>
         <form id="loginForm" class="auth-form">
           <label>
             Email
@@ -37,17 +37,6 @@
           <p id="loginError" class="auth-error hidden"></p>
           <button class="primary-btn" type="submit" id="loginSubmitBtn">Sign in</button>
         </form>
-      </div>
-    </div>
-
-    <div id="authDenied" class="auth-screen hidden">
-      <div class="auth-card">
-        <p class="eyebrow">Access denied</p>
-        <h2>Admin role required</h2>
-        <p class="auth-copy" id="deniedMessage">
-          This workspace is restricted to operations staff with admin access.
-        </p>
-        <button class="ghost-btn" type="button" id="deniedLogoutBtn" style="margin-top: 20px">Sign out</button>
       </div>
     </div>
 

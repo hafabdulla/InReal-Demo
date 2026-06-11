@@ -1,6 +1,7 @@
 const AUTH_STORAGE_KEY = 'inreal_admin_session';
 const WORKSPACE_STORAGE_KEY = 'inreal_ops_admin_workspace_v1';
 const API_BASE_STORAGE_KEY = 'inreal_ops_api_base';
+const ADMIN_LOGIN_ERROR = 'Invalid email or password';
 
 const defaultState = {
   apiUsers: [],
@@ -17,14 +18,11 @@ const defaultState = {
 const authEls = {
   loading: document.getElementById('authLoading'),
   login: document.getElementById('authLogin'),
-  denied: document.getElementById('authDenied'),
   appShell: document.getElementById('appShell'),
   loginForm: document.getElementById('loginForm'),
   loginError: document.getElementById('loginError'),
   loginSubmitBtn: document.getElementById('loginSubmitBtn'),
   apiBaseInput: document.getElementById('apiBaseInput'),
-  deniedMessage: document.getElementById('deniedMessage'),
-  deniedLogoutBtn: document.getElementById('deniedLogoutBtn'),
   adminName: document.getElementById('adminName'),
   adminEmail: document.getElementById('adminEmail'),
   logoutBtn: document.getElementById('logoutBtn'),
@@ -120,8 +118,19 @@ function clearAuthSession() {
 function showAuthScreen(screen) {
   authEls.loading.classList.toggle('hidden', screen !== 'loading');
   authEls.login.classList.toggle('hidden', screen !== 'login');
-  authEls.denied.classList.toggle('hidden', screen !== 'denied');
   authEls.appShell.classList.toggle('hidden', screen !== 'app');
+}
+
+function rejectFailedAdminLogin(message = ADMIN_LOGIN_ERROR) {
+  clearAuthSession();
+  showAuthScreen('login');
+  setLoginError(message);
+}
+
+function returnToLogin() {
+  clearAuthSession();
+  showAuthScreen('login');
+  setLoginError('');
 }
 
 function setLoginError(message) {
@@ -427,21 +436,13 @@ function refreshIcons() {
   if (window.lucide) window.lucide.createIcons();
 }
 
-async function establishSession(session, { skipMeCheck = false } = {}) {
+async function establishSession(session) {
   authSession = session;
   saveAuthSession(session);
 
-  if (!skipMeCheck) {
-    const me = await apiFetch('/api/auth/me');
-    if (me.data?.Role !== 'admin') {
-      clearAuthSession();
-      authEls.deniedMessage.textContent = `Signed in as ${me.data?.Email || 'this account'}, but admin role is required for the operations workspace.`;
-      showAuthScreen('denied');
-      return false;
-    }
-    authSession = { ...session, user: me.data };
-    saveAuthSession(authSession);
-  }
+  const me = await apiFetch('/api/admin/auth/me');
+  authSession = { ...session, user: me.data };
+  saveAuthSession(authSession);
 
   updateAdminHeader();
   showAuthScreen('app');
@@ -463,24 +464,16 @@ async function handleLogin(event) {
   if (apiBase) setApiBase(apiBase);
 
   try {
-    const result = await apiFetch('/api/auth/login', {
+    const result = await apiFetch('/api/admin/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
 
-    if (result.data?.Role !== 'admin') {
-      clearAuthSession();
-      authEls.deniedMessage.textContent = `Signed in as ${result.data?.Email || email}, but this account does not have admin access.`;
-      showAuthScreen('denied');
-      return;
-    }
-
-    await establishSession({ user: result.data, token: result.token }, { skipMeCheck: true });
+    await establishSession({ user: result.data, token: result.token });
     addAudit('Admin signed in', `${result.data.Email} • just now`, 'Operations workspace unlocked.');
     renderAudit();
-  } catch (error) {
-    setLoginError(error.message || 'Login failed');
-    showAuthScreen('login');
+  } catch {
+    rejectFailedAdminLogin();
   } finally {
     authEls.loginSubmitBtn.disabled = false;
   }
@@ -512,14 +505,7 @@ async function bootstrapAuth() {
   authSession = stored;
 
   try {
-    const me = await apiFetch('/api/auth/me');
-    if (me.data?.Role !== 'admin') {
-      clearAuthSession();
-      authEls.deniedMessage.textContent = `Signed in as ${me.data?.Email || 'this account'}, but admin role is required.`;
-      showAuthScreen('denied');
-      return;
-    }
-
+    const me = await apiFetch('/api/admin/auth/me');
     authSession = { ...stored, user: me.data };
     saveAuthSession(authSession);
     updateAdminHeader();
@@ -527,8 +513,7 @@ async function bootstrapAuth() {
     refreshIcons();
     await refreshLiveData();
   } catch {
-    clearAuthSession();
-    showAuthScreen('login');
+    returnToLogin();
   }
 }
 
@@ -611,7 +596,6 @@ function bindWorkspaceEvents() {
 
 authEls.loginForm.addEventListener('submit', handleLogin);
 authEls.logoutBtn.addEventListener('click', handleLogout);
-authEls.deniedLogoutBtn.addEventListener('click', handleLogout);
 
 bindWorkspaceEvents();
 bootstrapAuth();

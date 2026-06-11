@@ -160,17 +160,80 @@ async function getUserRole(userId) {
   return rows[0]?.role || null;
 }
 
+const GENERIC_LOGIN_ERROR = 'Invalid email or password';
+
+async function verifyLoginCredentials(email, password) {
+  const users = await q(
+    `SELECT
+      user_id AS "UserID",
+      email AS "Email",
+      first_name AS "FirstName",
+      last_name AS "LastName",
+      country_code AS "CountryCode",
+      accreditation_status AS "AccreditationStatus",
+      kyc_status AS "KYCStatus",
+      identity_verified AS "IdentityVerified",
+      bank_account_linked AS "BankAccountLinked",
+      password_hash AS "PasswordHash",
+      password_salt AS "PasswordSalt",
+      COALESCE(role, 'user') AS "Role",
+      created_at AS "CreatedAt"
+    FROM users
+    WHERE email = $1 AND is_active = true AND is_deleted = false`,
+    [email]
+  );
+
+  if (users.length === 0) {
+    return null;
+  }
+
+  const user = users[0];
+  if (!user.IdentityVerified) {
+    return null;
+  }
+
+  const hasStoredPassword = Boolean(user.PasswordHash && user.PasswordSalt);
+  const demoPassword = 'Demo123!';
+
+  if (hasStoredPassword) {
+    const isValid = verifyPassword(password, user.PasswordSalt, user.PasswordHash);
+    if (!isValid) {
+      return null;
+    }
+  } else if (password !== demoPassword) {
+    return null;
+  } else {
+    const { salt, hash } = hashPassword(password);
+    await q('UPDATE users SET password_hash = $2, password_salt = $3, updated_at = NOW() WHERE user_id = $1', [user.UserID, hash, salt]);
+  }
+
+  return user;
+}
+
+async function buildLoginResponse(user) {
+  const summary = await getUserFinancialSummary(user.UserID);
+  await q('UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE user_id = $1', [user.UserID]);
+
+  return {
+    success: true,
+    data: {
+      ...sanitizeUserRecord(user),
+      TotalInvested: summary?.TotalInvested ?? 0,
+      PortfolioValue: summary?.PortfolioValue ?? 0,
+      TotalDistributions: summary?.TotalDistributions ?? 0,
+      PropertiesOwned: summary?.PropertiesOwned ?? 0,
+    },
+    token: `demo-token-${user.UserID}`,
+  };
+}
+
 async function requireAdmin(req, res) {
   const userId = requireAuthenticatedUserId(req, res);
   if (!userId) return null;
 
   const role = await getUserRole(userId);
-  if (!role) {
-    res.status(403).json({ success: false, error: 'Forbidden' });
-    return null;
-  }
-  if (role !== 'admin') {
-    res.status(403).json({ success: false, error: 'Admin access required' });
+  if (!role || role !== 'admin') {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
     return null;
   }
   return userId;
@@ -351,7 +414,42 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Password is required' });
     }
 
-    const users = await q(
+    const user = await verifyLoginCredentials(email, password);
+    if (!user) {
+      return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
+    }
+
+    res.json(await buildLoginResponse(user));
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/admin/auth/login', async (req, res) => {
+  try {
+    const email = req.body.email;
+    const password = req.body.password;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email and password are required' });
+    }
+
+    const user = await verifyLoginCredentials(email, password);
+    if (!user || user.Role !== 'admin') {
+      return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
+    }
+
+    res.json(await buildLoginResponse(user));
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/admin/auth/me', async (req, res) => {
+  try {
+    const userId = await requireAdmin(req, res);
+    if (!userId) return;
+
+    const rows = await q(
       `SELECT
         user_id AS "UserID",
         email AS "Email",
@@ -362,52 +460,28 @@ app.post('/api/auth/login', async (req, res) => {
         kyc_status AS "KYCStatus",
         identity_verified AS "IdentityVerified",
         bank_account_linked AS "BankAccountLinked",
-        password_hash AS "PasswordHash",
-        password_salt AS "PasswordSalt",
         COALESCE(role, 'user') AS "Role",
         created_at AS "CreatedAt"
       FROM users
-      WHERE email = $1 AND is_active = true AND is_deleted = false`,
-      [email]
+      WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
     );
 
-    if (users.length === 0) {
-      return res.status(401).json({ success: false, error: 'User not found' });
+    if (rows.length === 0) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const user = users[0];
-    if (!user.IdentityVerified) {
-      return res.status(403).json({ success: false, error: 'Identity not verified' });
-    }
-
-    const hasStoredPassword = Boolean(user.PasswordHash && user.PasswordSalt);
-    const demoPassword = 'Demo123!';
-
-    if (hasStoredPassword) {
-      const isValid = verifyPassword(password, user.PasswordSalt, user.PasswordHash);
-      if (!isValid) {
-        return res.status(401).json({ success: false, error: 'Invalid email or password' });
-      }
-    } else if (password !== demoPassword) {
-      return res.status(401).json({ success: false, error: 'Invalid email or password' });
-    } else {
-      const { salt, hash } = hashPassword(password);
-      await q('UPDATE users SET password_hash = $2, password_salt = $3, updated_at = NOW() WHERE user_id = $1', [user.UserID, hash, salt]);
-    }
-
-    const summary = await getUserFinancialSummary(user.UserID);
-    await q('UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE user_id = $1', [user.UserID]);
+    const summary = await getUserFinancialSummary(userId);
 
     res.json({
       success: true,
       data: {
-        ...sanitizeUserRecord(user),
+        ...rows[0],
         TotalInvested: summary?.TotalInvested ?? 0,
         PortfolioValue: summary?.PortfolioValue ?? 0,
         TotalDistributions: summary?.TotalDistributions ?? 0,
         PropertiesOwned: summary?.PropertiesOwned ?? 0,
       },
-      token: `demo-token-${user.UserID}`,
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
