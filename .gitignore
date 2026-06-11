@@ -25,4 +25,3 @@ outputs/
 infra/DEPLOY_RENDER_VERCEL.md
 infra/vercel-env.example
 infra
-ops-admin-portal/

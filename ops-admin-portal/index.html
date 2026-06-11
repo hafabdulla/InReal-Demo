@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>InReal Operations</title>
+    <meta name="description" content="Internal operations workspace for InReal staff." />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="authLoading" class="auth-screen">
+      <div class="auth-card">
+        <p class="eyebrow">InReal</p>
+        <h2>Checking session…</h2>
+        <p class="auth-copy">Verifying admin access</p>
+      </div>
+    </div>
+
+    <div id="authLogin" class="auth-screen hidden">
+      <div class="auth-card">
+        <p class="eyebrow">Operations</p>
+        <h2>Sign in</h2>
+        <p class="auth-copy">Staff accounts with the admin role can access this workspace.</p>
+        <form id="loginForm" class="auth-form">
+          <label>
+            Email
+            <input class="field" name="email" type="email" required autocomplete="username" placeholder="ops@investinreal.io" />
+          </label>
+          <label>
+            Password
+            <input class="field" name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+          </label>
+          <label id="apiBaseField" class="hidden">
+            API base URL
+            <input class="field" id="apiBaseInput" type="url" placeholder="https://inreal-demo.onrender.com" />
+          </label>
+          <p id="loginError" class="auth-error hidden"></p>
+          <button class="primary-btn" type="submit" id="loginSubmitBtn">Sign in</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="authDenied" class="auth-screen hidden">
+      <div class="auth-card">
+        <p class="eyebrow">Access denied</p>
+        <h2>Admin role required</h2>
+        <p class="auth-copy" id="deniedMessage">
+          This workspace is restricted to operations staff with admin access.
+        </p>
+        <button class="ghost-btn" type="button" id="deniedLogoutBtn" style="margin-top: 20px">Sign out</button>
+      </div>
+    </div>
+
+    <div class="shell hidden" id="appShell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <img
+            src="https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/25979fe1840cf294bcca6defc52c98c7.png"
+            alt="InReal"
+          />
+          <span class="ops-badge-sm">Ops</span>
+        </div>
+
+        <nav class="nav" id="navTabs" aria-label="Portal sections">
+          <button class="nav-item active" data-tab="overview" data-title="Overview">
+            <i data-lucide="layout-dashboard"></i>
+            <span>Overview</span>
+          </button>
+          <button class="nav-item" data-tab="users" data-title="Users">
+            <i data-lucide="users"></i>
+            <span>Users</span>
+          </button>
+          <button class="nav-item" data-tab="uploads" data-title="Documents">
+            <i data-lucide="file-up"></i>
+            <span>Documents</span>
+          </button>
+          <button class="nav-item" data-tab="files" data-title="Queues">
+            <i data-lucide="list-checks"></i>
+            <span>Queues</span>
+          </button>
+          <button class="nav-item" data-tab="audit" data-title="Audit log">
+            <i data-lucide="scroll-text"></i>
+            <span>Audit log</span>
+          </button>
+        </nav>
+
+        <section class="side-card">
+          <div class="user-chip">
+            <div class="user-avatar">
+              <i data-lucide="user"></i>
+            </div>
+            <div style="min-width: 0; flex: 1">
+              <p class="name" id="adminName">Operations</p>
+              <p class="email" id="adminEmail">—</p>
+            </div>
+          </div>
+          <span class="status-pill">Admin</span>
+          <button class="ghost-btn logout-btn" type="button" id="logoutBtn">
+            <i data-lucide="log-out" style="width: 16px; height: 16px"></i>
+            Sign out
+          </button>
+        </section>
+      </aside>
+
+      <div class="main-wrap">
+        <header class="top-header">
+          <h1 id="pageTitle">Overview</h1>
+        </header>
+
+        <main class="page-content">
+          <section class="panel active" data-panel="overview">
+            <div class="hero-metrics" id="summaryCards"></div>
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Snapshot</p>
+                <h3>Workspace overview</h3>
+              </div>
+              <button class="ghost-btn" id="seedDemoBtn">
+                <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
+                Refresh live data
+              </button>
+            </div>
+            <div class="grid-3" id="overviewGrid"></div>
+          </section>
+
+          <section class="panel" data-panel="users">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">User management</p>
+                <h3>Investors &amp; accounts</h3>
+              </div>
+              <div class="inline-actions">
+                <input id="userSearch" class="field" type="search" placeholder="Search name, email, country…" style="min-width: 220px" />
+                <select id="userFilter" class="field" style="width: auto">
+                  <option value="all">All statuses</option>
+                  <option value="verified">Verified</option>
+                  <option value="pending">Pending</option>
+                  <option value="suspended">Suspended</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="split">
+              <form class="card form" id="userForm">
+                <div class="card-title">
+                  <div>
+                    <h4>Add user (local)</h4>
+                    <p>API create coming soon</p>
+                  </div>
+                </div>
+                <label>
+                  Full name
+                  <input class="field" name="name" required placeholder="Ava Johnson" />
+                </label>
+                <label>
+                  Email
+                  <input class="field" name="email" required type="email" placeholder="ava@example.com" />
+                </label>
+                <label>
+                  Country
+                  <input class="field" name="country" placeholder="United States" />
+                </label>
+                <label>
+                  Status
+                  <select class="field" name="status">
+                    <option value="Verified">Verified</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Suspended">Suspended</option>
+                  </select>
+                </label>
+                <label>
+                  Notes
+                  <textarea class="field textarea" name="notes" rows="3" placeholder="KYC notes…"></textarea>
+                </label>
+                <button class="primary-btn" type="submit">Save note</button>
+              </form>
+
+              <div class="card table-card">
+                <div class="card-title">
+                  <div>
+                    <h4>Live users</h4>
+                    <p id="userCountLabel">0 users</p>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Country</th>
+                        <th>Status</th>
+                        <th>Role</th>
+                      </tr>
+                    </thead>
+                    <tbody id="userTableBody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="uploads">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Documents</p>
+                <h3>Upload &amp; intake</h3>
+              </div>
+              <p class="panel-note">Supabase storage integration coming next</p>
+            </div>
+
+            <div class="split upload-grid">
+              <label class="upload-dropzone" id="uploadDropzone">
+                <input id="fileInput" type="file" multiple hidden />
+                <i data-lucide="upload-cloud" style="width: 32px; height: 32px; color: #01ced1"></i>
+                <strong>Drop files or click to stage</strong>
+                <span>PDF, JPG, PNG, CSV, ZIP</span>
+              </label>
+
+              <form class="card form" id="uploadForm">
+                <div class="card-title">
+                  <div>
+                    <h4>Document metadata</h4>
+                    <p>Local queue until API is wired</p>
+                  </div>
+                </div>
+                <label>
+                  Document label
+                  <input class="field" name="label" required placeholder="KYC proof — Ava Johnson" />
+                </label>
+                <label>
+                  Category
+                  <select class="field" name="category">
+                    <option value="KYC">KYC</option>
+                    <option value="Payout">Payout</option>
+                    <option value="Property">Property</option>
+                    <option value="Legal">Legal</option>
+                  </select>
+                </label>
+                <label>
+                  Assigned to
+                  <input class="field" name="assignedTo" placeholder="Operations" />
+                </label>
+                <button class="primary-btn" type="submit">Save metadata</button>
+              </form>
+            </div>
+
+            <div class="card table-card mt-16">
+              <div class="card-title">
+                <div>
+                  <h4>Document queue</h4>
+                  <p id="fileCountLabel">0 documents</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Document</th>
+                      <th>Format</th>
+                      <th>Category</th>
+                      <th>Assigned</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fileTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="files">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Investment intents</p>
+                <h3>Live review queue</h3>
+              </div>
+              <button class="ghost-btn" id="refreshIntentsBtn">
+                <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
+                Refresh
+              </button>
+            </div>
+            <div class="card table-card">
+              <div class="card-title">
+                <div>
+                  <h4>Pending review</h4>
+                  <p id="intentCountLabel">0 intents</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Reference</th>
+                      <th>Investor</th>
+                      <th>Property</th>
+                      <th>Amount</th>
+                      <th>Workflow</th>
+                      <th>Proof</th>
+                    </tr>
+                  </thead>
+                  <tbody id="intentTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel-head mt-16">
+              <div>
+                <p class="eyebrow">Notes</p>
+                <h3>Queue cards</h3>
+              </div>
+              <button class="ghost-btn" id="addQueueItemBtn">Add entry</button>
+            </div>
+            <div class="grid-3" id="queueCards"></div>
+          </section>
+
+          <section class="panel" data-panel="audit">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Audit log</p>
+                <h3>Recent actions</h3>
+              </div>
+              <button class="ghost-btn" id="clearAuditBtn">Clear</button>
+            </div>
+            <div class="audit-list" id="auditList"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        if (window.lucide) lucide.createIcons();
+      });
+    </script>
+  </body>
+</html>
