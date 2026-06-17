@@ -14,22 +14,52 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Check for existing session on mount
+  // Check for existing session on mount, and confirm the token is still valid
+  // server-side (handles expiry and the rollout of real JWTs replacing old tokens).
   useEffect(() => {
-    const checkExistingSession = () => {
+    const checkExistingSession = async () => {
       const storedSession = localStorage.getItem('inreal_session');
-      if (storedSession) {
-        try {
-          const sessionData = JSON.parse(storedSession);
-          setSession(sessionData);
-          setUser(sessionData.user);
-          setIsAuthenticated(true);
-        } catch (error) {
-          console.error('Failed to parse stored session:', error);
-          localStorage.removeItem('inreal_session');
-        }
+      if (!storedSession) {
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      let sessionData;
+      try {
+        sessionData = JSON.parse(storedSession);
+      } catch (error) {
+        console.error('Failed to parse stored session:', error);
+        localStorage.removeItem('inreal_session');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${sessionData.token}` },
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          // Token expired, malformed, or revoked server-side — log out quietly.
+          localStorage.removeItem('inreal_session');
+          setLoading(false);
+          return;
+        }
+
+        const refreshedSession = { ...sessionData, user: data.data };
+        localStorage.setItem('inreal_session', JSON.stringify(refreshedSession));
+        setSession(refreshedSession);
+        setUser(data.data);
+        setIsAuthenticated(true);
+      } catch (error) {
+        // Network error reaching the API — keep the user logged out rather than
+        // trusting an unverified local session.
+        console.error('Failed to verify session:', error);
+        localStorage.removeItem('inreal_session');
+      } finally {
+        setLoading(false);
+      }
     };
 
     checkExistingSession();

@@ -5,6 +5,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
@@ -26,6 +27,18 @@ if (!process.env.DATABASE_URL) {
   );
   process.exit(1);
 }
+
+// JWT_SECRET signs session tokens. It must be a long random value kept only on the
+// server (Render env var) — never committed, never sent to the client.
+// Generate one with: openssl rand -hex 32
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error(
+    'Missing or weak JWT_SECRET. Set JWT_SECRET to a long random string (32+ chars, e.g. `openssl rand -hex 32`) before starting server.js.'
+  );
+  process.exit(1);
+}
+const SESSION_TOKEN_TTL = process.env.SESSION_TOKEN_TTL || '12h';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -134,11 +147,26 @@ function parseDescription(description) {
   }
 }
 
+function signSessionToken(userId) {
+  return jwt.sign({ sub: userId }, JWT_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: SESSION_TOKEN_TTL,
+  });
+}
+
 function getAuthenticatedUserId(req) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  const match = /^demo-token-(\d+)$/i.exec(token);
-  return match ? Number(match[1]) : null;
+  if (!token) return null;
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+    const userId = Number(payload.sub);
+    return Number.isInteger(userId) && userId > 0 ? userId : null;
+  } catch {
+    // Covers expired, malformed, or tampered tokens — all treated as unauthenticated.
+    return null;
+  }
 }
 
 function requireAuthenticatedUserId(req, res) {
@@ -223,7 +251,7 @@ async function buildLoginResponse(user) {
       TotalDistributions: summary?.TotalDistributions ?? 0,
       PropertiesOwned: summary?.PropertiesOwned ?? 0,
     },
-    token: `demo-token-${user.UserID}`,
+    token: signSessionToken(user.UserID),
   };
 }
 
@@ -594,7 +622,7 @@ app.post('/api/auth/signup', async (req, res) => {
         PropertiesOwned: summary?.PropertiesOwned ?? 0,
       },
       message: 'Account created successfully. Please verify your identity to start investing.',
-      token: `demo-token-${newUserId}`,
+      token: signSessionToken(newUserId),
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
