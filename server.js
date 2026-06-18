@@ -216,9 +216,12 @@ async function verifyLoginCredentials(email, password) {
   }
 
   const user = users[0];
-  if (!user.IdentityVerified) {
-    return null;
-  }
+  // NOTE: identity_verified is intentionally NOT checked here. A user can be
+  // legitimately mid-onboarding (KYC "Pending") for days under the real
+  // compliance process, and should still be able to log in to see their
+  // status. Investing is gated separately and correctly in
+  // verifyUserAndProperty(), which checks identity_verified/kyc_status at
+  // the point of creating an investment intent, not at login.
 
   const hasStoredPassword = Boolean(user.PasswordHash && user.PasswordSalt);
   const demoPassword = 'Demo123!';
@@ -584,7 +587,7 @@ app.post('/api/auth/signup', async (req, res) => {
       ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7,
-        'Verified', 'Approved', true, true,
+        'Unverified', 'Pending', false, false,
         0, 0, 0,
         'user', true, false, NOW(), NOW()
       ) RETURNING user_id AS "UserID"`,
