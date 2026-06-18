@@ -563,6 +563,39 @@ app.get('/api/auth/me', async (req, res) => {
   }
 });
 
+// Hard jurisdiction exclusions per the Compliance Owner's KYC/AML policy (Appendix A.14).
+// This is a self-declared, preliminary check at signup — the same role Step 2 of the
+// manual onboarding workflow plays ("decision to proceed or decline"). It is NOT a
+// substitute for the full citizenship/residency verification that happens later via
+// documents (Section 5) — a user can misreport their country here, same as the manual
+// process already accounts for. The point is to stop the obvious cases automatically
+// rather than waiting for a human to catch them during document review.
+const EXCLUDED_COUNTRY_CODES = new Set([
+  'US', // United States — policy exclusion (FATCA / Reg S)
+  'RU', // Russia — comprehensive UK/EU/US sanctions
+  'BY', // Belarus — comprehensive sanctions exposure
+  'IR', // Iran — FATF black-list; comprehensive sanctions
+  'KP', // North Korea — FATF black-list; comprehensive sanctions
+  'SY', // Syria — comprehensive sanctions exposure
+  'CU', // Cuba — US sanctions exposure
+  'MM', // Myanmar — FATF black-list (2022); sanctions
+  'AF', // Afghanistan — sanctions exposure; ongoing review
+  'VE', // Venezuela — US sanctions exposure
+  'IQ', // Iraq — elevated AML risk; sanctions adjacency
+  'YE', // Yemen — conflict zone; sanctions exposure
+  'LY', // Libya — sanctions exposure; political instability
+  'SD', // Sudan — sanctions exposure; conflict
+  'SS', // South Sudan — sanctions exposure; conflict
+  'SO', // Somalia — FATF black-list; conflict
+  'ML', // Mali — sanctions exposure; political instability
+  'BF', // Burkina Faso — sanctions exposure; political instability
+  'NE', // Niger — sanctions exposure; political instability
+  'CF', // Central African Republic — sanctions exposure
+  'CD', // DR Congo — sanctions exposure on specific entities; full exclusion
+  'ZW', // Zimbabwe — sanctions exposure
+  'CN', // China (PRC) — Phase 1 exclusion (SAFE FX restrictions, sanctions complexity)
+]);
+
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, phoneCode, phone, countryCode, password } = req.body;
@@ -570,9 +603,18 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(400).json({ success: false, error: 'All fields are required' });
     }
 
+    const normalizedCountryCode = String(countryCode).trim().toUpperCase();
+    if (EXCLUDED_COUNTRY_CODES.has(normalizedCountryCode)) {
+      return res.status(403).json({
+        success: false,
+        error: 'InReal is unable to accept participants from this jurisdiction at this time.',
+      });
+    }
+
     const existing = await q('SELECT user_id FROM users WHERE email = $1 LIMIT 1', [email]);
     if (existing.length > 0) {
       return res.status(409).json({ success: false, error: 'Email already registered' });
+
     }
 
     const fullPhoneNumber = `${phoneCode} ${phone}`;
