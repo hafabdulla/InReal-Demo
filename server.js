@@ -1017,6 +1017,119 @@ app.get('/api/user/:userId/intents', async (req, res) => {
   }
 });
 
+// ── Admin: KYC review queue ──────────────────────────────────────────────────
+// GET  /api/ops/kyc-reviews          — list all users awaiting KYC review
+// POST /api/ops/kyc-reviews/:id/decision — approve or decline a user's KYC
+
+app.get('/api/ops/kyc-reviews', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    // Return all users whose KYC is still Pending, ordered oldest first so
+    // the Compliance Owner works through them in the sequence they arrived.
+    const rows = await q(
+      `SELECT
+         user_id              AS "UserID",
+         first_name           AS "FirstName",
+         last_name            AS "LastName",
+         email                AS "Email",
+         country_code         AS "CountryCode",
+         phone_number         AS "PhoneNumber",
+         kyc_status           AS "KYCStatus",
+         accreditation_status AS "AccreditationStatus",
+         identity_verified    AS "IdentityVerified",
+         created_at           AS "CreatedAt"
+       FROM users
+       WHERE kyc_status = 'Pending'
+         AND is_active = true
+         AND is_deleted = false
+       ORDER BY created_at ASC`
+    );
+
+    return res.json({ success: true, data: rows, count: rows.length });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    const { action, reviewerName, notes = '' } = req.body;
+
+    if (!['approve', 'decline'].includes(action)) {
+      return res.status(400).json({ success: false, error: "action must be 'approve' or 'decline'" });
+    }
+    if (!reviewerName || String(reviewerName).trim().length === 0) {
+      return res.status(400).json({ success: false, error: 'reviewerName is required' });
+    }
+
+    // Confirm the target user exists and is actually in Pending status.
+    // Declining/approving an already-resolved account would overwrite a prior
+    // decision silently — so we guard against that here.
+    const targets = await q(
+      `SELECT user_id, kyc_status FROM users
+       WHERE user_id = $1 AND is_active = true AND is_deleted = false
+       LIMIT 1`,
+      [targetUserId]
+    );
+    if (targets.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    if (targets[0].kyc_status !== 'Pending') {
+      return res.status(409).json({
+        success: false,
+        error: `User KYC is already '${targets[0].kyc_status}' — decision was already recorded`,
+      });
+    }
+
+    const isApprove = action === 'approve';
+    const now = new Date().toISOString();
+
+    await q(
+      `UPDATE users SET
+         kyc_status           = $1,
+         accreditation_status = $2,
+         identity_verified    = $3,
+         updated_at           = NOW()
+       WHERE user_id = $4`,
+      [
+        isApprove ? 'Approved' : 'Declined',
+        isApprove ? 'Verified' : 'Unverified',
+        isApprove,
+        targetUserId,
+      ]
+    );
+
+    console.log(
+      `KYC ${action}d: user ${targetUserId} by admin ${adminUserId} (${reviewerName}) at ${now}` +
+        (notes ? ` — notes: ${notes}` : '')
+    );
+
+    return res.json({
+      success: true,
+      message: `KYC ${action}d successfully for user ${targetUserId}`,
+      data: {
+        userId: targetUserId,
+        action,
+        reviewerName: String(reviewerName).trim(),
+        notes: String(notes).trim(),
+        decidedAt: now,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 app.get('/api/ops/investment-intents', async (req, res) => {
   try {
     const adminUserId = await requireAdmin(req, res);
