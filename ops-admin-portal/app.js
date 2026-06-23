@@ -682,6 +682,55 @@ function openKycDrawer(userId) {
 
   document.getElementById('kycDrawer').classList.remove('hidden');
   refreshIcons();
+
+  loadKycHistory(user.UserID);
+}
+
+// Pulls the durable decision trail from the server (kyc_decisions table via
+// GET /api/ops/kyc-reviews/:userId/history) — this is the actual record of past
+// approve/decline actions, independent of this browser's localStorage.
+async function loadKycHistory(userId) {
+  const emptyEl = document.getElementById('kycHistoryEmpty');
+  const listEl = document.getElementById('kycHistoryList');
+
+  emptyEl.textContent = 'Loading history…';
+  emptyEl.classList.remove('hidden');
+  listEl.classList.add('hidden');
+  listEl.innerHTML = '';
+
+  try {
+    const result = await apiFetch(`/api/ops/kyc-reviews/${userId}/history`);
+    const decisions = result?.data || [];
+
+    if (decisions.length === 0) {
+      emptyEl.textContent = 'No prior decisions on record for this user.';
+      emptyEl.classList.remove('hidden');
+      listEl.classList.add('hidden');
+      return;
+    }
+
+    listEl.innerHTML = decisions
+      .map((d) => `
+        <li class="kyc-history-item">
+          <span class="kyc-history-action ${d.Action}">${d.Action === 'approve' ? 'Approved' : 'Declined'}</span>
+          <span class="kyc-history-meta">by ${escapeHtml(d.ReviewerName)} (${escapeHtml(d.AdminEmail)}) • ${formatDate(d.DecidedAt)}</span>
+          ${d.Notes ? `<span class="kyc-history-meta">${escapeHtml(d.Notes)}</span>` : ''}
+        </li>
+      `)
+      .join('');
+    emptyEl.classList.add('hidden');
+    listEl.classList.remove('hidden');
+  } catch (err) {
+    emptyEl.textContent = 'Could not load decision history.';
+    emptyEl.classList.remove('hidden');
+    listEl.classList.add('hidden');
+  }
+}
+
+function escapeHtml(value) {
+  const div = document.createElement('div');
+  div.textContent = String(value ?? '');
+  return div.innerHTML;
 }
 
 function closeKycDrawer() {

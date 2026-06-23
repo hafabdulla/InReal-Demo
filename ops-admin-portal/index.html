@@ -210,6 +210,13 @@
                   <span>EDD case — Founders' resolution (3 of 3) required before approving. Record the resolution reference in notes before proceeding.</span>
                 </div>
 
+                <!-- Durable decision history pulled live from the server (kyc_decisions table) -->
+                <div class="kyc-history" id="kycHistorySection">
+                  <p class="kyc-form-label" style="margin-bottom:8px">Decision history</p>
+                  <p class="helper" id="kycHistoryEmpty">No prior decisions on record for this user.</p>
+                  <ul class="kyc-history-list hidden" id="kycHistoryList"></ul>
+                </div>
+
                 <div class="kyc-form">
                   <label class="kyc-form-label">
                     Reviewer name <span style="color:var(--portal-danger)">*</span>

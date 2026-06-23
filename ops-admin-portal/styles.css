@@ -767,6 +767,50 @@ tbody tr:hover td {
   line-height: 1.55;
 }
 
+.kyc-history {
+  border: 1px solid var(--portal-border, rgba(255,255,255,0.08));
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.kyc-history-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kyc-history-item {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.82rem;
+}
+
+.kyc-history-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.kyc-history-item .kyc-history-action {
+  font-weight: 600;
+}
+
+.kyc-history-item .kyc-history-action.approve {
+  color: var(--portal-success, #34d399);
+}
+
+.kyc-history-item .kyc-history-action.decline {
+  color: var(--portal-danger);
+}
+
+.kyc-history-item .kyc-history-meta {
+  color: var(--portal-text-secondary, #9ca3af);
+}
+
 .kyc-form {
   display: grid;
   gap: 14px;
