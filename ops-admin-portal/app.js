@@ -232,10 +232,6 @@ async function loadInvestmentIntents() {
   addAudit('Intents synced', `${authSession.user.Email} • just now`, `Loaded ${state.intents.length} investment intents.`);
 }
 
-async function refreshLiveData() {
-  await Promise.all([loadApiUsers(), loadInvestmentIntents()]);
-  render();
-}
 
 function renderSummary() {
   const verified = state.apiUsers.filter((user) => user.status === 'Verified').length;
@@ -404,18 +400,6 @@ function renderAudit() {
         )
         .join('')
     : `<p class="helper">Actions you take in this session will appear here.</p>`;
-}
-
-function render() {
-  renderSummary();
-  renderOverview();
-  renderUsers();
-  renderIntents();
-  renderFiles();
-  renderQueue();
-  renderAudit();
-  saveWorkspaceState();
-  refreshIcons();
 }
 
 function setActiveTab(tab) {
@@ -594,8 +578,202 @@ function bindWorkspaceEvents() {
   });
 }
 
+// ── KYC Review ───────────────────────────────────────────────────────────────
+
+// Risk tier derived from Appendix A of the Compliance Manual.
+// EDD = FATF grey-list or elevated risk indicators.
+// Excluded countries are already blocked at signup (server.js).
+const EDD_COUNTRY_CODES = new Set([
+  'LB','TR','AL','BH','BF','BI','CM','CD','HT','IR','KH','KG','LA','LY','ML',
+  'MA','MM','MZ','NI','NG','KP','PK','PA','PH','RU','SN','SS','SY','TZ','TT',
+  'UG','VN','YE','ZW','BY','AF','IQ','SD','SO','VE','ZA','KE',
+]);
+
+const MEDIUM_COUNTRY_CODES = new Set([
+  'DZ','AD','AO','AR','AM','AZ','BD','BJ','BT','BO','BA','BN','BG','KH',
+  'CO','EG','GH','GE','GT','ID','JO','KZ','KG','MV','MX','MD','MN','ME',
+  'MA','NA','NP','MK','PE','SM','RS','LK','TH','TN','UA','UZ',
+]);
+
+function getCountryRisk(countryCode) {
+  const code = String(countryCode || '').toUpperCase();
+  if (EDD_COUNTRY_CODES.has(code)) return { tier: 'EDD', dd: 'Enhanced Due Diligence', isEDD: true };
+  if (MEDIUM_COUNTRY_CODES.has(code)) return { tier: 'Medium', dd: 'SDD + enhanced SoF', isEDD: false };
+  return { tier: 'Low', dd: 'Standard Due Diligence', isEDD: false };
+}
+
+function tierClass(tier) {
+  if (tier === 'EDD') return 'tag suspended';
+  if (tier === 'Medium') return 'tag pending';
+  return 'tag verified';
+}
+
+let kycQueue = [];
+let selectedKycUser = null;
+
+async function loadKycQueue() {
+  const result = await apiFetch('/api/ops/kyc-reviews');
+  kycQueue = result.data || [];
+  addAudit('KYC queue loaded', `${authSession?.user?.Email || 'Ops'} • just now`, `${kycQueue.length} participant(s) awaiting review.`);
+}
+
+function renderKycQueue() {
+  const countLabel = document.getElementById('kycCountLabel');
+  const tbody = document.getElementById('kycTableBody');
+  if (!countLabel || !tbody) return;
+
+  countLabel.textContent = `${kycQueue.length} pending`;
+
+  if (kycQueue.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="helper" style="text-align:center;padding:24px">No participants awaiting KYC review.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = kycQueue.map((user) => {
+    const risk = getCountryRisk(user.CountryCode);
+    return `
+      <tr class="kyc-row" data-userid="${user.UserID}">
+        <td>
+          <strong>${user.FirstName} ${user.LastName}</strong><br>
+          <span class="helper">${user.Email}</span>
+        </td>
+        <td>${user.CountryCode || '—'}</td>
+        <td><span class="${tierClass(risk.tier)}">${risk.tier}</span></td>
+        <td><span class="helper">${risk.dd}</span></td>
+        <td>${formatDate(user.CreatedAt)}</td>
+        <td>
+          <button class="ghost-btn kyc-review-btn" data-userid="${user.UserID}" style="font-size:0.8rem;padding:4px 10px">
+            Review
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  refreshIcons();
+}
+
+function openKycDrawer(userId) {
+  const user = kycQueue.find((u) => String(u.UserID) === String(userId));
+  if (!user) return;
+  selectedKycUser = user;
+
+  const risk = getCountryRisk(user.CountryCode);
+
+  document.getElementById('kycDrawerName').textContent = `${user.FirstName} ${user.LastName}`;
+  document.getElementById('kycDrawerEmail').textContent = user.Email;
+  document.getElementById('kycDrawerCountry').textContent = user.CountryCode || '—';
+  document.getElementById('kycDrawerUserId').textContent = `#${user.UserID}`;
+  document.getElementById('kycDrawerPhone').textContent = user.PhoneNumber || '—';
+  document.getElementById('kycDrawerJoined').textContent = formatDate(user.CreatedAt);
+
+  const tierEl = document.getElementById('kycDrawerTier');
+  tierEl.innerHTML = `<span class="${tierClass(risk.tier)}">${risk.tier}</span>`;
+
+  document.getElementById('kycDrawerDD').textContent = risk.dd;
+
+  const eddWarning = document.getElementById('eddWarning');
+  eddWarning.classList.toggle('hidden', !risk.isEDD);
+
+  document.getElementById('kycReviewerName').value = '';
+  document.getElementById('kycNotes').value = '';
+  document.getElementById('kycFormError').classList.add('hidden');
+  document.getElementById('kycFormError').textContent = '';
+
+  document.getElementById('kycDrawer').classList.remove('hidden');
+  refreshIcons();
+}
+
+function closeKycDrawer() {
+  selectedKycUser = null;
+  document.getElementById('kycDrawer').classList.add('hidden');
+}
+
+async function submitKycDecision(action) {
+  if (!selectedKycUser) return;
+
+  const reviewerName = document.getElementById('kycReviewerName').value.trim();
+  const notes = document.getElementById('kycNotes').value.trim();
+  const errorEl = document.getElementById('kycFormError');
+
+  if (!reviewerName) {
+    errorEl.textContent = 'Reviewer name is required before recording a decision.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const approveBtn = document.getElementById('kycApproveBtn');
+  const declineBtn = document.getElementById('kycDeclineBtn');
+  approveBtn.disabled = true;
+  declineBtn.disabled = true;
+  errorEl.classList.add('hidden');
+
+  try {
+    await apiFetch(`/api/ops/kyc-reviews/${selectedKycUser.UserID}/decision`, {
+      method: 'POST',
+      body: JSON.stringify({ action, reviewerName, notes }),
+    });
+
+    const userName = `${selectedKycUser.FirstName} ${selectedKycUser.LastName}`;
+    addAudit(
+      `KYC ${action}d — ${userName}`,
+      `${authSession?.user?.Email || 'Ops'} • just now`,
+      `Reviewer: ${reviewerName}. ${notes ? `Notes: ${notes}` : 'No additional notes.'}`,
+    );
+
+    closeKycDrawer();
+    await loadKycQueue();
+    renderKycQueue();
+    renderSummary();
+    renderOverview();
+    renderAudit();
+    saveWorkspaceState();
+  } catch (err) {
+    errorEl.textContent = err.message || 'Decision could not be recorded. Try again.';
+    errorEl.classList.remove('hidden');
+  } finally {
+    approveBtn.disabled = false;
+    declineBtn.disabled = false;
+  }
+}
+
+function bindKycEvents() {
+  document.getElementById('refreshKycBtn').addEventListener('click', async () => {
+    await loadKycQueue();
+    renderKycQueue();
+  });
+
+  document.getElementById('kycTableBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('.kyc-review-btn');
+    if (btn) openKycDrawer(btn.dataset.userid);
+  });
+
+  document.getElementById('kycDrawerCloseBtn').addEventListener('click', closeKycDrawer);
+  document.getElementById('kycApproveBtn').addEventListener('click', () => submitKycDecision('approve'));
+  document.getElementById('kycDeclineBtn').addEventListener('click', () => submitKycDecision('decline'));
+}
+
+async function refreshLiveData() {
+  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue()]);
+  render();
+}
+
+function render() {
+  renderSummary();
+  renderOverview();
+  renderUsers();
+  renderIntents();
+  renderFiles();
+  renderQueue();
+  renderKycQueue();
+  renderAudit();
+  saveWorkspaceState();
+  refreshIcons();
+}
+
 authEls.loginForm.addEventListener('submit', handleLogin);
 authEls.logoutBtn.addEventListener('click', handleLogout);
 
 bindWorkspaceEvents();
+bindKycEvents();
 bootstrapAuth();

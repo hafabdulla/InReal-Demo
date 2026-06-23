@@ -55,6 +55,10 @@
             <i data-lucide="layout-dashboard"></i>
             <span>Overview</span>
           </button>
+          <button class="nav-item" data-tab="kyc" data-title="KYC Review">
+            <i data-lucide="shield-check"></i>
+            <span>KYC Review</span>
+          </button>
           <button class="nav-item" data-tab="users" data-title="Users">
             <i data-lucide="users"></i>
             <span>Users</span>
@@ -110,6 +114,125 @@
               </button>
             </div>
             <div class="grid-3" id="overviewGrid"></div>
+          </section>
+
+          <!-- ── KYC Review panel ─────────────────────────────────── -->
+          <section class="panel" data-panel="kyc">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Compliance — Section 5.7</p>
+                <h3>KYC review queue</h3>
+              </div>
+              <button class="ghost-btn" id="refreshKycBtn">
+                <i data-lucide="refresh-cw" style="width:16px;height:16px"></i>
+                Refresh
+              </button>
+            </div>
+
+            <!-- Compliance note -->
+            <div class="compliance-note">
+              <i data-lucide="info" style="width:14px;height:14px;flex-shrink:0"></i>
+              <span>
+                <strong>SDD cases</strong> (Low / Medium risk) — COO approves alone.
+                <strong>EDD cases</strong> (grey-list jurisdiction or elevated risk factor) — Founders' resolution required before approval. See Compliance Manual §2 and §8.
+              </span>
+            </div>
+
+            <!-- Queue table -->
+            <div class="card table-card">
+              <div class="card-title">
+                <div>
+                  <h4>Pending participants</h4>
+                  <p id="kycCountLabel">0 pending</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Participant</th>
+                      <th>Country</th>
+                      <th>Risk tier</th>
+                      <th>Due diligence</th>
+                      <th>Joined</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="kycTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Decision drawer (hidden until a row is selected) -->
+            <div class="kyc-drawer hidden" id="kycDrawer">
+              <div class="kyc-drawer-header">
+                <div>
+                  <p class="eyebrow">Decision</p>
+                  <h4 id="kycDrawerName">—</h4>
+                  <p class="helper" id="kycDrawerEmail">—</p>
+                </div>
+                <button class="ghost-btn" id="kycDrawerCloseBtn" type="button">
+                  <i data-lucide="x" style="width:16px;height:16px"></i>
+                </button>
+              </div>
+
+              <div class="kyc-drawer-body">
+                <div class="kyc-detail-grid">
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Country code</span>
+                    <span class="kyc-detail-value" id="kycDrawerCountry">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Risk tier</span>
+                    <span class="kyc-detail-value" id="kycDrawerTier">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Due diligence</span>
+                    <span class="kyc-detail-value" id="kycDrawerDD">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Phone</span>
+                    <span class="kyc-detail-value" id="kycDrawerPhone">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Joined</span>
+                    <span class="kyc-detail-value" id="kycDrawerJoined">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">User ID</span>
+                    <span class="kyc-detail-value" id="kycDrawerUserId">—</span>
+                  </div>
+                </div>
+
+                <!-- EDD warning shown only for EDD-tier participants -->
+                <div class="edd-warning hidden" id="eddWarning">
+                  <i data-lucide="alert-triangle" style="width:14px;height:14px;flex-shrink:0"></i>
+                  <span>EDD case — Founders' resolution (3 of 3) required before approving. Record the resolution reference in notes before proceeding.</span>
+                </div>
+
+                <div class="kyc-form">
+                  <label class="kyc-form-label">
+                    Reviewer name <span style="color:var(--portal-danger)">*</span>
+                    <input class="field" id="kycReviewerName" type="text" placeholder="e.g. McKenzey Harrison" autocomplete="name" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Notes
+                    <textarea class="field textarea" id="kycNotes" rows="3" placeholder="Document references, screening result, conditions, or reason for decline…"></textarea>
+                  </label>
+                  <p class="kyc-form-error hidden" id="kycFormError"></p>
+                  <div class="kyc-decision-btns">
+                    <button class="decline-btn" id="kycDeclineBtn" type="button">
+                      <i data-lucide="x-circle" style="width:15px;height:15px"></i>
+                      Decline
+                    </button>
+                    <button class="approve-btn" id="kycApproveBtn" type="button">
+                      <i data-lucide="check-circle" style="width:15px;height:15px"></i>
+                      Approve
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="panel" data-panel="users">
