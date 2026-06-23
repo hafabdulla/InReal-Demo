@@ -89,6 +89,26 @@ async function q(text, params = []) {
   return result.rows;
 }
 
+// Runs `fn` inside a single DB transaction using one dedicated client. Used wherever a
+// state change (e.g. KYC decision) must be paired with its audit record atomically —
+// we never want the users.kyc_status to change without the matching kyc_decisions row
+// being written, or vice versa.
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const txQuery = async (text, params = []) => (await client.query(text, params)).rows;
+    const result = await fn(txQuery);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function getUserFinancialSummary(userId) {
   const rows = await q(
     `SELECT
@@ -298,6 +318,28 @@ async function ensureAuthColumns() {
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_salt TEXT`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'`);
   await q(`UPDATE users SET role = 'user' WHERE role IS NULL`);
+}
+
+// Durable, queryable record of every KYC approve/decline decision. Required by the
+// Compliance Manual (Section 8 "documented onboarding decision"; Section 9 record-keeping,
+// 7-year retention of "all Compliance reviews, escalations and decision documentation").
+// A console.log line is not a record — it doesn't survive a redeploy/restart and isn't
+// queryable. This table is the actual system of record; rows are never updated or deleted
+// by the app (insert-only) so the history can't be silently rewritten.
+async function ensureKycDecisionsTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS kyc_decisions (
+      decision_id    SERIAL PRIMARY KEY,
+      user_id        INTEGER NOT NULL REFERENCES users(user_id),
+      admin_user_id  INTEGER NOT NULL REFERENCES users(user_id),
+      action         VARCHAR(10) NOT NULL CHECK (action IN ('approve', 'decline')),
+      reviewer_name  TEXT NOT NULL,
+      notes          TEXT NOT NULL DEFAULT '',
+      decided_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_kyc_decisions_user_id ON kyc_decisions(user_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_kyc_decisions_decided_at ON kyc_decisions(decided_at DESC)`);
 }
 
 async function bootstrapAdminUsers() {
@@ -1092,39 +1134,101 @@ app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
     }
 
     const isApprove = action === 'approve';
-    const now = new Date().toISOString();
+    const trimmedReviewerName = String(reviewerName).trim();
+    const trimmedNotes = String(notes).trim();
 
-    await q(
-      `UPDATE users SET
-         kyc_status           = $1,
-         accreditation_status = $2,
-         identity_verified    = $3,
-         updated_at           = NOW()
-       WHERE user_id = $4`,
-      [
-        isApprove ? 'Approved' : 'Declined',
-        isApprove ? 'Verified' : 'Unverified',
-        isApprove,
-        targetUserId,
-      ]
-    );
+    const decisionRow = await withTransaction(async (tx) => {
+      // Re-check status inside the transaction (not just the earlier read) to close the
+      // race where two admins submit a decision for the same user at nearly the same time.
+      const locked = await tx(
+        `SELECT user_id, kyc_status FROM users WHERE user_id = $1 FOR UPDATE`,
+        [targetUserId]
+      );
+      if (locked.length === 0) {
+        throw Object.assign(new Error('User not found'), { httpStatus: 404 });
+      }
+      if (locked[0].kyc_status !== 'Pending') {
+        throw Object.assign(
+          new Error(`User KYC is already '${locked[0].kyc_status}' — decision was already recorded`),
+          { httpStatus: 409 }
+        );
+      }
 
-    console.log(
-      `KYC ${action}d: user ${targetUserId} by admin ${adminUserId} (${reviewerName}) at ${now}` +
-        (notes ? ` — notes: ${notes}` : '')
-    );
+      await tx(
+        `UPDATE users SET
+           kyc_status           = $1,
+           accreditation_status = $2,
+           identity_verified    = $3,
+           updated_at           = NOW()
+         WHERE user_id = $4`,
+        [
+          isApprove ? 'Approved' : 'Declined',
+          isApprove ? 'Verified' : 'Unverified',
+          isApprove,
+          targetUserId,
+        ]
+      );
+
+      const inserted = await tx(
+        `INSERT INTO kyc_decisions (user_id, admin_user_id, action, reviewer_name, notes)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING decision_id AS "DecisionID", decided_at AS "DecidedAt"`,
+        [targetUserId, adminUserId, action, trimmedReviewerName, trimmedNotes]
+      );
+      return inserted[0];
+    });
 
     return res.json({
       success: true,
       message: `KYC ${action}d successfully for user ${targetUserId}`,
       data: {
+        decisionId: decisionRow.DecisionID,
         userId: targetUserId,
         action,
-        reviewerName: String(reviewerName).trim(),
-        notes: String(notes).trim(),
-        decidedAt: now,
+        reviewerName: trimmedReviewerName,
+        notes: trimmedNotes,
+        decidedAt: decisionRow.DecidedAt,
       },
     });
+  } catch (error) {
+    if (error.httpStatus) {
+      return res.status(error.httpStatus).json({ success: false, error: error.message });
+    }
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/kyc-reviews/:userId/history — full decision audit trail for one user.
+// Read-only, admin-only, never mutates anything. This is the durable record the
+// Compliance Manual requires (Section 9 retention of decision documentation) — it reads
+// straight from kyc_decisions rather than any client-side or log-based source.
+app.get('/api/ops/kyc-reviews/:userId/history', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    const rows = await q(
+      `SELECT
+         d.decision_id    AS "DecisionID",
+         d.action         AS "Action",
+         d.reviewer_name  AS "ReviewerName",
+         d.notes          AS "Notes",
+         d.decided_at     AS "DecidedAt",
+         d.admin_user_id  AS "AdminUserID",
+         a.email          AS "AdminEmail"
+       FROM kyc_decisions d
+       JOIN users a ON a.user_id = d.admin_user_id
+       WHERE d.user_id = $1
+       ORDER BY d.decided_at DESC`,
+      [targetUserId]
+    );
+
+    return res.json({ success: true, data: rows, count: rows.length });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
@@ -1263,6 +1367,7 @@ async function startServer() {
     await q('SELECT 1');
     await ensureUploadDirs();
     await ensureAuthColumns();
+    await ensureKycDecisionsTable();
     await bootstrapAdminUsers();
 
     const server = app.listen(PORT, () => {
