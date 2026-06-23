@@ -399,7 +399,7 @@ app.get('/api/health', async (req, res) => {
     await q('SELECT 1 AS status');
     res.json({ status: 'ok', database: 'connected' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
+    console.error('API error:', error); res.status(500).json({ status: 'error', message: 'Internal server error' });
   }
 });
 
@@ -434,7 +434,7 @@ app.get('/api/properties', async (req, res) => {
 
     res.json({ success: true, data: properties });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -477,7 +477,7 @@ app.get('/api/properties/:id', async (req, res) => {
 
     res.json({ success: true, data: rows[0] });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -499,7 +499,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     res.json(await buildLoginResponse(user));
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -518,7 +518,7 @@ app.post('/api/admin/auth/login', async (req, res) => {
 
     res.json(await buildLoginResponse(user));
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -562,7 +562,7 @@ app.get('/api/admin/auth/me', async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -606,7 +606,7 @@ app.get('/api/auth/me', async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -717,7 +717,7 @@ app.post('/api/auth/signup', async (req, res) => {
       token: signSessionToken(newUserId),
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -761,7 +761,7 @@ app.get('/api/user/:userId/portfolio', async (req, res) => {
 
     res.json({ success: true, data: { summary: summaryRow, investments } });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -797,7 +797,7 @@ app.get('/api/user/:userId/distributions', async (req, res) => {
 
     res.json({ success: true, data: distributions });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -825,7 +825,7 @@ app.get('/api/users', async (req, res) => {
 
     res.json({ success: true, data: users });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -957,7 +957,7 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -998,7 +998,7 @@ app.get('/api/investment-intents/:reference/proof', async (req, res) => {
     if (error.code === 'ENOENT') {
       return res.status(404).json({ success: false, error: 'Proof file not found' });
     }
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -1060,7 +1060,7 @@ app.get('/api/user/:userId/intents', async (req, res) => {
 
     res.json({ success: true, data: intents });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -1290,7 +1290,7 @@ app.get('/api/ops/investment-intents', async (req, res) => {
 
     res.json({ success: true, data: queue });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -1350,7 +1350,7 @@ app.post('/api/ops/investment-intents/:reference/review', async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
