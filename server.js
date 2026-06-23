@@ -76,7 +76,10 @@ app.use(cors({
       return callback(null, true);
     }
 
-    return callback(new Error('Not allowed by CORS'));
+    // Origin not in allowlist — reject silently. Using callback(null, false) rather
+    // than callback(new Error(...)) so the server returns no ACAO header without
+    // throwing a 500, which is the correct browser-facing CORS rejection behaviour.
+    return callback(null, false);
   },
   credentials: true,
 }));
