@@ -4,11 +4,18 @@ INSERT INTO users (
   email, first_name, last_name, phone_number, country_code,
   accreditation_status, kyc_status, identity_verified, bank_account_linked,
   total_invested, portfolio_value, total_distributions,
-  preferred_markets, investment_style, is_active, is_deleted
+  preferred_markets, investment_style, is_active, is_deleted,
+  password_hash, password_salt
 ) VALUES
-('sarah.chen@email.com', 'Sarah', 'Chen', '+65 91234567', 'SG', 'Verified', 'Approved', TRUE, TRUE, 150000, 156200, 6200, 'Bangkok,Dubai', 'Balanced', TRUE, FALSE),
-('james.smith@email.com', 'James', 'Smith', '+66 812345678', 'TH', 'Verified', 'Approved', TRUE, TRUE, 100000, 103900, 3900, 'Bangkok', 'Conservative', TRUE, FALSE),
-('michael.johnson@email.com', 'Michael', 'Johnson', '+39 3331234567', 'IT', 'Verified', 'Approved', TRUE, TRUE, 0, 0, 0, 'Italy,Bangkok', 'Aggressive', TRUE, FALSE)
+('sarah.chen@email.com', 'Sarah', 'Chen', '+65 91234567', 'SG', 'Verified', 'Approved', TRUE, TRUE, 150000, 156200, 6200, 'Bangkok,Dubai', 'Balanced', TRUE, FALSE,
+ 'b5c64179a4fa48730d2bfc64e0eacd3cb19432795a8b5f6c8bf6a6dc2c52b83216707cb11d97bebf4cbaecdb2c884bf417bedc67c51f8e743025c75fbac1a20c',
+ '5b58ea2b1405c15616493db6e05d32aa'),
+('james.smith@email.com', 'James', 'Smith', '+66 812345678', 'TH', 'Verified', 'Approved', TRUE, TRUE, 100000, 103900, 3900, 'Bangkok', 'Conservative', TRUE, FALSE,
+ 'ac2fb990332a98665771380aa1a3c3014e43f399cb4b0328468010c428a8c378c4650ddb8dc26916786ab567211983d0d04e65179586e2b6496c542620ec4791',
+ 'cd198e23fb430fa7907943e194c1f9a3'),
+('michael.johnson@email.com', 'Michael', 'Johnson', '+39 3331234567', 'IT', 'Verified', 'Approved', TRUE, TRUE, 0, 0, 0, 'Italy,Bangkok', 'Aggressive', TRUE, FALSE,
+ '01353eeb1753eec16dd598f943f6e1a8c79cee4d8f8e47425173500f402b99b38ba0c47f8ba7bb90023652f6c2ddacc8c0d2e283758c975763edce5cd1dd7c0a',
+ '097a2069809bbeaa6005c55f5a86b2d3')
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO properties (

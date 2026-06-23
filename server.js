@@ -50,7 +50,7 @@ const pool = new Pool({
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (server-to-server, curl, Postman)
+    // Allow requests with no origin (server-to-server, curl, Postman, Render health checks)
     if (!origin) return callback(null, true);
 
     const defaults = [
@@ -62,7 +62,9 @@ app.use(cors({
       'http://127.0.0.1:3002',
     ];
 
-    // Support comma-separated FRONTEND_URL env var; normalize by stripping trailing slashes
+    // Production origins come from FRONTEND_URL env var (comma-separated).
+    // On Render, set this to: https://in-real-demo.vercel.app,https://inreal-ops.vercel.app
+    // Do NOT use a wildcard like *.vercel.app — that trusts any free Vercel deployment.
     const fromEnv = (process.env.FRONTEND_URL || '')
       .split(',')
       .map(s => s.trim().replace(/\/$/, ''))
@@ -70,10 +72,7 @@ app.use(cors({
 
     const allowedOrigins = [...defaults, ...fromEnv];
 
-    // Allow vercel preview domains automatically (convenient for demos)
-    const isVercelPreview = origin.endsWith('.vercel.app') || origin.endsWith('.vercel.sh');
-
-    if (allowedOrigins.includes(origin.replace(/\/$/, '')) || isVercelPreview) {
+    if (allowedOrigins.includes(origin.replace(/\/$/, ''))) {
       return callback(null, true);
     }
 
@@ -244,18 +243,21 @@ async function verifyLoginCredentials(email, password) {
   // the point of creating an investment intent, not at login.
 
   const hasStoredPassword = Boolean(user.PasswordHash && user.PasswordSalt);
-  const demoPassword = 'Demo123!';
 
-  if (hasStoredPassword) {
-    const isValid = verifyPassword(password, user.PasswordSalt, user.PasswordHash);
-    if (!isValid) {
-      return null;
-    }
-  } else if (password !== demoPassword) {
+  if (!hasStoredPassword) {
+    // No password hash on record — reject login unconditionally.
+    // Previously this accepted 'Demo123!' as a universal fallback, which meant
+    // any account created without going through the signup flow (e.g. direct DB
+    // insert, seed scripts, ops-created accounts) was silently accessible with
+    // a known password. That backdoor is now removed.
+    // If a seed/demo account can no longer log in, re-run the seed script so it
+    // stores a proper PBKDF2 hash via the normal signup or the hash utility.
     return null;
-  } else {
-    const { salt, hash } = hashPassword(password);
-    await q('UPDATE users SET password_hash = $2, password_salt = $3, updated_at = NOW() WHERE user_id = $1', [user.UserID, hash, salt]);
+  }
+
+  const isValid = verifyPassword(password, user.PasswordSalt, user.PasswordHash);
+  if (!isValid) {
+    return null;
   }
 
   return user;
