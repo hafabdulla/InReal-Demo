@@ -6,6 +6,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
@@ -85,6 +86,31 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ── Rate limiting ────────────────────────────────────────────────────────────
+// Strict limit on auth endpoints — prevents credential stuffing and brute-force.
+// 10 requests per 15 minutes per IP. Covers both investor and admin auth routes.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many attempts — please try again in 15 minutes.' },
+});
+
+// General API limit — prevents scraping and DoS. 200 requests per 15 minutes per IP.
+// Generous enough not to affect real usage but catches abusive automated traffic.
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many requests — please try again later.' },
+});
+
+app.use('/api/auth', authLimiter);
+app.use('/api/admin/auth', authLimiter);
+app.use('/api', generalLimiter);
 
 async function q(text, params = []) {
   const result = await pool.query(text, params);
