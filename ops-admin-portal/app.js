@@ -43,7 +43,6 @@ const els = {
   userCountLabel: document.getElementById('userCountLabel'),
   fileCountLabel: document.getElementById('fileCountLabel'),
   seedDemoBtn: document.getElementById('seedDemoBtn'),
-  clearAuditBtn: document.getElementById('clearAuditBtn'),
   addQueueItemBtn: document.getElementById('addQueueItemBtn'),
   uploadDropzone: document.getElementById('uploadDropzone'),
   fileInput: document.getElementById('fileInput'),
@@ -561,11 +560,8 @@ function bindWorkspaceEvents() {
     render();
   });
 
-  els.clearAuditBtn.addEventListener('click', () => {
-    state.audit = [];
-    renderAudit();
-    saveWorkspaceState();
-  });
+  // NOTE: Audit Clear button intentionally removed (HC-9, PRD v1.2).
+  // The audit log is append-only — no surface can clear it.
 
   els.addQueueItemBtn.addEventListener('click', () => {
     state.queue.unshift({
