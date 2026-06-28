@@ -988,6 +988,38 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
       return res.status(400).json({ success: false, error: 'proofBase64 and fileName are required' });
     }
 
+    // Validate file content by magic bytes BEFORE hitting the DB.
+    // Reject anything that isn't a PDF, JPEG, or PNG regardless of what the
+    // filename or mimeType field claims. Failing fast here avoids a DB query
+    // on every disguised-file upload attempt.
+    const payload = proofBase64.includes(',') ? proofBase64.split(',')[1] : proofBase64;
+    const fileBuffer = Buffer.from(payload, 'base64');
+
+    const ALLOWED_SIGNATURES = [
+      { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },            // %PDF
+      { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                   // JPEG SOI marker
+      { label: 'PNG',  bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A] }, // PNG header
+    ];
+
+    const isAllowedType = ALLOWED_SIGNATURES.some(({ bytes }) =>
+      bytes.every((byte, i) => fileBuffer[i] === byte)
+    );
+
+    if (!isAllowedType) {
+      return res.status(400).json({
+        success: false,
+        error: 'Unsupported file type. Please upload a PDF, JPEG, or PNG.',
+      });
+    }
+
+    const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
+    if (fileBuffer.length > MAX_FILE_BYTES) {
+      return res.status(400).json({
+        success: false,
+        error: 'File too large. Maximum size is 8 MB.',
+      });
+    }
+
     const txRows = await q(
       `SELECT transaction_id, user_id, description, status
        FROM transactions
@@ -1008,37 +1040,6 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     await ensureUploadDirs();
     const safeFileName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const absolutePath = path.join(proofsDir, safeFileName);
-    const payload = proofBase64.includes(',') ? proofBase64.split(',')[1] : proofBase64;
-    const fileBuffer = Buffer.from(payload, 'base64');
-
-    // Validate file content by magic bytes — reject anything that isn't a PDF,
-    // JPEG, or PNG regardless of what the filename or mimeType field claims.
-    // This prevents disguised executable or script uploads.
-    const ALLOWED_SIGNATURES = [
-      { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },           // %PDF
-      { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                  // JPEG SOI marker
-      { label: 'PNG',  bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A] }, // PNG header
-    ];
-
-    const isAllowedType = ALLOWED_SIGNATURES.some(({ bytes }) =>
-      bytes.every((byte, i) => fileBuffer[i] === byte)
-    );
-
-    if (!isAllowedType) {
-      return res.status(400).json({
-        success: false,
-        error: 'Unsupported file type. Please upload a PDF, JPEG, or PNG.',
-      });
-    }
-
-    // File size cap — belt-and-suspenders on top of the 8MB body limit.
-    const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
-    if (fileBuffer.length > MAX_FILE_BYTES) {
-      return res.status(400).json({
-        success: false,
-        error: 'File too large. Maximum size is 8 MB.',
-      });
-    }
 
     await fs.writeFile(absolutePath, fileBuffer);
 
