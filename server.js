@@ -88,18 +88,9 @@ app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-// Strict limit on auth endpoints — prevents credential stuffing and brute-force.
-// 10 requests per 15 minutes per IP. Covers both investor and admin auth routes.
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, error: 'Too many attempts — please try again in 15 minutes.' },
-});
 
-// General API limit — prevents scraping and DoS. 200 requests per 15 minutes per IP.
-// Generous enough not to affect real usage but catches abusive automated traffic.
+// General API limiter — protects against scraping and DoS.
+// 200 requests per 15 minutes per IP. Generous enough not to affect real users.
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
@@ -108,9 +99,57 @@ const generalLimiter = rateLimit({
   message: { success: false, error: 'Too many requests — please try again later.' },
 });
 
-app.use('/api/auth', authLimiter);
-app.use('/api/admin/auth', authLimiter);
 app.use('/api', generalLimiter);
+
+// ── Account-based login lockout ───────────────────────────────────────────────
+// Tracks failed login attempts per email address (not per IP).
+// This means an attacker hammering one account gets that account locked,
+// while every other user — even on the same IP, network, or country — is
+// completely unaffected. A correct login resets the counter immediately.
+//
+// Storage: in-memory Map. Resets on server restart (acceptable for Phase 1).
+// Phase 2: move to a Redis-backed store for persistence across restarts.
+
+const LOCKOUT_MAX_ATTEMPTS = 10;      // failed attempts before lockout
+const LOCKOUT_WINDOW_MS   = 15 * 60 * 1000; // 15 minutes
+
+const loginAttempts = new Map(); // email → { count, lockedUntil }
+
+function recordFailedLogin(email) {
+  const key = email.toLowerCase().trim();
+  const now = Date.now();
+  const entry = loginAttempts.get(key) || { count: 0, lockedUntil: null };
+
+  // Reset counter if the previous lockout window has expired
+  if (entry.lockedUntil && now > entry.lockedUntil) {
+    entry.count = 0;
+    entry.lockedUntil = null;
+  }
+
+  entry.count += 1;
+
+  if (entry.count >= LOCKOUT_MAX_ATTEMPTS) {
+    entry.lockedUntil = now + LOCKOUT_WINDOW_MS;
+    console.warn(`Account lockout triggered for ${key} after ${entry.count} failed attempts`);
+  }
+
+  loginAttempts.set(key, entry);
+}
+
+function resetLoginAttempts(email) {
+  loginAttempts.delete(email.toLowerCase().trim());
+}
+
+function isAccountLocked(email) {
+  const key = email.toLowerCase().trim();
+  const entry = loginAttempts.get(key);
+  if (!entry || !entry.lockedUntil) return false;
+  if (Date.now() > entry.lockedUntil) {
+    loginAttempts.delete(key); // auto-clear expired lockout
+    return false;
+  }
+  return true;
+}
 
 async function q(text, params = []) {
   const result = await pool.query(text, params);
@@ -518,11 +557,20 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Password is required' });
     }
 
+    if (isAccountLocked(email)) {
+      return res.status(429).json({
+        success: false,
+        error: 'This account is temporarily locked due to too many failed attempts. Please try again in 15 minutes.',
+      });
+    }
+
     const user = await verifyLoginCredentials(email, password);
     if (!user) {
+      recordFailedLogin(email);
       return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
     }
 
+    resetLoginAttempts(email);
     res.json(await buildLoginResponse(user));
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
@@ -537,11 +585,20 @@ app.post('/api/admin/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email and password are required' });
     }
 
+    if (isAccountLocked(email)) {
+      return res.status(429).json({
+        success: false,
+        error: 'This account is temporarily locked due to too many failed attempts. Please try again in 15 minutes.',
+      });
+    }
+
     const user = await verifyLoginCredentials(email, password);
     if (!user || user.Role !== 'admin') {
+      recordFailedLogin(email);
       return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
     }
 
+    resetLoginAttempts(email);
     res.json(await buildLoginResponse(user));
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
@@ -952,7 +1009,38 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     const safeFileName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const absolutePath = path.join(proofsDir, safeFileName);
     const payload = proofBase64.includes(',') ? proofBase64.split(',')[1] : proofBase64;
-    await fs.writeFile(absolutePath, Buffer.from(payload, 'base64'));
+    const fileBuffer = Buffer.from(payload, 'base64');
+
+    // Validate file content by magic bytes — reject anything that isn't a PDF,
+    // JPEG, or PNG regardless of what the filename or mimeType field claims.
+    // This prevents disguised executable or script uploads.
+    const ALLOWED_SIGNATURES = [
+      { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },           // %PDF
+      { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                  // JPEG SOI marker
+      { label: 'PNG',  bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A] }, // PNG header
+    ];
+
+    const isAllowedType = ALLOWED_SIGNATURES.some(({ bytes }) =>
+      bytes.every((byte, i) => fileBuffer[i] === byte)
+    );
+
+    if (!isAllowedType) {
+      return res.status(400).json({
+        success: false,
+        error: 'Unsupported file type. Please upload a PDF, JPEG, or PNG.',
+      });
+    }
+
+    // File size cap — belt-and-suspenders on top of the 8MB body limit.
+    const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
+    if (fileBuffer.length > MAX_FILE_BYTES) {
+      return res.status(400).json({
+        success: false,
+        error: 'File too large. Maximum size is 8 MB.',
+      });
+    }
+
+    await fs.writeFile(absolutePath, fileBuffer);
 
     const parsed = parseDescription(target.description);
     parsed.proofStatus = 'Submitted';
