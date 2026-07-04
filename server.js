@@ -10,7 +10,7 @@ import rateLimit from 'express-rate-limit';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
-import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual } from 'crypto';
+import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
@@ -100,6 +100,20 @@ const generalLimiter = rateLimit({
 });
 
 app.use('/api', generalLimiter);
+
+// Password-reset-request limiter — separate from the login lockout above.
+// There's no "account" to lock yet at this point (we haven't confirmed the
+// email belongs to anyone), so this limits by IP: 5 reset requests per
+// 15 minutes is enough for a real user who mistypes an email a couple of
+// times, and blunts an attacker trying to enumerate accounts or spam a
+// victim's inbox/concierge channel with reset requests.
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many requests — please try again later.' },
+});
 
 // ── Account-based login lockout ───────────────────────────────────────────────
 // Tracks failed login attempts per email address (not per IP).
@@ -390,6 +404,27 @@ async function ensureAuthColumns() {
   await q(`UPDATE users SET role = 'user' WHERE role IS NULL`);
 }
 
+// Password reset tokens. A reset "link" is really just this row: a hash of a
+// random token, a short expiry, and a used_at marker so it can only ever be
+// consumed once. We never store the raw token — only its SHA-256 hash — so a
+// database read (backup, breach, careless log) can't be turned into a working
+// reset link.
+async function ensurePasswordResetTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id             SERIAL PRIMARY KEY,
+      user_id        INTEGER NOT NULL REFERENCES users(user_id),
+      token_hash     TEXT NOT NULL,
+      expires_at     TIMESTAMPTZ NOT NULL,
+      used_at        TIMESTAMPTZ,
+      requested_ip   TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_password_reset_user_id ON password_reset_tokens(user_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_password_reset_token_hash ON password_reset_tokens(token_hash)`);
+}
+
 // Durable, queryable record of every KYC approve/decline decision. Required by the
 // Compliance Manual (Section 8 "documented onboarding decision"; Section 9 record-keeping,
 // 7-year retention of "all Compliance reviews, escalations and decision documentation").
@@ -574,6 +609,154 @@ app.post('/api/auth/login', async (req, res) => {
     res.json(await buildLoginResponse(user));
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ── Password reset ────────────────────────────────────────────────────────────
+// Two-step flow: request a token, then confirm with the token + new password.
+// Design constraints (do not relax these when "just testing"):
+//   - Never reveal whether an email exists in the system (both branches of
+//     /request return the identical 200 response).
+//   - Never store the raw token — only its SHA-256 hash. If the DB leaks, the
+//     leaked rows are useless as reset links.
+//   - Single-use: the token is marked used_at on successful confirm, and any
+//     other outstanding tokens for that user are invalidated at the same time.
+//   - Short expiry (30 minutes) so an intercepted-but-unused token goes stale fast.
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function hashResetToken(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+const GENERIC_RESET_REQUEST_MESSAGE =
+  'If an account exists for that email, password reset instructions have been sent.';
+
+app.post('/api/auth/password-reset/request', passwordResetLimiter, async (req, res) => {
+  try {
+    const email = (req.body.email || '').trim();
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    const users = await q(
+      `SELECT user_id FROM users WHERE email = $1 AND is_active = true AND is_deleted = false`,
+      [email]
+    );
+
+    // Always respond identically whether or not the account exists — this is
+    // the enumeration protection. The branching below only affects what we do
+    // server-side, never what the client sees.
+    if (users.length > 0) {
+      const userId = users[0].user_id;
+      const rawToken = randomBytes(32).toString('hex');
+      const tokenHash = hashResetToken(rawToken);
+      const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+
+      // Invalidate any prior unused tokens for this user so only the newest
+      // request is ever valid.
+      await q(
+        `UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+        [userId]
+      );
+      await q(
+        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip)
+         VALUES ($1, $2, $3, $4)`,
+        [userId, tokenHash, expiresAt, req.ip || null]
+      );
+
+      // Phase 1 has no first-party email delivery (PRD decision D-14): the raw
+      // token is logged server-side only, for the concierge/ops team to relay
+      // to the investor through the pilot's manual channel. It is never
+      // returned in the API response.
+      console.log(`[password-reset] token issued for user_id=${userId} (deliver via concierge): ${rawToken}`);
+    }
+
+    return res.json({ success: true, message: GENERIC_RESET_REQUEST_MESSAGE });
+  } catch (error) {
+    console.error('API error:', error);
+    // Even on an unexpected error, don't leak internals or existence info.
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+const MIN_PASSWORD_LENGTH = 10;
+const COMMON_PASSWORD_BLOCKLIST = new Set([
+  'password', 'password1', 'password123', '12345678', '123456789', 'qwerty123',
+  'letmein123', 'iloveyou1', 'welcome123', 'admin1234', 'changeme1',
+]);
+
+function isPasswordAcceptable(password) {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) return false;
+  if (COMMON_PASSWORD_BLOCKLIST.has(password.toLowerCase())) return false;
+  return true;
+}
+
+app.post('/api/auth/password-reset/confirm', async (req, res) => {
+  try {
+    const token = req.body.token;
+    const newPassword = req.body.newPassword;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, error: 'Token and new password are required' });
+    }
+
+    if (!isPasswordAcceptable(newPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters and not a commonly used password.`,
+      });
+    }
+
+    const tokenHash = hashResetToken(token);
+    const rows = await q(
+      `SELECT id, user_id, expires_at, used_at
+       FROM password_reset_tokens
+       WHERE token_hash = $1`,
+      [tokenHash]
+    );
+
+    // Deliberately generic error for every failure mode (not found, expired,
+    // already used) — distinguishing them tells an attacker which guess was
+    // closer to a real token.
+    const GENERIC_TOKEN_ERROR = 'This reset link is invalid or has expired. Please request a new one.';
+
+    if (rows.length === 0) {
+      return res.status(400).json({ success: false, error: GENERIC_TOKEN_ERROR });
+    }
+
+    const row = rows[0];
+    if (row.used_at || new Date(row.expires_at).getTime() < Date.now()) {
+      return res.status(400).json({ success: false, error: GENERIC_TOKEN_ERROR });
+    }
+
+    const { salt, hash } = hashPassword(newPassword);
+
+    await q(
+      `UPDATE users SET password_hash = $1, password_salt = $2, updated_at = NOW() WHERE user_id = $3`,
+      [hash, salt, row.user_id]
+    );
+
+    // Single-use: mark this token consumed and invalidate any other
+    // outstanding tokens for the same user in one go.
+    await q(
+      `UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [row.user_id]
+    );
+
+    // A password reset is a meaningful account-security event — clear any
+    // login lockout so a legitimate user isn't still locked out after proving
+    // account ownership via the reset token.
+    const userRows = await q(`SELECT email FROM users WHERE user_id = $1`, [row.user_id]);
+    if (userRows[0]?.email) {
+      resetLoginAttempts(userRows[0].email);
+    }
+
+    console.log(`[password-reset] completed for user_id=${row.user_id}`);
+
+    return res.json({ success: true, message: 'Password updated. You can now log in with your new password.' });
+  } catch (error) {
+    console.error('API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -1488,6 +1671,7 @@ async function startServer() {
     await ensureUploadDirs();
     await ensureAuthColumns();
     await ensureKycDecisionsTable();
+    await ensurePasswordResetTable();
     await bootstrapAdminUsers();
 
     const server = app.listen(PORT, () => {
