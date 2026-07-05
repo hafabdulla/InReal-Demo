@@ -325,22 +325,22 @@
                 <p class="eyebrow">Documents</p>
                 <h3>Upload &amp; intake</h3>
               </div>
-              <p class="panel-note">Supabase storage integration coming next</p>
+              <p class="panel-note">Files are stored privately and only ever served through an authenticated admin request — no public links.</p>
             </div>
 
             <div class="split upload-grid">
               <label class="upload-dropzone" id="uploadDropzone">
-                <input id="fileInput" type="file" multiple hidden />
+                <input id="fileInput" type="file" hidden accept=".pdf,.jpg,.jpeg,.png" />
                 <i data-lucide="upload-cloud" style="width: 32px; height: 32px; color: #01ced1"></i>
-                <strong>Drop files or click to stage</strong>
-                <span>PDF, JPG, PNG, CSV, ZIP</span>
+                <strong>Drop a file or click to stage</strong>
+                <span>PDF, JPG, or PNG only</span>
               </label>
 
               <form class="card form" id="uploadForm">
                 <div class="card-title">
                   <div>
                     <h4>Document metadata</h4>
-                    <p>Local queue until API is wired</p>
+                    <p>Uploads and assigns to a specific user via the API</p>
                   </div>
                 </div>
                 <label>
@@ -351,16 +351,19 @@
                   Category
                   <select class="field" name="category">
                     <option value="KYC">KYC</option>
-                    <option value="Payout">Payout</option>
+                    <option value="Finance">Finance</option>
                     <option value="Property">Property</option>
-                    <option value="Legal">Legal</option>
                   </select>
                 </label>
                 <label>
-                  Assigned to
-                  <input class="field" name="assignedTo" placeholder="Operations" />
+                  Assign to user
+                  <input class="field" id="docUserSearch" autocomplete="off" placeholder="Search by name or email…" />
+                  <input type="hidden" id="docUserId" name="userId" />
                 </label>
-                <button class="primary-btn" type="submit">Save metadata</button>
+                <div id="docUserResults" class="user-search-results"></div>
+                <div id="docUserSelected" class="user-search-selected" hidden></div>
+                <p id="uploadFormError" class="helper" style="color:#ff6b6b;"></p>
+                <button class="primary-btn" type="submit" id="uploadSubmitBtn">Upload &amp; assign</button>
               </form>
             </div>
 
@@ -380,6 +383,7 @@
                       <th>Category</th>
                       <th>Assigned</th>
                       <th>Created</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody id="fileTableBody"></tbody>

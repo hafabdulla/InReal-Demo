@@ -9,7 +9,7 @@ const defaultState = {
   files: [],
   queue: [
     { title: 'KYC approvals waiting', value: '—', detail: 'Sync users tab for live counts' },
-    { title: 'Upload SLA', value: '—', detail: 'Document upload API coming next' },
+    { title: 'Upload SLA', value: '—', detail: 'Document assignment is now API-backed' },
     { title: 'Open incidents', value: '0', detail: 'No user-facing outage currently' },
   ],
   audit: [],
@@ -38,6 +38,12 @@ const els = {
   auditList: document.getElementById('auditList'),
   userForm: document.getElementById('userForm'),
   uploadForm: document.getElementById('uploadForm'),
+  docUserSearch: document.getElementById('docUserSearch'),
+  docUserId: document.getElementById('docUserId'),
+  docUserResults: document.getElementById('docUserResults'),
+  docUserSelected: document.getElementById('docUserSelected'),
+  uploadFormError: document.getElementById('uploadFormError'),
+  uploadSubmitBtn: document.getElementById('uploadSubmitBtn'),
   userSearch: document.getElementById('userSearch'),
   userFilter: document.getElementById('userFilter'),
   userCountLabel: document.getElementById('userCountLabel'),
@@ -231,6 +237,11 @@ async function loadInvestmentIntents() {
   addAudit('Intents synced', `${authSession.user.Email} • just now`, `Loaded ${state.intents.length} investment intents.`);
 }
 
+async function loadDocuments() {
+  const result = await apiFetch('/api/ops/documents');
+  state.files = result.data || [];
+}
+
 
 function renderSummary() {
   const verified = state.apiUsers.filter((user) => user.status === 'Verified').length;
@@ -249,9 +260,9 @@ function renderSummary() {
       <div class="sub">${reviewQueue} awaiting ops review</div>
     </div>
     <div class="metric">
-      <div class="label">Local documents</div>
+      <div class="label">Assigned documents</div>
       <div class="value">${state.files.length}</div>
-      <div class="sub">Metadata only until upload API ships</div>
+      <div class="sub">Uploaded and assigned via API</div>
     </div>
   `;
 }
@@ -348,23 +359,27 @@ function renderIntents() {
 }
 
 function renderFiles() {
-  els.fileCountLabel.textContent = `${state.files.length} file${state.files.length === 1 ? '' : 's'}`;
+  els.fileCountLabel.textContent = `${state.files.length} document${state.files.length === 1 ? '' : 's'}`;
 
   els.fileTableBody.innerHTML = state.files.length
     ? state.files
-        .map(
-          (file) => `
+        .map((file) => {
+          const format = (file.OriginalFileName || '').split('.').pop().toUpperCase() || '—';
+          const assignedName = [file.UserFirstName, file.UserLastName].filter(Boolean).join(' ') || file.UserEmail;
+          const supersededTag = file.IsSuperseded ? ' <span class="tag suspended">Superseded</span>' : '';
+          return `
       <tr>
-        <td><strong>${file.label}</strong></td>
-        <td>${String(file.type).toUpperCase()}</td>
-        <td>${file.category}</td>
-        <td>${file.assignedTo}</td>
-        <td>${formatDate(file.createdAt)}</td>
+        <td><strong>${file.Label}</strong>${supersededTag}</td>
+        <td>${format}</td>
+        <td>${file.Category}</td>
+        <td>${assignedName}<br /><span class="helper">${file.UserEmail}</span></td>
+        <td>${formatDate(file.CreatedAt)}</td>
+        <td><button class="doc-download-btn" data-doc-id="${file.DocumentID}" data-doc-name="${file.OriginalFileName}">Download</button></td>
       </tr>
-    `,
-        )
+    `;
+        })
         .join('')
-    : `<tr><td colspan="5" class="helper">No local document metadata yet.</td></tr>`;
+    : `<tr><td colspan="6" class="helper">No documents uploaded yet.</td></tr>`;
 }
 
 function renderQueue() {
@@ -521,31 +536,184 @@ function bindWorkspaceEvents() {
     renderAudit();
   });
 
-  els.uploadForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const formData = new FormData(els.uploadForm);
-    const fileName = els.fileInput.files[0]?.name || 'manual-entry.pdf';
-    const file = {
-      id: `FIL-${Math.floor(1000 + Math.random() * 9000)}`,
-      label: String(formData.get('label') || fileName).trim(),
-      category: String(formData.get('category') || 'KYC'),
-      assignedTo: String(formData.get('assignedTo') || 'Ops Team').trim(),
-      type: fileName.split('.').pop().toLowerCase(),
-      createdAt: new Date().toISOString(),
-    };
+  // ── Document upload: user search picker ────────────────────────────────
+  // Debounced search against /api/ops/documents' companion endpoint,
+  // /api/ops/users/search — the server validates and returns matches;
+  // the client only ever holds the userId the admin actually clicked on,
+  // never types one in directly.
+  let userSearchDebounce = null;
+  let selectedDocUser = null;
 
-    state.files.unshift(file);
-    addAudit('Document recorded (local)', `${authSession?.user?.Email || 'Ops'} • just now`, `${file.label} saved as local metadata only.`);
-    els.uploadForm.reset();
-    els.fileInput.value = '';
-    render();
+  function renderDocUserSelected() {
+    if (!selectedDocUser) {
+      els.docUserSelected.hidden = true;
+      els.docUserSelected.innerHTML = '';
+      return;
+    }
+    const name = [selectedDocUser.FirstName, selectedDocUser.LastName].filter(Boolean).join(' ');
+    els.docUserSelected.hidden = false;
+    els.docUserSelected.innerHTML = `
+      <span><strong>${name}</strong> — ${selectedDocUser.Email}</span>
+      <button type="button" id="clearDocUserBtn">Change</button>
+    `;
+    document.getElementById('clearDocUserBtn').addEventListener('click', () => {
+      selectedDocUser = null;
+      els.docUserId.value = '';
+      els.docUserSearch.value = '';
+      els.docUserSearch.hidden = false;
+      renderDocUserSelected();
+      els.docUserSearch.focus();
+    });
+    els.docUserSearch.hidden = true;
+  }
+
+  els.docUserSearch.addEventListener('input', () => {
+    const query = els.docUserSearch.value.trim();
+    clearTimeout(userSearchDebounce);
+    if (query.length < 2) {
+      els.docUserResults.innerHTML = '';
+      return;
+    }
+    userSearchDebounce = setTimeout(async () => {
+      try {
+        const result = await apiFetch(`/api/ops/users/search?q=${encodeURIComponent(query)}`);
+        const matches = result.data || [];
+        els.docUserResults.innerHTML = matches.length
+          ? matches
+              .map(
+                (u) => `<button type="button" data-user-id="${u.UserID}">${[u.FirstName, u.LastName].filter(Boolean).join(' ')} — ${u.Email}</button>`,
+              )
+              .join('')
+          : `<span class="helper">No matching users.</span>`;
+
+        els.docUserResults.querySelectorAll('button[data-user-id]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const match = matches.find((u) => String(u.UserID) === btn.dataset.userId);
+            if (!match) return;
+            selectedDocUser = match;
+            els.docUserId.value = match.UserID;
+            els.docUserResults.innerHTML = '';
+            renderDocUserSelected();
+          });
+        });
+      } catch (error) {
+        els.docUserResults.innerHTML = `<span class="helper">Search failed: ${error.message}</span>`;
+      }
+    }, 250);
+  });
+
+  // ── Document upload: submit ─────────────────────────────────────────────
+  els.uploadForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    els.uploadFormError.textContent = '';
+
+    const formData = new FormData(els.uploadForm);
+    const label = String(formData.get('label') || '').trim();
+    const category = String(formData.get('category') || '');
+    const userId = els.docUserId.value;
+    const file = els.fileInput.files[0];
+
+    if (!label) {
+      els.uploadFormError.textContent = 'Document label is required.';
+      return;
+    }
+    if (!userId) {
+      els.uploadFormError.textContent = 'Search for and select a user to assign this document to.';
+      return;
+    }
+    if (!file) {
+      els.uploadFormError.textContent = 'Choose a file to upload (PDF, JPG, or PNG).';
+      return;
+    }
+
+    els.uploadSubmitBtn.disabled = true;
+    els.uploadSubmitBtn.textContent = 'Uploading…';
+
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Could not read the selected file'));
+        reader.readAsDataURL(file);
+      });
+
+      await apiFetch('/api/ops/documents', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: Number(userId),
+          category,
+          label,
+          fileBase64,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+        }),
+      });
+
+      addAudit(
+        'Document assigned',
+        `${authSession?.user?.Email || 'Ops'} • just now`,
+        `${label} (${category}) assigned to ${selectedDocUser?.Email || 'user #' + userId}.`,
+      );
+
+      els.uploadForm.reset();
+      els.fileInput.value = '';
+      selectedDocUser = null;
+      els.docUserId.value = '';
+      els.docUserSearch.hidden = false;
+      renderDocUserSelected();
+
+      await loadDocuments();
+      render();
+    } catch (error) {
+      els.uploadFormError.textContent = error.message || 'Upload failed. Please try again.';
+    } finally {
+      els.uploadSubmitBtn.disabled = false;
+      els.uploadSubmitBtn.textContent = 'Upload & assign';
+    }
   });
 
   els.uploadDropzone.addEventListener('click', () => els.fileInput.click());
   els.fileInput.addEventListener('change', () => {
     if (els.fileInput.files.length) {
-      addAudit('File staged', `${authSession?.user?.Email || 'Ops'} • just now`, `${els.fileInput.files.length} file(s) selected for metadata.`);
+      addAudit('File staged', `${authSession?.user?.Email || 'Ops'} • just now`, `${els.fileInput.files[0].name} ready to upload.`);
       renderAudit();
+    }
+  });
+
+  // ── Document download ───────────────────────────────────────────────────
+  // Files are never served from a public/static path — every download is a
+  // fresh, authenticated fetch that includes the admin's bearer token, same
+  // as every other admin API call. We fetch as a blob and trigger a save
+  // rather than navigating directly, since a plain link/window.open would
+  // not carry the Authorization header.
+  els.fileTableBody.addEventListener('click', async (event) => {
+    const button = event.target.closest('.doc-download-btn');
+    if (!button) return;
+    const documentId = button.dataset.docId;
+    const fileName = button.dataset.docName || `document-${documentId}`;
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = '…';
+    try {
+      const response = await fetch(`${getApiBase()}/api/ops/documents/${documentId}/file`, {
+        headers: { Authorization: `Bearer ${authSession?.token || ''}` },
+      });
+      if (!response.ok) throw new Error(`Download failed (${response.status})`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      addAudit('Download failed', `${authSession?.user?.Email || 'Ops'} • just now`, error.message);
+      renderAudit();
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
     }
   });
 
@@ -799,7 +967,7 @@ function bindKycEvents() {
 }
 
 async function refreshLiveData() {
-  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue()]);
+  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments()]);
   render();
 }
 

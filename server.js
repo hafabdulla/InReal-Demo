@@ -29,6 +29,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const uploadsRoot = path.join(__dirname, 'uploads');
 const proofsDir = path.join(uploadsRoot, 'proofs');
+const userDocsDir = path.join(uploadsRoot, 'user-docs');
 
 if (!process.env.DATABASE_URL) {
   console.error(
@@ -445,6 +446,7 @@ function sanitizeUserRecord(user) {
 
 async function ensureUploadDirs() {
   await fs.mkdir(proofsDir, { recursive: true });
+  await fs.mkdir(userDocsDir, { recursive: true });
 }
 
 function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -506,6 +508,32 @@ async function ensureKycDecisionsTable() {
   `);
   await q(`CREATE INDEX IF NOT EXISTS idx_kyc_decisions_user_id ON kyc_decisions(user_id)`);
   await q(`CREATE INDEX IF NOT EXISTS idx_kyc_decisions_decided_at ON kyc_decisions(decided_at DESC)`);
+}
+
+// Documents an admin assigns to a specific investor (KYC / Finance / Property).
+// This is the real backend for what the ops portal's upload form previously
+// only faked client-side ("Document recorded (local)" — no server round-trip,
+// no file actually stored, no real user reference). Rows are never hard-deleted:
+// per the KYC/AML Compliance Manual's 7-year retention requirement, a superseded
+// document is marked `is_superseded`, not removed — the old file and row stay in
+// place alongside whatever replaces them.
+async function ensureUserDocumentsTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS user_documents (
+      document_id          SERIAL PRIMARY KEY,
+      user_id              INTEGER NOT NULL REFERENCES users(user_id),
+      category             VARCHAR(20) NOT NULL CHECK (category IN ('KYC', 'Finance', 'Property')),
+      label                TEXT NOT NULL,
+      file_name            TEXT NOT NULL,
+      original_file_name   TEXT NOT NULL,
+      mime_type            TEXT NOT NULL,
+      uploaded_by_admin_id INTEGER NOT NULL REFERENCES users(user_id),
+      is_superseded        BOOLEAN NOT NULL DEFAULT false,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_user_id ON user_documents(user_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_created_at ON user_documents(created_at DESC)`);
 }
 
 async function bootstrapAdminUsers() {
@@ -1220,6 +1248,34 @@ app.post('/api/investment-intents', async (req, res) => {
   }
 });
 
+// Shared file-content validation used by every upload endpoint in this app
+// (investor proof-of-payment uploads, and now admin-assigned user documents).
+// Validates by magic bytes, not by filename or client-supplied mimeType —
+// those are trivially spoofable. Returns { ok: true, fileBuffer } or
+// { ok: false, error } so callers can respond consistently.
+const ALLOWED_FILE_SIGNATURES = [
+  { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },            // %PDF
+  { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                   // JPEG SOI marker
+  { label: 'PNG',  bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A] }, // PNG header
+];
+const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
+
+function validateUploadedFile(base64Payload) {
+  const payload = base64Payload.includes(',') ? base64Payload.split(',')[1] : base64Payload;
+  const fileBuffer = Buffer.from(payload, 'base64');
+
+  const isAllowedType = ALLOWED_FILE_SIGNATURES.some(({ bytes }) =>
+    bytes.every((byte, i) => fileBuffer[i] === byte)
+  );
+  if (!isAllowedType) {
+    return { ok: false, error: 'Unsupported file type. Please upload a PDF, JPEG, or PNG.' };
+  }
+  if (fileBuffer.length > MAX_FILE_BYTES) {
+    return { ok: false, error: 'File too large. Maximum size is 8 MB.' };
+  }
+  return { ok: true, fileBuffer };
+}
+
 app.post('/api/investment-intents/:reference/proof', async (req, res) => {
   try {
     const authenticatedUserId = requireAuthenticatedUserId(req, res);
@@ -1236,33 +1292,11 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     // Reject anything that isn't a PDF, JPEG, or PNG regardless of what the
     // filename or mimeType field claims. Failing fast here avoids a DB query
     // on every disguised-file upload attempt.
-    const payload = proofBase64.includes(',') ? proofBase64.split(',')[1] : proofBase64;
-    const fileBuffer = Buffer.from(payload, 'base64');
-
-    const ALLOWED_SIGNATURES = [
-      { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },            // %PDF
-      { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                   // JPEG SOI marker
-      { label: 'PNG',  bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A] }, // PNG header
-    ];
-
-    const isAllowedType = ALLOWED_SIGNATURES.some(({ bytes }) =>
-      bytes.every((byte, i) => fileBuffer[i] === byte)
-    );
-
-    if (!isAllowedType) {
-      return res.status(400).json({
-        success: false,
-        error: 'Unsupported file type. Please upload a PDF, JPEG, or PNG.',
-      });
+    const validation = validateUploadedFile(proofBase64);
+    if (!validation.ok) {
+      return res.status(400).json({ success: false, error: validation.error });
     }
-
-    const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
-    if (fileBuffer.length > MAX_FILE_BYTES) {
-      return res.status(400).json({
-        success: false,
-        error: 'File too large. Maximum size is 8 MB.',
-      });
-    }
+    const { fileBuffer } = validation;
 
     const txRows = await q(
       `SELECT transaction_id, user_id, description, status
@@ -1598,6 +1632,206 @@ app.get('/api/ops/kyc-reviews/:userId/history', async (req, res) => {
   }
 });
 
+// ── Admin: user documents (KYC / Finance / Property assignment) ─────────────
+// This replaces the ops portal's previous local-only mock ("Document recorded
+// (local)" — no server round-trip, no file actually stored, no real user
+// reference). Every route here is admin-gated and every user reference is
+// checked against the real `users` table server-side — the client only ever
+// supplies a userId to search/select against, never something we trust blindly
+// into a query or a file path.
+
+// GET /api/ops/users/search?q=... — used by the admin document-upload form's
+// user picker. Deliberately returns only the minimal safe fields needed to
+// pick the right person (id, name, email) — not KYC status, phone, or
+// anything else a document-assignment screen doesn't need to see.
+app.get('/api/ops/users/search', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const query = String(req.query.q || '').trim();
+    if (query.length < 2) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const rows = await q(
+      `SELECT
+         user_id    AS "UserID",
+         first_name AS "FirstName",
+         last_name  AS "LastName",
+         email      AS "Email"
+       FROM users
+       WHERE is_active = true AND is_deleted = false
+         AND (
+           email ILIKE $1
+           OR first_name ILIKE $1
+           OR last_name ILIKE $1
+           OR (first_name || ' ' || last_name) ILIKE $1
+         )
+       ORDER BY first_name, last_name
+       LIMIT 20`,
+      [`%${query}%`]
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+const DOCUMENT_CATEGORIES = new Set(['KYC', 'Finance', 'Property']);
+
+// POST /api/ops/documents — admin uploads a document and assigns it to a
+// specific user. userId is validated against the real users table before
+// anything is written to disk or the database — never trusted as-is.
+app.post('/api/ops/documents', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const { userId, category, label, fileBase64, fileName, mimeType = 'application/octet-stream' } = req.body;
+
+    const targetUserId = Number(userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid userId is required' });
+    }
+    if (!DOCUMENT_CATEGORIES.has(category)) {
+      return res.status(400).json({ success: false, error: "category must be 'KYC', 'Finance', or 'Property'" });
+    }
+    if (!label || !String(label).trim()) {
+      return res.status(400).json({ success: false, error: 'label is required' });
+    }
+    if (!fileBase64 || !fileName) {
+      return res.status(400).json({ success: false, error: 'fileBase64 and fileName are required' });
+    }
+
+    // Confirm the target user actually exists before writing anything.
+    const targetUsers = await q(
+      `SELECT user_id FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [targetUserId]
+    );
+    if (targetUsers.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Same magic-byte validation as every other upload path in this app —
+    // PDF/JPEG/PNG only, checked by content not filename or claimed mimeType.
+    const validation = validateUploadedFile(fileBase64);
+    if (!validation.ok) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+    const { fileBuffer } = validation;
+
+    await ensureUploadDirs();
+    const safeFileName = `${Date.now()}-${String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const absolutePath = path.join(userDocsDir, safeFileName);
+    await fs.writeFile(absolutePath, fileBuffer);
+
+    const inserted = await q(
+      `INSERT INTO user_documents (
+         user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING document_id AS "DocumentID", created_at AS "CreatedAt"`,
+      [targetUserId, category, String(label).trim(), safeFileName, fileName, mimeType, adminUserId]
+    );
+
+    res.status(201).json({
+      success: true,
+      data: {
+        documentId: inserted[0].DocumentID,
+        userId: targetUserId,
+        category,
+        label: String(label).trim(),
+        originalFileName: fileName,
+        createdAt: inserted[0].CreatedAt,
+      },
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/documents — admin document queue. Optional ?userId= filter.
+// Metadata only — the actual file is only ever served through the
+// auth-gated download route below, never a public/static path.
+app.get('/api/ops/documents', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const userIdFilter = req.query.userId ? Number(req.query.userId) : null;
+    const params = [];
+    let whereClause = '';
+    if (userIdFilter) {
+      params.push(userIdFilter);
+      whereClause = `WHERE d.user_id = $${params.length}`;
+    }
+
+    const rows = await q(
+      `SELECT
+         d.document_id          AS "DocumentID",
+         d.user_id              AS "UserID",
+         u.email                AS "UserEmail",
+         u.first_name           AS "UserFirstName",
+         u.last_name            AS "UserLastName",
+         d.category             AS "Category",
+         d.label                AS "Label",
+         d.original_file_name   AS "OriginalFileName",
+         d.mime_type            AS "MimeType",
+         d.is_superseded        AS "IsSuperseded",
+         d.created_at           AS "CreatedAt",
+         a.email                AS "UploadedByEmail"
+       FROM user_documents d
+       JOIN users u ON u.user_id = d.user_id
+       JOIN users a ON a.user_id = d.uploaded_by_admin_id
+       ${whereClause}
+       ORDER BY d.created_at DESC
+       LIMIT 200`,
+      params
+    );
+
+    res.json({ success: true, data: rows, count: rows.length });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/documents/:id/file — admin-only download. This app doesn't yet
+// have Supabase Storage's short-lived signed URLs (that lands with the
+// ADR-01 migration — see F11), so in the meantime every download is gated by
+// a fresh admin-authenticated request instead of a static or public path,
+// which gives the same practical guarantee: no one without a valid admin
+// session can ever fetch a file, signed URL or not.
+app.get('/api/ops/documents/:id/file', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const documentId = Number(req.params.id);
+    if (!Number.isInteger(documentId) || documentId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid document id' });
+    }
+
+    const rows = await q(
+      `SELECT file_name, original_file_name FROM user_documents WHERE document_id = $1`,
+      [documentId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Document not found' });
+    }
+
+    const absolutePath = path.join(userDocsDir, rows[0].file_name);
+    await fs.access(absolutePath);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.download(absolutePath, rows[0].original_file_name || rows[0].file_name);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ success: false, error: 'Document file not found' });
+    }
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 app.get('/api/ops/investment-intents', async (req, res) => {
   try {
     const adminUserId = await requireAdmin(req, res);
@@ -1733,6 +1967,7 @@ async function startServer() {
     await ensureAuthColumns();
     await ensureKycDecisionsTable();
     await ensurePasswordResetTable();
+    await ensureUserDocumentsTable();
     await bootstrapAdminUsers();
 
     const server = app.listen(PORT, () => {
