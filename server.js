@@ -16,6 +16,17 @@ import { fileURLToPath } from 'url';
 dotenv.config();
 
 const app = express();
+
+// Render (and most PaaS hosts) sit the app behind a reverse proxy, so every
+// request arrives with an X-Forwarded-For header set by that proxy. Express
+// doesn't trust that header by default — for good reason, since anyone could
+// forge it on a request that reaches Express directly. Here it's safe: Render
+// is the only thing in front of us, so we trust exactly one proxy hop. This is
+// required for express-rate-limit (and anything else keying off req.ip) to see
+// each real client's IP instead of misbehaving or bucketing every request
+// together. Without this, rate limiting behind Render either throws
+// (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) or silently rate-limits the wrong thing.
+app.set('trust proxy', 1);
 const PORT = process.env.API_PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
