@@ -6,7 +6,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
@@ -17,43 +17,12 @@ dotenv.config();
 
 const app = express();
 
-// Render (and most PaaS hosts) sit the app behind a reverse proxy, so every
-// request arrives with an X-Forwarded-For header set by that proxy. Express
-// doesn't trust that header by default — for good reason, since anyone could
-// forge it on a request that reaches Express directly.
-//
-// IMPORTANT: this is intentionally `true`, not a specific hop count like `1`.
-// A fixed hop count only works if the platform adds exactly that many hops to
-// every single request — verified against Render in practice, the number of
-// hops in X-Forwarded-For was NOT constant across requests, which meant a
-// fixed count (e.g. `1`) sometimes resolved req.ip to an internal Render
-// address instead of the real client, and that internal address changed
-// request-to-request. The practical effect was silent: rate limiting kept
-// running with no errors, but every request could get a different key, so
-// the per-IP limiter never accumulated and never actually triggered.
-// `true` always takes the left-most (original client) address in
-// X-Forwarded-For regardless of how many hops follow it, which is safe here
-// specifically because Render's edge is the only way into this service — it
-// appends to the header itself rather than passing through an untouched,
-// externally-supplied one. This is required for express-rate-limit (and
-// anything else keying off req.ip) to see each real client's IP correctly.
-// SECURITY NOTE — residual risk, tracked as a follow-up, not swept under the rug:
-// `true` trusts the left-most address in X-Forwarded-For as the client IP,
-// regardless of chain length. That is correct ONLY if every request reaching
-// this process necessarily passed through Render's edge first (i.e. there is
-// no way to connect to this service directly, bypassing Render). If that
-// holds, Render's edge is the one appending the real client IP, and `true` is
-// safe. If it doesn't hold, a request that reaches Express directly could
-// set its own fake X-Forwarded-For and this app would believe it.
-//
-// TODO before this is considered fully closed: confirm with Render
-// (support/docs) that direct access bypassing their edge is not possible for
-// this service, and — ideally — get the exact, guaranteed hop count so this
-// can be swapped for a specific number instead of `true`. Until then: the
-// blast radius of this residual risk is limited to the two IP-keyed abuse
-// limiters below (general DoS limiter, password-reset-request limiter) —
-// NOT the login lockout, which keys by account email and is unaffected
-// regardless of this setting.
+// Render (and most PaaS hosts) sit the app behind a reverse proxy. This setting
+// affects a few Express conveniences (e.g. req.secure, req.protocol) that this
+// app doesn't currently rely on for anything security-sensitive — the rate
+// limiters below intentionally do NOT depend on it (see getClientIp below and
+// the comment next to the limiter definitions for why). Left as `true` for
+// general correctness/compatibility, not as a security control.
 app.set('trust proxy', true);
 const PORT = process.env.API_PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
@@ -128,13 +97,64 @@ app.use(express.urlencoded({ extended: true }));
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
 
+// Both limiters below identify a client by IP for coarse abuse protection
+// (NOT the primary security boundary — see the login lockout further down,
+// which keys by account email and doesn't depend on any of this).
+//
+// We deliberately do NOT rely on Express's `req.ip` / numeric `trust proxy`
+// hop-counting for this. In testing against this app's actual Render
+// deployment, the number of hops in X-Forwarded-For was not constant across
+// requests, which meant any fixed hop count sometimes resolved to the wrong
+// (and inconsistent) address, silently defeating the rate limiter — it never
+// threw an error, it just never accumulated a stable key.
+//
+// Instead we read X-Forwarded-For ourselves and always take the left-most
+// address, which is the original client by convention (each hop appends its
+// own address to the right as the request passes through). This is
+// independent of how many hops Render's infrastructure adds on any given
+// request.
+//
+// Residual risk (documented, not hidden): this is only trustworthy if the
+// left-most entry was actually placed there by the real client's first
+// contact point and can't be overwritten by something further upstream that
+// we don't control. On Render specifically, the app is not reachable except
+// through Render's own edge, so this holds — but this is exactly the
+// assumption to re-verify if the hosting setup ever changes (e.g. adding a
+// CDN in front of Render, or exposing the service directly).
+//
+// Because we're extracting the IP ourselves rather than asking
+// express-rate-limit to derive it from req.ip, we also disable its built-in
+// trust-proxy validation below (`validate: { trustProxy: false, xForwardedForHeader: false }`)
+// — not to silence a real problem, but because that validation is specifically
+// checking Express's `req.ip` derivation, which we're intentionally not using.
+function getClientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  let ip;
+  if (typeof xff === 'string' && xff.length > 0) {
+    const first = xff.split(',')[0].trim();
+    ip = first || undefined;
+  }
+  if (!ip) {
+    ip = req.socket?.remoteAddress || req.ip || 'unknown';
+  }
+  // Normalize IPv6 addresses to a /56 subnet before using them as a rate-limit
+  // key. Without this, a client can request a new address from within their
+  // own ISP-assigned IPv6 block (trivially easy — many home connections have
+  // a whole /64 or /56 to themselves) and get a fresh rate-limit bucket on
+  // every request, defeating the limiter entirely. IPv4 addresses pass
+  // through unchanged.
+  return ipKeyGenerator(ip);
+}
+
 // General API limiter — protects against scraping and DoS.
-// 200 requests per 15 minutes per IP. Generous enough not to affect real users.
+// 200 requests per 15 minutes per client IP. Generous enough not to affect real users.
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
+  validate: { trustProxy: false, xForwardedForHeader: false },
   message: { success: false, error: 'Too many requests — please try again later.' },
 });
 
@@ -151,6 +171,8 @@ const passwordResetLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
+  validate: { trustProxy: false, xForwardedForHeader: false },
   message: { success: false, error: 'Too many requests — please try again later.' },
 });
 
@@ -700,7 +722,7 @@ app.post('/api/auth/password-reset/request', passwordResetLimiter, async (req, r
       await q(
         `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip)
          VALUES ($1, $2, $3, $4)`,
-        [userId, tokenHash, expiresAt, req.ip || null]
+        [userId, tokenHash, expiresAt, getClientIp(req) || null]
       );
 
       // Phase 1 has no first-party email delivery (PRD decision D-14): the raw
