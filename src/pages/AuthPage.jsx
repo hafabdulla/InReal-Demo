@@ -11,7 +11,9 @@ import {
   ArrowLeft,
   ChevronDown,
   Check,
-  Search
+  Search,
+  KeyRound,
+  ShieldCheck
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
@@ -203,7 +205,7 @@ const countryCodes = [
 export default function AuthPage() {
   const navigate = useNavigate();
   const { signIn } = useAuth();
-  const [mode, setMode] = useState("login"); // "login" or "signup"
+  const [mode, setMode] = useState("login"); // "login" | "signup" | "verify" | "verified" | "forgot" | "reset"
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [otpValues, setOtpValues] = useState(['', '', '', '', '', '']);
@@ -228,6 +230,17 @@ export default function AuthPage() {
     confirmPassword: "",
     agreeToTerms: false,
   });
+
+  // Forgot / reset password form state.
+  // forgotSent intentionally does not distinguish "account found" from "account
+  // not found" — the backend never tells us which happened (see
+  // /api/auth/password-reset/request), and this screen must not reconstruct
+  // that distinction from anything else either. It is only ever "submitted"
+  // or "not submitted".
+  const [forgotForm, setForgotForm] = useState({ email: "" });
+  const [forgotSent, setForgotSent] = useState(false);
+  const [resetForm, setResetForm] = useState({ token: "", newPassword: "", confirmPassword: "" });
+  const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [errors, setErrors] = useState({});
 
@@ -276,6 +289,137 @@ export default function AuthPage() {
         // Redirect to portal on successful login
         navigate("/portal", { replace: true });
       }
+    }
+  };
+
+  // Password reset — client-side mirror of the server's minimum bar, purely
+  // for immediate feedback. The server re-validates independently and is the
+  // only authority; nothing here should ever be treated as a substitute for it.
+  const RESET_MIN_PASSWORD_LENGTH = 10;
+  const RESET_COMMON_PASSWORD_HINTS = new Set([
+    'password', 'password1', 'password123', '12345678', '123456789', 'qwerty123',
+    'letmein123', 'iloveyou1', 'welcome123', 'admin1234', 'changeme1',
+  ]);
+
+  // Step 1 of password reset: request a code. The response is the identical
+  // generic message whether or not the email belongs to an account — do not
+  // add any branching here based on outcome. A network/validation error is
+  // the only thing that produces different UI, and even then only a generic
+  // error, never anything derived from whether the email exists.
+  const handleForgotPasswordRequest = async (e) => {
+    e.preventDefault();
+    const newErrors = {};
+
+    if (!forgotForm.email) {
+      newErrors.email = "Email is required";
+    } else if (!validateEmail(forgotForm.email)) {
+      newErrors.email = "Please enter a valid email";
+    }
+
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${getApiBase()}/api/auth/password-reset/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotForm.email }),
+      });
+      const data = await response.json();
+
+      // success is expected to be true here in every normal case (missing
+      // email is caught above; the endpoint itself never reports whether the
+      // account exists). A false here means a genuine error — rate limit,
+      // network, or server issue — not "no such account".
+      if (!data.success) {
+        toast({
+          variant: "destructive",
+          title: "Something went wrong",
+          description: data.error || "Please try again in a moment.",
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      setForgotSent(true);
+      setIsLoading(false);
+    } catch (error) {
+      console.error("Password reset request error:", error);
+      toast({
+        variant: "destructive",
+        title: "Something went wrong",
+        description: "We couldn't reach the server. Please try again.",
+      });
+      setIsLoading(false);
+    }
+  };
+
+  // Step 2 of password reset: submit the code + new password. Every failure
+  // mode from the server (invalid, expired, already used) comes back as one
+  // generic message — render exactly that string, don't try to infer which
+  // case occurred from anything else.
+  const handleResetPasswordConfirm = async (e) => {
+    e.preventDefault();
+    const newErrors = {};
+
+    if (!resetForm.token.trim()) {
+      newErrors.token = "Enter the reset code you were given";
+    }
+    if (!resetForm.newPassword) {
+      newErrors.newPassword = "New password is required";
+    } else if (resetForm.newPassword.length < RESET_MIN_PASSWORD_LENGTH) {
+      newErrors.newPassword = `Password must be at least ${RESET_MIN_PASSWORD_LENGTH} characters`;
+    } else if (RESET_COMMON_PASSWORD_HINTS.has(resetForm.newPassword.toLowerCase())) {
+      newErrors.newPassword = "This password is too common — please choose another";
+    }
+    if (resetForm.newPassword !== resetForm.confirmPassword) {
+      newErrors.confirmPassword = "Passwords do not match";
+    }
+
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${getApiBase()}/api/auth/password-reset/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: resetForm.token.trim(),
+          newPassword: resetForm.newPassword,
+        }),
+      });
+      const data = await response.json();
+      setIsLoading(false);
+
+      if (!data.success) {
+        // Render the server's own generic message verbatim — never a
+        // frontend-authored "expired" vs "wrong code" distinction.
+        setErrors({ token: data.error || "This reset code is invalid or has expired." });
+        return;
+      }
+
+      // No session token is issued by this endpoint, and none should be
+      // assumed here — send the user back to a normal login, not an
+      // auto-logged-in state.
+      setResetForm({ token: "", newPassword: "", confirmPassword: "" });
+      setForgotForm({ email: "" });
+      setForgotSent(false);
+      setErrors({});
+      toast({
+        title: "Password updated",
+        description: "You can now log in with your new password.",
+      });
+      setMode("login");
+    } catch (error) {
+      console.error("Password reset confirm error:", error);
+      setIsLoading(false);
+      toast({
+        variant: "destructive",
+        title: "Something went wrong",
+        description: "We couldn't reach the server. Please try again.",
+      });
     }
   };
 
@@ -678,6 +822,7 @@ export default function AuthPage() {
           </Link>
 
           {/* Mode Toggle */}
+          {(mode === "login" || mode === "signup") && (
           <div className="flex bg-deep-graphite rounded-lg p-1 mb-8">
             <button
               onClick={() => {
@@ -704,6 +849,7 @@ export default function AuthPage() {
               Sign Up
             </button>
           </div>
+          )}
 
           {/* Form Content */}
           <AnimatePresence mode="wait">
@@ -750,9 +896,22 @@ export default function AuthPage() {
 
                 {/* Password */}
                 <div>
-                  <label className="block text-sm font-medium text-off-white mb-2">
-                    Password
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-off-white">
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("forgot");
+                        setErrors({});
+                        setForgotSent(false);
+                      }}
+                      className="text-primary-accent hover:underline text-xs font-medium"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
                   <div className="relative">
                     <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-grey" />
                     <input
@@ -780,9 +939,6 @@ export default function AuthPage() {
                   {errors.password && (
                     <p className="text-red-500 text-xs mt-1">{errors.password}</p>
                   )}
-                  <p className="text-slate-grey text-xs mt-1">
-                    Demo users can use <span className="text-off-white">Demo123!</span>
-                  </p>
                 </div>
 
                 {/* Submit Button */}
@@ -1236,6 +1392,214 @@ export default function AuthPage() {
                   Full investment access enabled after KYC verification
                 </p>
               </motion.div>
+            )}
+
+            {/* Forgot Password — Step 1: request a reset code */}
+            {mode === "forgot" && (
+              <motion.div
+                key="forgot"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                {!forgotSent ? (
+                  <form onSubmit={handleForgotPasswordRequest} className="space-y-5">
+                    <div>
+                      <h2 className="text-3xl font-bold text-off-white mb-2">
+                        Reset your password
+                      </h2>
+                      <p className="text-slate-grey">
+                        Enter the email on your account and we'll get reset instructions to you.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-off-white mb-2">
+                        Email
+                      </label>
+                      <div className="relative">
+                        <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-grey" />
+                        <input
+                          type="email"
+                          value={forgotForm.email}
+                          onChange={(e) => setForgotForm({ email: e.target.value })}
+                          className={`w-full bg-deep-graphite border ${errors.email ? "border-red-500" : "border-modern-grey/50"
+                            } rounded-xl py-4 pl-12 pr-4 text-off-white placeholder-slate-grey focus:outline-none focus:border-primary-accent transition-colors`}
+                          placeholder="Enter your email"
+                        />
+                      </div>
+                      {errors.email && (
+                        <p className="text-red-500 text-xs mt-1">{errors.email}</p>
+                      )}
+                    </div>
+
+                    <Button
+                      type="submit"
+                      disabled={isLoading}
+                      className="w-full bg-primary-accent hover:bg-steel-blue text-charcoal-black font-bold py-4 text-lg rounded-xl"
+                    >
+                      {isLoading ? "Sending..." : "Send Reset Instructions"}
+                    </Button>
+
+                    <p className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => { setMode("login"); setErrors({}); }}
+                        className="text-slate-grey hover:text-off-white text-sm transition-colors"
+                      >
+                        ← Back to login
+                      </button>
+                    </p>
+                  </form>
+                ) : (
+                  <div className="space-y-6">
+                    <div className="text-center">
+                      <div className="w-20 h-20 bg-primary-accent/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Mail className="w-10 h-10 text-primary-accent" />
+                      </div>
+                      <h2 className="text-3xl font-bold text-off-white mb-2">Check your inbox</h2>
+                      <p className="text-slate-grey">
+                        If an account exists for that email, password reset instructions have been sent.
+                      </p>
+                    </div>
+
+                    <Button
+                      onClick={() => { setMode("reset"); setErrors({}); }}
+                      className="w-full bg-primary-accent hover:bg-steel-blue text-charcoal-black font-bold py-4 text-lg rounded-xl"
+                    >
+                      I have a reset code
+                    </Button>
+
+                    <p className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => { setMode("login"); setForgotSent(false); setErrors({}); }}
+                        className="text-slate-grey hover:text-off-white text-sm transition-colors"
+                      >
+                        ← Back to login
+                      </button>
+                    </p>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Forgot Password — Step 2: submit the code and choose a new password */}
+            {mode === "reset" && (
+              <motion.form
+                key="reset"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                onSubmit={handleResetPasswordConfirm}
+                className="space-y-5"
+              >
+                <div>
+                  <div className="w-16 h-16 bg-primary-accent/20 rounded-full flex items-center justify-center mb-6">
+                    <ShieldCheck className="w-8 h-8 text-primary-accent" />
+                  </div>
+                  <h2 className="text-3xl font-bold text-off-white mb-2">
+                    Enter your reset code
+                  </h2>
+                  <p className="text-slate-grey">
+                    Enter the reset code you were given, then choose a new password.
+                  </p>
+                </div>
+
+                {/* Reset code */}
+                <div>
+                  <label className="block text-sm font-medium text-off-white mb-2">
+                    Reset code
+                  </label>
+                  <div className="relative">
+                    <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-grey" />
+                    <input
+                      type="text"
+                      autoComplete="one-time-code"
+                      value={resetForm.token}
+                      onChange={(e) => setResetForm({ ...resetForm, token: e.target.value })}
+                      className={`w-full bg-deep-graphite border ${errors.token ? "border-red-500" : "border-modern-grey/50"
+                        } rounded-xl py-4 pl-12 pr-4 text-off-white placeholder-slate-grey focus:outline-none focus:border-primary-accent transition-colors font-mono text-sm`}
+                      placeholder="Paste the code you were given"
+                    />
+                  </div>
+                  {errors.token && (
+                    <p className="text-red-500 text-xs mt-1">{errors.token}</p>
+                  )}
+                </div>
+
+                {/* New password */}
+                <div>
+                  <label className="block text-sm font-medium text-off-white mb-2">
+                    New password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-grey" />
+                    <input
+                      type={showResetPassword ? "text" : "password"}
+                      value={resetForm.newPassword}
+                      onChange={(e) => setResetForm({ ...resetForm, newPassword: e.target.value })}
+                      className={`w-full bg-deep-graphite border ${errors.newPassword ? "border-red-500" : "border-modern-grey/50"
+                        } rounded-xl py-4 pl-12 pr-12 text-off-white placeholder-slate-grey focus:outline-none focus:border-primary-accent transition-colors`}
+                      placeholder="At least 10 characters"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowResetPassword(!showResetPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-grey hover:text-off-white transition-colors"
+                    >
+                      {showResetPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+                  {errors.newPassword && (
+                    <p className="text-red-500 text-xs mt-1">{errors.newPassword}</p>
+                  )}
+                </div>
+
+                {/* Confirm new password */}
+                <div>
+                  <label className="block text-sm font-medium text-off-white mb-2">
+                    Confirm new password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-grey" />
+                    <input
+                      type={showResetPassword ? "text" : "password"}
+                      value={resetForm.confirmPassword}
+                      onChange={(e) => setResetForm({ ...resetForm, confirmPassword: e.target.value })}
+                      className={`w-full bg-deep-graphite border ${errors.confirmPassword ? "border-red-500" : "border-modern-grey/50"
+                        } rounded-xl py-4 pl-12 pr-4 text-off-white placeholder-slate-grey focus:outline-none focus:border-primary-accent transition-colors`}
+                      placeholder="Re-enter your new password"
+                    />
+                  </div>
+                  {errors.confirmPassword && (
+                    <p className="text-red-500 text-xs mt-1">{errors.confirmPassword}</p>
+                  )}
+                </div>
+
+                <Button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-primary-accent hover:bg-steel-blue text-charcoal-black font-bold py-4 text-lg rounded-xl"
+                >
+                  {isLoading ? "Updating..." : "Update Password"}
+                </Button>
+
+                <p className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setErrors({}); setResetForm({ token: "", newPassword: "", confirmPassword: "" }); }}
+                    className="text-slate-grey hover:text-off-white text-sm transition-colors"
+                  >
+                    ← Back to login
+                  </button>
+                </p>
+              </motion.form>
             )}
           </AnimatePresence>
         </motion.div>
