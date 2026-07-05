@@ -20,13 +20,41 @@ const app = express();
 // Render (and most PaaS hosts) sit the app behind a reverse proxy, so every
 // request arrives with an X-Forwarded-For header set by that proxy. Express
 // doesn't trust that header by default — for good reason, since anyone could
-// forge it on a request that reaches Express directly. Here it's safe: Render
-// is the only thing in front of us, so we trust exactly one proxy hop. This is
-// required for express-rate-limit (and anything else keying off req.ip) to see
-// each real client's IP instead of misbehaving or bucketing every request
-// together. Without this, rate limiting behind Render either throws
-// (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) or silently rate-limits the wrong thing.
-app.set('trust proxy', 1);
+// forge it on a request that reaches Express directly.
+//
+// IMPORTANT: this is intentionally `true`, not a specific hop count like `1`.
+// A fixed hop count only works if the platform adds exactly that many hops to
+// every single request — verified against Render in practice, the number of
+// hops in X-Forwarded-For was NOT constant across requests, which meant a
+// fixed count (e.g. `1`) sometimes resolved req.ip to an internal Render
+// address instead of the real client, and that internal address changed
+// request-to-request. The practical effect was silent: rate limiting kept
+// running with no errors, but every request could get a different key, so
+// the per-IP limiter never accumulated and never actually triggered.
+// `true` always takes the left-most (original client) address in
+// X-Forwarded-For regardless of how many hops follow it, which is safe here
+// specifically because Render's edge is the only way into this service — it
+// appends to the header itself rather than passing through an untouched,
+// externally-supplied one. This is required for express-rate-limit (and
+// anything else keying off req.ip) to see each real client's IP correctly.
+// SECURITY NOTE — residual risk, tracked as a follow-up, not swept under the rug:
+// `true` trusts the left-most address in X-Forwarded-For as the client IP,
+// regardless of chain length. That is correct ONLY if every request reaching
+// this process necessarily passed through Render's edge first (i.e. there is
+// no way to connect to this service directly, bypassing Render). If that
+// holds, Render's edge is the one appending the real client IP, and `true` is
+// safe. If it doesn't hold, a request that reaches Express directly could
+// set its own fake X-Forwarded-For and this app would believe it.
+//
+// TODO before this is considered fully closed: confirm with Render
+// (support/docs) that direct access bypassing their edge is not possible for
+// this service, and — ideally — get the exact, guaranteed hop count so this
+// can be swapped for a specific number instead of `true`. Until then: the
+// blast radius of this residual risk is limited to the two IP-keyed abuse
+// limiters below (general DoS limiter, password-reset-request limiter) —
+// NOT the login lockout, which keys by account email and is unaffected
+// regardless of this setting.
+app.set('trust proxy', true);
 const PORT = process.env.API_PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
