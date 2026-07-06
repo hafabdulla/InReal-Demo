@@ -567,16 +567,28 @@ function bindWorkspaceEvents() {
     els.docUserSearch.hidden = true;
   }
 
+  let latestSearchQuery = '';
+
   els.docUserSearch.addEventListener('input', () => {
     const query = els.docUserSearch.value.trim();
+    latestSearchQuery = query;
     clearTimeout(userSearchDebounce);
-    if (query.length < 2) {
+    if (query.length < 1) {
       els.docUserResults.innerHTML = '';
       return;
     }
+    // 120ms debounce: fast enough to feel instant on a single keystroke,
+    // still enough to avoid firing a request on every keystroke of a fast typer.
     userSearchDebounce = setTimeout(async () => {
       try {
         const result = await apiFetch(`/api/ops/users/search?q=${encodeURIComponent(query)}`);
+        // Guard against out-of-order responses: with a fast 120ms debounce and
+        // a 1-character minimum, a slower earlier request can resolve AFTER a
+        // newer one if the network is uneven. If the box no longer contains
+        // what we searched for, drop this response rather than show stale
+        // results for a query the admin has already moved past.
+        if (latestSearchQuery !== query) return;
+
         const matches = result.data || [];
         els.docUserResults.innerHTML = matches.length
           ? matches
@@ -597,9 +609,10 @@ function bindWorkspaceEvents() {
           });
         });
       } catch (error) {
+        if (latestSearchQuery !== query) return;
         els.docUserResults.innerHTML = `<span class="helper">Search failed: ${error.message}</span>`;
       }
-    }, 250);
+    }, 120);
   });
 
   // ── Document upload: submit ─────────────────────────────────────────────

@@ -517,6 +517,27 @@ async function ensureKycDecisionsTable() {
 // per the KYC/AML Compliance Manual's 7-year retention requirement, a superseded
 // document is marked `is_superseded`, not removed — the old file and row stay in
 // place alongside whatever replaces them.
+// Enables fast partial-match search (the admin document form's "assign to
+// user" picker) as the user base grows. A plain ILIKE '%query%' query — the
+// kind needed for "match anywhere in the name/email," not just "starts
+// with" — can't use a normal B-tree index because of the leading wildcard;
+// without this, it gets slower in direct proportion to how many users exist.
+// pg_trgm's GIN index supports arbitrary substring search efficiently. Wrapped
+// in try/catch and never fails startup: at pilot scale (a handful of users)
+// this genuinely doesn't matter yet, and some hosted Postgres setups restrict
+// CREATE EXTENSION to a superuser — if that's the case here, the search still
+// works, it just does a full sequential scan, which is fine until the user
+// count is in the thousands.
+async function ensureUserSearchIndex() {
+  try {
+    await q(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+    await q(`CREATE INDEX IF NOT EXISTS idx_users_search_trgm
+             ON users USING GIN ((first_name || ' ' || last_name || ' ' || email) gin_trgm_ops)`);
+  } catch (error) {
+    console.warn('Could not create pg_trgm search index (search will still work, just unindexed):', error.message);
+  }
+}
+
 async function ensureUserDocumentsTable() {
   await q(`
     CREATE TABLE IF NOT EXISTS user_documents (
@@ -1251,8 +1272,25 @@ app.post('/api/investment-intents', async (req, res) => {
 // Shared file-content validation used by every upload endpoint in this app
 // (investor proof-of-payment uploads, and now admin-assigned user documents).
 // Validates by magic bytes, not by filename or client-supplied mimeType —
-// those are trivially spoofable. Returns { ok: true, fileBuffer } or
-// { ok: false, error } so callers can respond consistently.
+// those are trivially spoofable. Returns { ok: true, fileBuffer, extension }
+// or { ok: false, error } so callers can respond consistently.
+//
+// `extension` is the CORRECT extension for the content we actually detected,
+// independent of whatever the uploader's filename claimed. This matters
+// beyond security: a genuine PDF uploaded as "resume.txt" passes the content
+// check (it really is a valid PDF), but if we then stored/served it back
+// under a .txt name, the OS hands it to a text editor on download and shows
+// garbled binary — the file was never corrupted, it was just mislabeled.
+// Industry-standard handling (same approach browsers, cloud storage, and
+// mail providers use) is to trust the sniffed content type for the filename
+// that's actually stored and served, not the extension the client sent.
+function extensionForDetectedType(label) {
+  if (label === 'PDF') return '.pdf';
+  if (label === 'JPEG') return '.jpg';
+  if (label === 'PNG') return '.png';
+  return '';
+}
+
 const ALLOWED_FILE_SIGNATURES = [
   { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },            // %PDF
   { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                   // JPEG SOI marker
@@ -1264,16 +1302,25 @@ function validateUploadedFile(base64Payload) {
   const payload = base64Payload.includes(',') ? base64Payload.split(',')[1] : base64Payload;
   const fileBuffer = Buffer.from(payload, 'base64');
 
-  const isAllowedType = ALLOWED_FILE_SIGNATURES.some(({ bytes }) =>
+  const matchedSignature = ALLOWED_FILE_SIGNATURES.find(({ bytes }) =>
     bytes.every((byte, i) => fileBuffer[i] === byte)
   );
-  if (!isAllowedType) {
+  if (!matchedSignature) {
     return { ok: false, error: 'Unsupported file type. Please upload a PDF, JPEG, or PNG.' };
   }
   if (fileBuffer.length > MAX_FILE_BYTES) {
     return { ok: false, error: 'File too large. Maximum size is 8 MB.' };
   }
-  return { ok: true, fileBuffer };
+  return { ok: true, fileBuffer, extension: extensionForDetectedType(matchedSignature.label) };
+}
+
+// Given the name the uploader supplied and the extension we actually detected
+// from content, returns a filename with the correct extension — preserving
+// the uploader's base name (so "resume.txt" containing a real PDF becomes
+// "resume.pdf", not a generic name) but never trusting their claimed suffix.
+function withDetectedExtension(originalFileName, detectedExtension) {
+  const base = String(originalFileName || 'document').replace(/\.[^./\\]+$/, '');
+  return `${base}${detectedExtension}`;
 }
 
 app.post('/api/investment-intents/:reference/proof', async (req, res) => {
@@ -1296,7 +1343,8 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     if (!validation.ok) {
       return res.status(400).json({ success: false, error: validation.error });
     }
-    const { fileBuffer } = validation;
+    const { fileBuffer, extension } = validation;
+    const correctedFileName = withDetectedExtension(fileName, extension);
 
     const txRows = await q(
       `SELECT transaction_id, user_id, description, status
@@ -1316,7 +1364,9 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     }
 
     await ensureUploadDirs();
-    const safeFileName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    // Stored and served under the extension we detected from content, not
+    // whatever the uploader's filename claimed — see withDetectedExtension().
+    const safeFileName = `${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const absolutePath = path.join(proofsDir, safeFileName);
 
     await fs.writeFile(absolutePath, fileBuffer);
@@ -1326,7 +1376,7 @@ app.post('/api/investment-intents/:reference/proof', async (req, res) => {
     parsed.workflowStatus = 'PendingOpsReview';
     parsed.proof = {
       fileName: safeFileName,
-      originalFileName: fileName,
+      originalFileName: correctedFileName,
       mimeType,
       uploadedAt: new Date().toISOString(),
       downloadPath: `/api/investment-intents/${reference}/proof`,
@@ -1650,7 +1700,7 @@ app.get('/api/ops/users/search', async (req, res) => {
     if (!adminUserId) return;
 
     const query = String(req.query.q || '').trim();
-    if (query.length < 2) {
+    if (query.length < 1) {
       return res.json({ success: true, data: [] });
     }
 
@@ -1720,10 +1770,15 @@ app.post('/api/ops/documents', async (req, res) => {
     if (!validation.ok) {
       return res.status(400).json({ success: false, error: validation.error });
     }
-    const { fileBuffer } = validation;
+    const { fileBuffer, extension } = validation;
+    // Store and serve under the extension we detected from content, not
+    // whatever the admin's uploaded filename claimed. See
+    // withDetectedExtension() — this is what fixes a real PDF uploaded as
+    // "resume.txt" from downloading back as a garbled, mislabeled file.
+    const correctedFileName = withDetectedExtension(fileName, extension);
 
     await ensureUploadDirs();
-    const safeFileName = `${Date.now()}-${String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const safeFileName = `${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const absolutePath = path.join(userDocsDir, safeFileName);
     await fs.writeFile(absolutePath, fileBuffer);
 
@@ -1732,7 +1787,7 @@ app.post('/api/ops/documents', async (req, res) => {
          user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id
        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING document_id AS "DocumentID", created_at AS "CreatedAt"`,
-      [targetUserId, category, String(label).trim(), safeFileName, fileName, mimeType, adminUserId]
+      [targetUserId, category, String(label).trim(), safeFileName, correctedFileName, mimeType, adminUserId]
     );
 
     res.status(201).json({
@@ -1742,7 +1797,7 @@ app.post('/api/ops/documents', async (req, res) => {
         userId: targetUserId,
         category,
         label: String(label).trim(),
-        originalFileName: fileName,
+        originalFileName: correctedFileName,
         createdAt: inserted[0].CreatedAt,
       },
     });
@@ -1968,6 +2023,7 @@ async function startServer() {
     await ensureKycDecisionsTable();
     await ensurePasswordResetTable();
     await ensureUserDocumentsTable();
+    await ensureUserSearchIndex();
     await bootstrapAdminUsers();
 
     const server = app.listen(PORT, () => {
