@@ -93,7 +93,18 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '8mb' }));
+// Base64 encoding inflates a file's size by roughly 33% (3 bytes become 4
+// base64 characters), plus a little more for the surrounding JSON. Our real
+// content-size cap is 8MB (MAX_FILE_BYTES, checked on the DECODED file below)
+// — but if this body-parser limit were also set to 8MB, any file larger than
+// ~6MB actual size would already exceed the limit as base64 text, before our
+// own size check ever ran. That produced a confusing generic 500 instead of
+// the clear "File too large" message, and — critically — meant an ordinary
+// phone camera photo (commonly 6-12MB) could fail even though it looked like
+// it should fit under "8MB max." Sized generously above the true 8MB content
+// cap's base64 inflation (8 * 4/3 ≈ 10.7MB) so the body parser never becomes
+// the bottleneck; MAX_FILE_BYTES remains the real, user-facing size limit.
+app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
@@ -2003,6 +2014,20 @@ app.post('/api/ops/investment-intents/:reference/review', async (req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  // A request body that's too large for express.json's limit lands here as
+  // a distinct error type, not a normal application error — give it its own
+  // clear, correct response instead of the generic 500 below. Before this,
+  // an oversized upload (or, more confusingly, a legitimate ~7MB photo that
+  // only became "oversized" after base64 encoding — see the limit comment
+  // above) surfaced as an unhelpful "Internal server error" with no
+  // indication of what actually went wrong.
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      error: 'File too large. Maximum size is 8 MB.',
+    });
+  }
+
   console.error('Unhandled error:', err);
   res.status(500).json({
     success: false,
