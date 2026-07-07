@@ -685,7 +685,16 @@ function bindWorkspaceEvents() {
     }
   });
 
-  els.uploadDropzone.addEventListener('click', () => els.fileInput.click());
+  // NOTE: uploadDropzone is a <label> wrapping the (hidden) fileInput, so
+  // clicking anywhere in it already opens the file picker natively — that's
+  // standard label/input behavior, no JS needed. There used to be an extra
+  // manual `els.fileInput.click()` here too, which meant every tap fired the
+  // file picker TWICE (once from the native label behavior, once from this
+  // listener). Desktop browsers mostly ignore a redundant second click while
+  // a file dialog is already open; several mobile browsers instead treat it
+  // as "cancel the picker in progress," which reset the selection before the
+  // user could finish choosing a file — exactly the "Choose a file to
+  // upload" error reported on mobile despite a file clearly being picked.
   els.fileInput.addEventListener('change', () => {
     if (els.fileInput.files.length) {
       addAudit('File staged', `${authSession?.user?.Email || 'Ops'} • just now`, `${els.fileInput.files[0].name} ready to upload.`);
