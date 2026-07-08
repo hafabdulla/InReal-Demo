@@ -29,6 +29,9 @@ const authEls = {
 };
 
 const els = {
+  sidebar: document.querySelector('.sidebar'),
+  sidebarToggleBtn: document.getElementById('sidebarToggleBtn'),
+  sidebarBackdrop: document.getElementById('sidebarBackdrop'),
   navTabs: document.getElementById('navTabs'),
   summaryCards: document.getElementById('summaryCards'),
   overviewGrid: document.getElementById('overviewGrid'),
@@ -38,6 +41,13 @@ const els = {
   auditList: document.getElementById('auditList'),
   userForm: document.getElementById('userForm'),
   uploadForm: document.getElementById('uploadForm'),
+  dropzoneEmptyState: document.getElementById('dropzoneEmptyState'),
+  dropzoneFileState: document.getElementById('dropzoneFileState'),
+  dropzoneThumbnail: document.getElementById('dropzoneThumbnail'),
+  dropzoneFileIcon: document.getElementById('dropzoneFileIcon'),
+  dropzoneFileName: document.getElementById('dropzoneFileName'),
+  dropzoneFileSize: document.getElementById('dropzoneFileSize'),
+  uploadFormSuccess: document.getElementById('uploadFormSuccess'),
   docUserSearch: document.getElementById('docUserSearch'),
   docUserId: document.getElementById('docUserId'),
   docUserResults: document.getElementById('docUserResults'),
@@ -369,12 +379,12 @@ function renderFiles() {
           const supersededTag = file.IsSuperseded ? ' <span class="tag suspended">Superseded</span>' : '';
           return `
       <tr>
-        <td><strong>${file.Label}</strong>${supersededTag}</td>
-        <td>${format}</td>
-        <td>${file.Category}</td>
-        <td>${assignedName}<br /><span class="helper">${file.UserEmail}</span></td>
+        <td><strong>${escapeHtml(file.Label)}</strong>${supersededTag}</td>
+        <td>${escapeHtml(format)}</td>
+        <td>${escapeHtml(file.Category)}</td>
+        <td>${escapeHtml(assignedName)}<br /><span class="helper">${escapeHtml(file.UserEmail)}</span></td>
         <td>${formatDate(file.CreatedAt)}</td>
-        <td><button class="doc-download-btn" data-doc-id="${file.DocumentID}" data-doc-name="${file.OriginalFileName}">Download</button></td>
+        <td><button class="doc-download-btn" data-doc-id="${file.DocumentID}" data-doc-name="${escapeAttr(file.OriginalFileName)}">Download</button></td>
       </tr>
     `;
         })
@@ -404,16 +414,26 @@ function renderAudit() {
       <article class="audit-item">
         <div class="audit-top">
           <div>
-            <h4>${item.title}</h4>
-            <p class="audit-meta">${item.meta}</p>
+            <h4>${escapeHtml(item.title)}</h4>
+            <p class="audit-meta">${escapeHtml(item.meta)}</p>
           </div>
         </div>
-        <p class="small">${item.body}</p>
+        <p class="small">${escapeHtml(item.body)}</p>
       </article>
     `,
         )
         .join('')
     : `<p class="helper">Actions you take in this session will appear here.</p>`;
+}
+
+function openMobileSidebar() {
+  els.sidebar?.classList.add('mobile-open');
+  els.sidebarBackdrop?.classList.add('visible');
+}
+
+function closeMobileSidebar() {
+  els.sidebar?.classList.remove('mobile-open');
+  els.sidebarBackdrop?.classList.remove('visible');
 }
 
 function setActiveTab(tab) {
@@ -428,6 +448,9 @@ function setActiveTab(tab) {
   document.querySelectorAll('.panel').forEach((panel) => {
     panel.classList.toggle('active', panel.dataset.panel === tab);
   });
+  // On mobile the sidebar is an overlay, not a permanent column — close it
+  // once a destination is picked, same as most mobile nav drawers behave.
+  closeMobileSidebar();
 }
 
 function refreshIcons() {
@@ -516,6 +539,9 @@ async function bootstrapAuth() {
 }
 
 function bindWorkspaceEvents() {
+  els.sidebarToggleBtn?.addEventListener('click', openMobileSidebar);
+  els.sidebarBackdrop?.addEventListener('click', closeMobileSidebar);
+
   els.navTabs.addEventListener('click', (event) => {
     const button = event.target.closest('[data-tab]');
     if (!button) return;
@@ -553,7 +579,7 @@ function bindWorkspaceEvents() {
     const name = [selectedDocUser.FirstName, selectedDocUser.LastName].filter(Boolean).join(' ');
     els.docUserSelected.hidden = false;
     els.docUserSelected.innerHTML = `
-      <span><strong>${name}</strong> — ${selectedDocUser.Email}</span>
+      <span><strong>${escapeHtml(name)}</strong> — ${escapeHtml(selectedDocUser.Email)}</span>
       <button type="button" id="clearDocUserBtn">Change</button>
     `;
     document.getElementById('clearDocUserBtn').addEventListener('click', () => {
@@ -593,7 +619,7 @@ function bindWorkspaceEvents() {
         els.docUserResults.innerHTML = matches.length
           ? matches
               .map(
-                (u) => `<button type="button" data-user-id="${u.UserID}">${[u.FirstName, u.LastName].filter(Boolean).join(' ')} — ${u.Email}</button>`,
+                (u) => `<button type="button" data-user-id="${u.UserID}">${escapeHtml([u.FirstName, u.LastName].filter(Boolean).join(' '))} — ${escapeHtml(u.Email)}</button>`,
               )
               .join('')
           : `<span class="helper">No matching users.</span>`;
@@ -610,12 +636,49 @@ function bindWorkspaceEvents() {
         });
       } catch (error) {
         if (latestSearchQuery !== query) return;
-        els.docUserResults.innerHTML = `<span class="helper">Search failed: ${error.message}</span>`;
+        els.docUserResults.innerHTML = `<span class="helper">Search failed: ${escapeHtml(error.message)}</span>`;
       }
     }, 120);
   });
 
-  // ── Document upload: submit ─────────────────────────────────────────────
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function showDropzonePreview(file) {
+    els.dropzoneEmptyState.hidden = true;
+    els.dropzoneFileState.hidden = false;
+    els.dropzoneFileName.textContent = file.name;
+    els.dropzoneFileSize.textContent = formatFileSize(file.size);
+
+    const isImage = file.type === 'image/jpeg' || file.type === 'image/png' || /\.(jpe?g|png)$/i.test(file.name);
+    if (isImage) {
+      const objectUrl = URL.createObjectURL(file);
+      els.dropzoneThumbnail.src = objectUrl;
+      els.dropzoneThumbnail.hidden = false;
+      els.dropzoneFileIcon.hidden = true;
+      // Release the object URL once the image has actually loaded it, rather
+      // than immediately — revoking too early can blank the thumbnail before
+      // the browser finishes painting it.
+      els.dropzoneThumbnail.onload = () => URL.revokeObjectURL(objectUrl);
+    } else {
+      els.dropzoneThumbnail.hidden = true;
+      els.dropzoneFileIcon.hidden = false;
+      if (window.lucide) window.lucide.createIcons();
+    }
+  }
+
+  function resetDropzonePreview() {
+    els.dropzoneEmptyState.hidden = false;
+    els.dropzoneFileState.hidden = true;
+    els.dropzoneThumbnail.src = '';
+    els.dropzoneFileName.textContent = '';
+    els.dropzoneFileSize.textContent = '';
+  }
+
+
   els.uploadForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     els.uploadFormError.textContent = '';
@@ -670,14 +733,24 @@ function bindWorkspaceEvents() {
 
       els.uploadForm.reset();
       els.fileInput.value = '';
+      resetDropzonePreview();
       selectedDocUser = null;
       els.docUserId.value = '';
       els.docUserSearch.hidden = false;
       renderDocUserSelected();
 
+      // A silently-updated table further down the page is easy to miss,
+      // especially on mobile where it's scrolled out of view — show an
+      // explicit, unmissable confirmation right next to the button that was
+      // just pressed, not just an audit-log entry the admin has to go look for.
+      els.uploadFormSuccess.textContent = `✓ "${label}" uploaded and assigned successfully.`;
+      els.uploadFormSuccess.hidden = false;
+      setTimeout(() => { els.uploadFormSuccess.hidden = true; }, 5000);
+
       await loadDocuments();
       render();
     } catch (error) {
+      els.uploadFormSuccess.hidden = true;
       els.uploadFormError.textContent = error.message || 'Upload failed. Please try again.';
     } finally {
       els.uploadSubmitBtn.disabled = false;
@@ -697,8 +770,13 @@ function bindWorkspaceEvents() {
   // upload" error reported on mobile despite a file clearly being picked.
   els.fileInput.addEventListener('change', () => {
     if (els.fileInput.files.length) {
-      addAudit('File staged', `${authSession?.user?.Email || 'Ops'} • just now`, `${els.fileInput.files[0].name} ready to upload.`);
+      const file = els.fileInput.files[0];
+      showDropzonePreview(file);
+      els.uploadFormError.textContent = '';
+      addAudit('File staged', `${authSession?.user?.Email || 'Ops'} • just now`, `${file.name} ready to upload.`);
       renderAudit();
+    } else {
+      resetDropzonePreview();
     }
   });
 
@@ -917,6 +995,17 @@ function escapeHtml(value) {
   const div = document.createElement('div');
   div.textContent = String(value ?? '');
   return div.innerHTML;
+}
+
+// escapeHtml() only escapes what's unsafe in a text node (&, <, >) — it does
+// NOT escape quote characters, because a quote is harmless between two tags.
+// But it's NOT safe to reuse inside an HTML attribute value like
+// `data-x="${...}"`: a `"` in the value closes the attribute early and lets
+// anything after it be parsed as new attributes/event handlers (e.g.
+// `onmouseover=...`). This wraps escapeHtml and additionally escapes quotes,
+// for the specific case of interpolating into an attribute.
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function closeKycDrawer() {

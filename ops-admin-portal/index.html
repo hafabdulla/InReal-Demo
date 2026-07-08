@@ -97,8 +97,12 @@
 
       <div class="main-wrap">
         <header class="top-header">
+          <button class="sidebar-toggle-btn" id="sidebarToggleBtn" aria-label="Open menu">
+            <i data-lucide="menu" style="width: 22px; height: 22px"></i>
+          </button>
           <h1 id="pageTitle">Overview</h1>
         </header>
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
         <main class="page-content">
           <section class="panel active" data-panel="overview">
@@ -331,9 +335,18 @@
             <div class="split upload-grid">
               <label class="upload-dropzone" id="uploadDropzone">
                 <input id="fileInput" type="file" hidden accept=".pdf,.jpg,.jpeg,.png" />
-                <i data-lucide="upload-cloud" style="width: 32px; height: 32px; color: #01ced1"></i>
-                <strong>Drop a file or click to stage</strong>
-                <span>PDF, JPG, or PNG only</span>
+                <div id="dropzoneEmptyState">
+                  <i data-lucide="upload-cloud" style="width: 32px; height: 32px; color: #01ced1"></i>
+                  <strong>Drop a file or click to stage</strong>
+                  <span>PDF, JPG, or PNG only</span>
+                </div>
+                <div id="dropzoneFileState" class="dropzone-file-state" hidden>
+                  <img id="dropzoneThumbnail" alt="" hidden />
+                  <i id="dropzoneFileIcon" data-lucide="file-text" style="width: 32px; height: 32px; color: #01ced1" hidden></i>
+                  <strong id="dropzoneFileName"></strong>
+                  <span id="dropzoneFileSize"></span>
+                  <button type="button" id="dropzoneClearBtn">Choose a different file</button>
+                </div>
               </label>
 
               <form class="card form" id="uploadForm">
@@ -363,6 +376,7 @@
                 <div id="docUserResults" class="user-search-results"></div>
                 <div id="docUserSelected" class="user-search-selected" hidden></div>
                 <p id="uploadFormError" class="helper" style="color:#ff6b6b;"></p>
+                <p id="uploadFormSuccess" class="upload-success-msg" hidden></p>
                 <button class="primary-btn" type="submit" id="uploadSubmitBtn">Upload &amp; assign</button>
               </form>
             </div>

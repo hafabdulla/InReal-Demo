@@ -12,6 +12,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
 
@@ -49,6 +50,30 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
   process.exit(1);
 }
 const SESSION_TOKEN_TTL = process.env.SESSION_TOKEN_TTL || '12h';
+
+// Supabase Storage holds user documents (KYC/Finance/Property uploads). This
+// replaced local-disk storage because Render's filesystem is ephemeral —
+// anything written to local disk is silently lost on the next deploy or
+// restart, which is not acceptable for documents subject to the compliance
+// manual's 7-year retention requirement. Required in every environment (same
+// fail-fast bar as JWT_SECRET) so this can't quietly regress back to disk.
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const DOCUMENTS_BUCKET = process.env.SUPABASE_DOCUMENTS_BUCKET || 'user-documents';
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error(
+    'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Both are required to store user documents ' +
+    'in Supabase Storage instead of local disk. Set them (Project Settings > API in the Supabase ' +
+    'dashboard — use the service_role key, never the anon key, and never expose it to any frontend) ' +
+    'before starting server.js.'
+  );
+  process.exit(1);
+}
+// The service_role key bypasses Row Level Security and must only ever exist
+// here, server-side. It is never sent to src/ or ops-admin-portal/.
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -456,8 +481,34 @@ function sanitizeUserRecord(user) {
 }
 
 async function ensureUploadDirs() {
+  // Only proof-of-payment uploads still use local disk (F11's document
+  // assignment feature moved to Supabase Storage — see ensureDocumentsBucket
+  // below). Proof-of-payment isn't yet migrated; that's a known follow-up,
+  // not an oversight — see the tracker.
   await fs.mkdir(proofsDir, { recursive: true });
-  await fs.mkdir(userDocsDir, { recursive: true });
+}
+
+// Creates the private Supabase Storage bucket for user documents if it
+// doesn't already exist. Idempotent — safe to call on every boot. `public:
+// false` is the whole point: files are only ever reachable through a
+// short-lived signed URL we generate per-request, never a public bucket URL.
+async function ensureDocumentsBucket() {
+  const { data: buckets, error: listError } = await supabaseAdmin.storage.listBuckets();
+  if (listError) {
+    throw new Error(`Could not list Supabase Storage buckets: ${listError.message}`);
+  }
+  const exists = (buckets || []).some((b) => b.name === DOCUMENTS_BUCKET);
+  if (exists) return;
+
+  const { error: createError } = await supabaseAdmin.storage.createBucket(DOCUMENTS_BUCKET, {
+    public: false,
+    fileSizeLimit: '10MB',
+    allowedMimeTypes: ['application/pdf', 'image/jpeg', 'image/png'],
+  });
+  if (createError) {
+    throw new Error(`Could not create Supabase Storage bucket "${DOCUMENTS_BUCKET}": ${createError.message}`);
+  }
+  console.log(`Created private Supabase Storage bucket "${DOCUMENTS_BUCKET}".`);
 }
 
 function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -556,7 +607,7 @@ async function ensureUserDocumentsTable() {
       user_id              INTEGER NOT NULL REFERENCES users(user_id),
       category             VARCHAR(20) NOT NULL CHECK (category IN ('KYC', 'Finance', 'Property')),
       label                TEXT NOT NULL,
-      file_name            TEXT NOT NULL,
+      file_name            TEXT NOT NULL, -- Supabase Storage object key (bucket-relative path), not a local filename
       original_file_name   TEXT NOT NULL,
       mime_type            TEXT NOT NULL,
       uploaded_by_admin_id INTEGER NOT NULL REFERENCES users(user_id),
@@ -1302,6 +1353,18 @@ function extensionForDetectedType(label) {
   return '';
 }
 
+// Maps the extension we detected from magic bytes to a Content-Type for
+// Supabase Storage. Deliberately not the client-supplied `mimeType` field —
+// that field is only ever a display label elsewhere in this app and isn't
+// validated against the actual bytes, so it shouldn't be trusted for what
+// the file is served as either.
+function contentTypeForDetectedExtension(extension) {
+  if (extension === '.pdf') return 'application/pdf';
+  if (extension === '.jpg') return 'image/jpeg';
+  if (extension === '.png') return 'image/png';
+  return 'application/octet-stream';
+}
+
 const ALLOWED_FILE_SIGNATURES = [
   { label: 'PDF',  bytes: [0x25, 0x50, 0x44, 0x46] },            // %PDF
   { label: 'JPEG', bytes: [0xFF, 0xD8, 0xFF] },                   // JPEG SOI marker
@@ -1788,17 +1851,30 @@ app.post('/api/ops/documents', async (req, res) => {
     // "resume.txt" from downloading back as a garbled, mislabeled file.
     const correctedFileName = withDetectedExtension(fileName, extension);
 
-    await ensureUploadDirs();
-    const safeFileName = `${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const absolutePath = path.join(userDocsDir, safeFileName);
-    await fs.writeFile(absolutePath, fileBuffer);
+    // Stored in the private Supabase Storage bucket, never local disk — local
+    // disk on Render is ephemeral and would silently lose every document on
+    // the next deploy/restart, which isn't acceptable for files subject to
+    // the compliance manual's 7-year retention rule. Path is namespaced by
+    // user id so a bucket listing alone doesn't mix users' files together.
+    const storagePath = `${targetUserId}/${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    await ensureDocumentsBucket();
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from(DOCUMENTS_BUCKET)
+      .upload(storagePath, fileBuffer, {
+        contentType: contentTypeForDetectedExtension(extension),
+        upsert: false,
+      });
+    if (uploadError) {
+      console.error('Supabase Storage upload error:', uploadError);
+      return res.status(500).json({ success: false, error: 'Could not store document' });
+    }
 
     const inserted = await q(
       `INSERT INTO user_documents (
          user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id
        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING document_id AS "DocumentID", created_at AS "CreatedAt"`,
-      [targetUserId, category, String(label).trim(), safeFileName, correctedFileName, mimeType, adminUserId]
+      [targetUserId, category, String(label).trim(), storagePath, correctedFileName, mimeType, adminUserId]
     );
 
     res.status(201).json({
@@ -1862,12 +1938,10 @@ app.get('/api/ops/documents', async (req, res) => {
   }
 });
 
-// GET /api/ops/documents/:id/file — admin-only download. This app doesn't yet
-// have Supabase Storage's short-lived signed URLs (that lands with the
-// ADR-01 migration — see F11), so in the meantime every download is gated by
-// a fresh admin-authenticated request instead of a static or public path,
-// which gives the same practical guarantee: no one without a valid admin
-// session can ever fetch a file, signed URL or not.
+// GET /api/ops/documents/:id/file — admin-only download. The file itself
+// lives in the private Supabase Storage bucket (never a public bucket URL);
+// this route stays the single gate in front of it, so a client-side download
+// still requires a fresh admin-authenticated request either way.
 app.get('/api/ops/documents/:id/file', async (req, res) => {
   try {
     const adminUserId = await requireAdmin(req, res);
@@ -1879,21 +1953,99 @@ app.get('/api/ops/documents/:id/file', async (req, res) => {
     }
 
     const rows = await q(
-      `SELECT file_name, original_file_name FROM user_documents WHERE document_id = $1`,
+      `SELECT file_name, original_file_name, mime_type FROM user_documents WHERE document_id = $1`,
       [documentId]
     );
     if (rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Document not found' });
     }
 
-    const absolutePath = path.join(userDocsDir, rows[0].file_name);
-    await fs.access(absolutePath);
-    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-    res.download(absolutePath, rows[0].original_file_name || rows[0].file_name);
-  } catch (error) {
-    if (error.code === 'ENOENT') {
+    const { data, error: downloadError } = await supabaseAdmin.storage
+      .from(DOCUMENTS_BUCKET)
+      .download(rows[0].file_name);
+    if (downloadError || !data) {
+      console.error('Supabase Storage download error:', downloadError);
       return res.status(404).json({ success: false, error: 'Document file not found' });
     }
+
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const safeDownloadName = String(rows[0].original_file_name || 'document').replace(/"/g, '');
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Content-Type', rows[0].mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName}"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/user/documents — an investor's own document list. Metadata only.
+app.get('/api/user/documents', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const rows = await q(
+      `SELECT
+         document_id          AS "DocumentID",
+         category              AS "Category",
+         label                 AS "Label",
+         original_file_name    AS "OriginalFileName",
+         mime_type             AS "MimeType",
+         created_at            AS "CreatedAt"
+       FROM user_documents
+       WHERE user_id = $1 AND is_superseded = false
+       ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    res.json({ success: true, data: rows, count: rows.length });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/user/documents/:id/file — an investor downloading their OWN
+// document. The WHERE clause below checks user_id against the authenticated
+// session, not anything client-supplied — the :id in the URL alone is never
+// treated as sufficient. A document that exists but belongs to someone else
+// gets the identical 404 as one that doesn't exist at all, so this endpoint
+// can't be used to enumerate which document ids are real.
+app.get('/api/user/documents/:id/file', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const documentId = Number(req.params.id);
+    if (!Number.isInteger(documentId) || documentId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid document id' });
+    }
+
+    const rows = await q(
+      `SELECT file_name, original_file_name, mime_type
+       FROM user_documents
+       WHERE document_id = $1 AND user_id = $2`,
+      [documentId, userId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Document not found' });
+    }
+
+    const { data, error: downloadError } = await supabaseAdmin.storage
+      .from(DOCUMENTS_BUCKET)
+      .download(rows[0].file_name);
+    if (downloadError || !data) {
+      console.error('Supabase Storage download error:', downloadError);
+      return res.status(404).json({ success: false, error: 'Document file not found' });
+    }
+
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const safeDownloadName = String(rows[0].original_file_name || 'document').replace(/"/g, '');
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Content-Type', rows[0].mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName}"`);
+    res.send(buffer);
+  } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2048,6 +2200,7 @@ async function startServer() {
     await ensureKycDecisionsTable();
     await ensurePasswordResetTable();
     await ensureUserDocumentsTable();
+    await ensureDocumentsBucket();
     await ensureUserSearchIndex();
     await bootstrapAdminUsers();
 

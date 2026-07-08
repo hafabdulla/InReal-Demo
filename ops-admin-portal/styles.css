@@ -665,6 +665,12 @@ tbody tr:hover td {
 @media (max-width: 900px) {
   .sidebar {
     transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
   }
 
   .main-wrap {
@@ -677,7 +683,74 @@ tbody tr:hover td {
 
   .top-header {
     padding: 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
+
+  .sidebar-toggle-btn {
+    display: inline-flex;
+  }
+
+  .sidebar-backdrop.visible {
+    display: block;
+  }
+}
+
+/* Hidden by default (desktop); only shown inside the max-width:900px rule above. */
+.sidebar-toggle-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--portal-text-primary, #fff);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+}
+.sidebar-toggle-btn:hover { background: rgba(255,255,255,0.08); }
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 55;
+}
+
+.dropzone-file-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.dropzone-file-state img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(1,206,209,0.3);
+}
+.dropzone-file-state button {
+  background: none;
+  border: 1px solid rgba(1,206,209,0.35);
+  color: #01ced1;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.dropzone-file-state button:hover { background: rgba(1,206,209,0.12); }
+
+.upload-success-msg {
+  color: var(--portal-success, #10b981);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
 }
 
 /* ── KYC Review tab ─────────────────────────────────────────────────────── */

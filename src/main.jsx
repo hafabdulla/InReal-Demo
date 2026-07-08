@@ -1,4 +1,3 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
@@ -9,6 +8,7 @@ import DashboardPage from '@/pages/portal/DashboardPage';
 import PropertiesPage from '@/pages/portal/PropertiesPage';
 import PropertyDetailPage from '@/pages/portal/PropertyDetailPage';
 import InvestmentsPage from '@/pages/portal/InvestmentsPage';
+import DocumentsPage from '@/pages/portal/DocumentsPage';
 import SettingsPage from '@/pages/portal/SettingsPage';
 import { AuthProvider } from '@/contexts/SQLServerAuthContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -64,6 +64,16 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <ProtectedRoute>
               <PortalLayout>
                 <InvestmentsPage />
+              </PortalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/portal/documents"
+          element={
+            <ProtectedRoute>
+              <PortalLayout>
+                <DocumentsPage />
               </PortalLayout>
             </ProtectedRoute>
           }

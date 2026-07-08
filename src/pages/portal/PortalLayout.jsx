@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -6,6 +5,7 @@ import {
   LayoutDashboard, 
   Building2, 
   TrendingUp, 
+  FileText,
   Settings, 
   Menu, 
   X, 
@@ -18,6 +18,7 @@ const navigation = [
   { name: 'Dashboard', href: '/portal', icon: LayoutDashboard },
   { name: 'Properties', href: '/portal/properties', icon: Building2 },
   { name: 'My Investments', href: '/portal/investments', icon: TrendingUp },
+  { name: 'My Documents', href: '/portal/documents', icon: FileText },
   { name: 'Settings', href: '/portal/settings', icon: Settings },
 ];
 
