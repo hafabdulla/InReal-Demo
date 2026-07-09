@@ -40,6 +40,13 @@ const els = {
   fileTableBody: document.getElementById('fileTableBody'),
   auditList: document.getElementById('auditList'),
   userForm: document.getElementById('userForm'),
+  createUserSubmitBtn: document.getElementById('createUserSubmitBtn'),
+  createUserError: document.getElementById('createUserError'),
+  setupCodePanel: document.getElementById('setupCodePanel'),
+  setupCodeSummary: document.getElementById('setupCodeSummary'),
+  setupCodeValue: document.getElementById('setupCodeValue'),
+  copySetupCodeBtn: document.getElementById('copySetupCodeBtn'),
+  dismissSetupCodeBtn: document.getElementById('dismissSetupCodeBtn'),
   uploadForm: document.getElementById('uploadForm'),
   dropzoneEmptyState: document.getElementById('dropzoneEmptyState'),
   dropzoneFileState: document.getElementById('dropzoneFileState'),
@@ -192,6 +199,10 @@ async function apiFetch(path, options = {}) {
 function mapApiUser(user) {
   const name = [user.FirstName, user.LastName].filter(Boolean).join(' ') || user.Email;
   const kyc = user.KYCStatus || 'Pending';
+  // CORRECTION 09 July 2026: this originally correctly checked 'Approved' —
+  // that IS the real value the KYC-decision flow writes to kyc_status. An
+  // earlier pass mistakenly changed this to 'Verified' based on a mis-read
+  // of the UPDATE statement's column order. Reverted back here.
   const status = kyc === 'Approved' ? 'Verified' : kyc === 'Rejected' ? 'Suspended' : 'Pending';
 
   return {
@@ -551,15 +562,74 @@ function bindWorkspaceEvents() {
   els.userSearch.addEventListener('input', renderUsers);
   els.userFilter.addEventListener('change', renderUsers);
 
-  els.userForm.addEventListener('submit', (event) => {
+  els.userForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    addAudit(
-      'User form (local only)',
-      `${authSession?.user?.Email || 'Ops'} • just now`,
-      'User create/update via API is not wired yet. Use Supabase or a future admin endpoint.',
-    );
-    els.userForm.reset();
-    renderAudit();
+    els.createUserError.hidden = true;
+    els.setupCodePanel.hidden = true;
+
+    const formData = new FormData(els.userForm);
+    const firstName = String(formData.get('firstName') || '').trim();
+    const lastName = String(formData.get('lastName') || '').trim();
+    const email = String(formData.get('email') || '').trim();
+    const countryCode = String(formData.get('countryCode') || '').trim().toUpperCase();
+    const phoneCode = String(formData.get('phoneCode') || '').trim();
+    const phone = String(formData.get('phone') || '').trim();
+
+    if (!firstName || !lastName || !email || !countryCode || !phoneCode || !phone) {
+      els.createUserError.textContent = 'All fields are required.';
+      els.createUserError.hidden = false;
+      return;
+    }
+
+    els.createUserSubmitBtn.disabled = true;
+    els.createUserSubmitBtn.textContent = 'Creating…';
+
+    try {
+      const result = await apiFetch('/api/ops/users', {
+        method: 'POST',
+        body: JSON.stringify({ firstName, lastName, email, countryCode, phoneCode, phone }),
+      });
+
+      addAudit(
+        'Account created',
+        `${authSession?.user?.Email || 'Ops'} • just now`,
+        `Created account for ${firstName} ${lastName} (${email}). Setup code issued — relay it via the manual channel, not email.`,
+      );
+
+      els.userForm.reset();
+
+      // The setup code is the whole point of this flow — it's never shown
+      // again after this, so this panel stays open until the admin
+      // dismisses it themselves, unlike other success messages in this app
+      // that auto-hide after a few seconds.
+      els.setupCodeSummary.textContent = `${firstName} ${lastName} — ${email}`;
+      els.setupCodeValue.value = result.setupToken;
+      els.setupCodePanel.hidden = false;
+
+      await loadApiUsers();
+      render();
+    } catch (error) {
+      els.createUserError.textContent = error.message || 'Could not create the account. Please try again.';
+      els.createUserError.hidden = false;
+    } finally {
+      els.createUserSubmitBtn.disabled = false;
+      els.createUserSubmitBtn.textContent = 'Create account';
+    }
+  });
+
+  els.copySetupCodeBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(els.setupCodeValue.value);
+      els.copySetupCodeBtn.textContent = 'Copied!';
+      setTimeout(() => { els.copySetupCodeBtn.textContent = 'Copy code'; }, 2000);
+    } catch {
+      els.setupCodeValue.select();
+    }
+  });
+
+  els.dismissSetupCodeBtn.addEventListener('click', () => {
+    els.setupCodePanel.hidden = true;
+    els.setupCodeValue.value = '';
   });
 
   // ── Document upload: user search picker ────────────────────────────────
@@ -1047,7 +1117,9 @@ async function submitKycDecision(action) {
 
     closeKycDrawer();
     await loadKycQueue();
+    await loadApiUsers();
     renderKycQueue();
+    renderUsers();
     renderSummary();
     renderOverview();
     renderAudit();

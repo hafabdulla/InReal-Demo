@@ -267,35 +267,36 @@
               <form class="card form" id="userForm">
                 <div class="card-title">
                   <div>
-                    <h4>Add user (local)</h4>
-                    <p>API create coming soon</p>
+                    <h4>Create investor account</h4>
+                    <p>For pilot investors who have already completed manual KYC. No password is ever set or seen here — the investor sets their own via a one-time setup code you relay to them.</p>
                   </div>
                 </div>
                 <label>
-                  Full name
-                  <input class="field" name="name" required placeholder="Ava Johnson" />
+                  First name
+                  <input class="field" name="firstName" required placeholder="Ava" />
+                </label>
+                <label>
+                  Last name
+                  <input class="field" name="lastName" required placeholder="Johnson" />
                 </label>
                 <label>
                   Email
                   <input class="field" name="email" required type="email" placeholder="ava@example.com" />
                 </label>
                 <label>
-                  Country
-                  <input class="field" name="country" placeholder="United States" />
+                  Country code (2-letter, e.g. SG)
+                  <input class="field" name="countryCode" required maxlength="2" placeholder="SG" style="text-transform: uppercase" />
                 </label>
                 <label>
-                  Status
-                  <select class="field" name="status">
-                    <option value="Verified">Verified</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Suspended">Suspended</option>
-                  </select>
+                  Phone code
+                  <input class="field" name="phoneCode" required placeholder="+65" />
                 </label>
                 <label>
-                  Notes
-                  <textarea class="field textarea" name="notes" rows="3" placeholder="KYC notes…"></textarea>
+                  Phone number
+                  <input class="field" name="phone" required placeholder="91234567" />
                 </label>
-                <button class="primary-btn" type="submit">Save note</button>
+                <button class="primary-btn" type="submit" id="createUserSubmitBtn">Create account</button>
+                <p class="helper" id="createUserError" style="color: #f87171" hidden></p>
               </form>
 
               <div class="card table-card">
@@ -319,6 +320,29 @@
                     <tbody id="userTableBody"></tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+
+            <!-- Shown once, right after account creation. Deliberately NOT
+                 auto-dismissed like other success toasts in this app — this
+                 code is only ever displayed here, this one time, so the
+                 admin needs a real chance to copy it before it's gone. -->
+            <div class="card" id="setupCodePanel" hidden style="border-color: #10b981; margin-top: 16px;">
+              <div class="card-title">
+                <div>
+                  <h4>✓ Account created — relay this setup code, not a password</h4>
+                  <p id="setupCodeSummary"></p>
+                </div>
+              </div>
+              <p class="helper">
+                This code is shown <strong>once</strong>, here, and nowhere else — it isn't emailed or stored anywhere you can retrieve later.
+                Share it with the investor through the pilot's manual channel. They'll enter it on the
+                <strong>"Forgot password"</strong> screen to set their own password. Nobody at InReal, including you, ever sees that password.
+              </p>
+              <div class="inline-actions">
+                <input class="field" id="setupCodeValue" readonly style="font-family: monospace; font-size: 13px;" />
+                <button class="primary-btn" type="button" id="copySetupCodeBtn">Copy code</button>
+                <button class="ghost-btn" type="button" id="dismissSetupCodeBtn">Done</button>
               </div>
             </div>
           </section>

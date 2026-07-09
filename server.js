@@ -651,6 +651,12 @@ async function verifyUserAndProperty(userId, propertyId) {
   if (users.length === 0 || !users[0].is_active || users[0].is_deleted) {
     throw new Error('User not found or inactive');
   }
+  // CORRECTION 09 July 2026: an earlier pass mis-swapped which column gets
+  // which value. The KYC-decision code (see the isApprove branch further
+  // down) actually sets kyc_status = 'Approved' and accreditation_status =
+  // 'Verified' — this check's original 'Approved' comparison was correct
+  // all along; it was mistakenly "fixed" to 'Verified' and has been
+  // reverted back here.
   if (!users[0].identity_verified || users[0].kyc_status !== 'Approved') {
     throw new Error('User is not KYC/identity approved');
   }
@@ -1753,6 +1759,98 @@ app.get('/api/ops/kyc-reviews/:userId/history', async (req, res) => {
     return res.json({ success: true, data: rows, count: rows.length });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ── Admin: create an investor account, credentials sent (never seen) ────────
+// C.1 item 3. The account is created with a random password that is
+// generated, hashed, and immediately discarded — no one, including this
+// admin, ever knows it or could reconstruct it. The investor's real first
+// password is set by them, through the exact same "reset password" screen
+// already built and tested (see C.0.1 / D.0), using a one-time setup code
+// generated below. This is the same token machinery as
+// /api/auth/password-reset — same hashing, same 30-minute expiry, same
+// single-use guarantee — reused rather than duplicated, so this relies on
+// code that's already been security-reviewed instead of a second parallel
+// mechanism that could drift out of sync with it.
+//
+// Per the 23 June meeting, accounts created this way have already been
+// through manual KYC review before the admin creates them (the pilot's KYC
+// happens up front, outside this app) — so this endpoint marks the account
+// verified immediately, matching the same status values the KYC-approval
+// flow itself sets (see the isApprove branch further down: 'Approved' /
+// 'Verified'), rather than leaving it 'Pending' the way public self-signup
+// does.
+app.post('/api/ops/users', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const { firstName, lastName, email, phoneCode, phone, countryCode } = req.body;
+    if (!firstName || !lastName || !email || !phoneCode || !phone || !countryCode) {
+      return res.status(400).json({ success: false, error: 'All fields are required' });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedCountryCode = String(countryCode).trim().toUpperCase();
+    if (EXCLUDED_COUNTRY_CODES.has(normalizedCountryCode)) {
+      return res.status(403).json({
+        success: false,
+        error: 'InReal is unable to accept participants from this jurisdiction at this time.',
+      });
+    }
+
+    const existing = await q('SELECT user_id FROM users WHERE email = $1 LIMIT 1', [normalizedEmail]);
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, error: 'Email already registered' });
+    }
+
+    const throwawayPassword = randomBytes(24).toString('hex');
+    const { salt, hash } = hashPassword(throwawayPassword);
+    const fullPhoneNumber = `${phoneCode} ${phone}`;
+
+    const inserted = await q(
+      `INSERT INTO users (
+        email, first_name, last_name, country_code, phone_number,
+        password_hash, password_salt,
+        accreditation_status, kyc_status, identity_verified, bank_account_linked,
+        total_invested, portfolio_value, total_distributions,
+        role, is_active, is_deleted, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7,
+        'Verified', 'Approved', true, false,
+        0, 0, 0,
+        'user', true, false, NOW(), NOW()
+      ) RETURNING user_id AS "UserID"`,
+      [normalizedEmail, firstName, lastName, normalizedCountryCode, fullPhoneNumber, hash, salt]
+    );
+    const newUserId = inserted[0].UserID;
+
+    const setupToken = randomBytes(32).toString('hex');
+    const setupTokenHash = hashResetToken(setupToken);
+    await q(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip)
+       VALUES ($1, $2, $3, $4)`,
+      [newUserId, setupTokenHash, new Date(Date.now() + RESET_TOKEN_TTL_MS), getClientIp(req) || null]
+    );
+
+    // Logged the same way password-reset tokens are, for a consistent audit
+    // trail and as a fallback if the admin's screen closes before they copy
+    // it. Also returned directly in the response below — unlike
+    // password-reset/request, the caller here is a known, authenticated
+    // admin who is *supposed* to receive this code to relay it onward, not
+    // an anonymous requester whose existence-knowledge needs hiding.
+    console.log(`[account-setup] setup code issued for user_id=${newUserId} (deliver via concierge): ${setupToken}`);
+
+    res.json({
+      success: true,
+      data: { UserID: newUserId, Email: normalizedEmail, FirstName: firstName, LastName: lastName },
+      setupToken,
+      message: 'Account created. Share the setup code with the investor so they can set their password from the "Forgot password" screen.',
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 

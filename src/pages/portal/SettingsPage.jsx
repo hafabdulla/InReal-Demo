@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -204,6 +203,7 @@ export default function SettingsPage() {
                     <div>
                       <p className="font-medium text-portal-primary">KYC Verification</p>
                       <p className="text-sm text-portal-secondary">
+                        {/* CORRECTION 09 July 2026: 'Approved' was correct originally — reverted after a mis-read of the KYC-decision code's column order. */}
                         {user?.KYCStatus === 'Approved' ? 'Identity verified' : 'Verification pending'}
                       </p>
                     </div>
