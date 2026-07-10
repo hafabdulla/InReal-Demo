@@ -299,6 +299,32 @@
                 <p class="helper" id="createUserError" style="color: #f87171" hidden></p>
               </form>
 
+              <!-- Shown once, right after account creation, as a floating
+                   top-right toast — deliberately not inline in the page, so
+                   it's impossible to miss regardless of how long the user
+                   table below is. Deliberately NOT auto-dismissed like other
+                   success toasts in this app, since this code is only ever
+                   shown here, this one time. -->
+              <div class="card setup-code-toast" id="setupCodePanel" hidden style="border-color: #10b981;">
+                <button type="button" id="closeSetupCodeBtn" aria-label="Close" style="position:absolute; top:12px; right:12px; background:none; border:none; color:var(--portal-text-secondary, #94a3b8); cursor:pointer; font-size:18px; line-height:1;">&times;</button>
+                <div class="card-title" style="padding-right: 24px;">
+                  <div>
+                    <h4>✓ Account created — relay this setup code, not a password</h4>
+                    <p id="setupCodeSummary"></p>
+                  </div>
+                </div>
+                <p class="helper">
+                  This code is shown <strong>once</strong>, here, and nowhere else — it isn't emailed or stored anywhere you can retrieve later.
+                  Share it with the investor through the pilot's manual channel. They'll enter it on the
+                  <strong>"Forgot password"</strong> screen to set their own password. Nobody at InReal, including you, ever sees that password.
+                </p>
+                <div class="inline-actions" style="flex-wrap: wrap;">
+                  <input class="field" id="setupCodeValue" readonly style="font-family: monospace; font-size: 13px; width: 100%;" />
+                  <button class="primary-btn" type="button" id="copySetupCodeBtn">Copy code</button>
+                  <button class="ghost-btn" type="button" id="dismissSetupCodeBtn">Done</button>
+                </div>
+              </div>
+
               <div class="card table-card">
                 <div class="card-title">
                   <div>
@@ -320,29 +346,6 @@
                     <tbody id="userTableBody"></tbody>
                   </table>
                 </div>
-              </div>
-            </div>
-
-            <!-- Shown once, right after account creation. Deliberately NOT
-                 auto-dismissed like other success toasts in this app — this
-                 code is only ever displayed here, this one time, so the
-                 admin needs a real chance to copy it before it's gone. -->
-            <div class="card" id="setupCodePanel" hidden style="border-color: #10b981; margin-top: 16px;">
-              <div class="card-title">
-                <div>
-                  <h4>✓ Account created — relay this setup code, not a password</h4>
-                  <p id="setupCodeSummary"></p>
-                </div>
-              </div>
-              <p class="helper">
-                This code is shown <strong>once</strong>, here, and nowhere else — it isn't emailed or stored anywhere you can retrieve later.
-                Share it with the investor through the pilot's manual channel. They'll enter it on the
-                <strong>"Forgot password"</strong> screen to set their own password. Nobody at InReal, including you, ever sees that password.
-              </p>
-              <div class="inline-actions">
-                <input class="field" id="setupCodeValue" readonly style="font-family: monospace; font-size: 13px;" />
-                <button class="primary-btn" type="button" id="copySetupCodeBtn">Copy code</button>
-                <button class="ghost-btn" type="button" id="dismissSetupCodeBtn">Done</button>
               </div>
             </div>
           </section>

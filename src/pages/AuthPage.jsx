@@ -939,6 +939,25 @@ export default function AuthPage() {
                   {errors.password && (
                     <p className="text-red-500 text-xs mt-1">{errors.password}</p>
                   )}
+                  {/* Separate from "Forgot password?" on purpose — this is
+                      for someone who ALREADY has a code (e.g. an
+                      admin-created account's setup code), so it skips the
+                      "request a code by email" step entirely and goes
+                      straight to the code-entry screen. Sending them through
+                      the request step first would actually invalidate their
+                      existing code and issue a new, unnecessary one. */}
+                  <p className="text-right mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("reset");
+                        setErrors({});
+                      }}
+                      className="text-slate-grey hover:text-off-white hover:underline text-xs transition-colors"
+                    >
+                      Have a setup or reset code?
+                    </button>
+                  </p>
                 </div>
 
                 {/* Submit Button */}
@@ -1590,11 +1609,18 @@ export default function AuthPage() {
                   {isLoading ? "Updating..." : "Update Password"}
                 </Button>
 
-                <p className="text-center">
+                <p className="text-center space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("forgot"); setForgotSent(false); setErrors({}); }}
+                    className="block w-full text-slate-grey hover:text-off-white text-sm transition-colors"
+                  >
+                    Don't have a code? Request one by email
+                  </button>
                   <button
                     type="button"
                     onClick={() => { setMode("login"); setErrors({}); setResetForm({ token: "", newPassword: "", confirmPassword: "" }); }}
-                    className="text-slate-grey hover:text-off-white text-sm transition-colors"
+                    className="block w-full text-slate-grey hover:text-off-white text-sm transition-colors"
                   >
                     ← Back to login
                   </button>

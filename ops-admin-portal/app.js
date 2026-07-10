@@ -47,6 +47,7 @@ const els = {
   setupCodeValue: document.getElementById('setupCodeValue'),
   copySetupCodeBtn: document.getElementById('copySetupCodeBtn'),
   dismissSetupCodeBtn: document.getElementById('dismissSetupCodeBtn'),
+  closeSetupCodeBtn: document.getElementById('closeSetupCodeBtn'),
   uploadForm: document.getElementById('uploadForm'),
   dropzoneEmptyState: document.getElementById('dropzoneEmptyState'),
   dropzoneFileState: document.getElementById('dropzoneFileState'),
@@ -628,6 +629,11 @@ function bindWorkspaceEvents() {
   });
 
   els.dismissSetupCodeBtn.addEventListener('click', () => {
+    els.setupCodePanel.hidden = true;
+    els.setupCodeValue.value = '';
+  });
+
+  els.closeSetupCodeBtn.addEventListener('click', () => {
     els.setupCodePanel.hidden = true;
     els.setupCodeValue.value = '';
   });

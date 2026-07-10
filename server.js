@@ -406,7 +406,7 @@ async function verifyLoginCredentials(email, password) {
       COALESCE(role, 'user') AS "Role",
       created_at AS "CreatedAt"
     FROM users
-    WHERE email = $1 AND is_active = true AND is_deleted = false`,
+    WHERE LOWER(email) = $1 AND is_active = true AND is_deleted = false`,
     [email]
   );
 
@@ -761,7 +761,12 @@ app.get('/api/properties/:id', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const email = req.body.email;
+    // Normalized the same way every account is stored (see signup and
+    // admin account creation, both of which lowercase on write) — without
+    // this, a browser auto-capitalizing the first letter, or a copy-pasted
+    // email with different casing, would silently fail to match even though
+    // the account genuinely exists.
+    const email = String(req.body.email || '').trim().toLowerCase();
     const password = req.body.password;
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
@@ -811,13 +816,17 @@ const GENERIC_RESET_REQUEST_MESSAGE =
 
 app.post('/api/auth/password-reset/request', passwordResetLimiter, async (req, res) => {
   try {
-    const email = (req.body.email || '').trim();
+    // Same normalization as login/signup — without this, a mismatched-case
+    // email would silently fail to find the account and no token would ever
+    // be issued, while still (correctly, deliberately) showing the same
+    // generic success message either way, making the failure invisible.
+    const email = (req.body.email || '').trim().toLowerCase();
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
 
     const users = await q(
-      `SELECT user_id FROM users WHERE email = $1 AND is_active = true AND is_deleted = false`,
+      `SELECT user_id FROM users WHERE LOWER(email) = $1 AND is_active = true AND is_deleted = false`,
       [email]
     );
 
@@ -940,7 +949,8 @@ app.post('/api/auth/password-reset/confirm', async (req, res) => {
 
 app.post('/api/admin/auth/login', async (req, res) => {
   try {
-    const email = req.body.email;
+    // Same normalization as /api/auth/login — see the comment there.
+    const email = String(req.body.email || '').trim().toLowerCase();
     const password = req.body.password;
     if (!email || !password) {
       return res.status(400).json({ success: false, error: 'Email and password are required' });
@@ -1089,7 +1099,12 @@ const EXCLUDED_COUNTRY_CODES = new Set([
 
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { firstName, lastName, email, phoneCode, phone, countryCode, password } = req.body;
+    const { firstName, lastName, phoneCode, phone, countryCode, password } = req.body;
+    // Normalized the same way login/reset already are — without this,
+    // "John@Example.com" and "john@example.com" would be treated as two
+    // different accounts, and case-sensitive lookups elsewhere would
+    // silently fail to find a legitimately existing account.
+    const email = String(req.body.email || '').trim().toLowerCase();
     if (!firstName || !lastName || !email || !phoneCode || !phone || !countryCode || !password) {
       return res.status(400).json({ success: false, error: 'All fields are required' });
     }
@@ -1102,7 +1117,10 @@ app.post('/api/auth/signup', async (req, res) => {
       });
     }
 
-    const existing = await q('SELECT user_id FROM users WHERE email = $1 LIMIT 1', [email]);
+    // LOWER() on the column, not just a lowercased input, so this still
+    // catches a match against any pre-existing row that was stored with
+    // mixed case before this fix — not just future signups.
+    const existing = await q('SELECT user_id FROM users WHERE LOWER(email) = $1 LIMIT 1', [email]);
     if (existing.length > 0) {
       return res.status(409).json({ success: false, error: 'Email already registered' });
 
@@ -1800,7 +1818,7 @@ app.post('/api/ops/users', async (req, res) => {
       });
     }
 
-    const existing = await q('SELECT user_id FROM users WHERE email = $1 LIMIT 1', [normalizedEmail]);
+    const existing = await q('SELECT user_id FROM users WHERE LOWER(email) = $1 LIMIT 1', [normalizedEmail]);
     if (existing.length > 0) {
       return res.status(409).json({ success: false, error: 'Email already registered' });
     }
