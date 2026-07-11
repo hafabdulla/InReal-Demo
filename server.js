@@ -396,6 +396,9 @@ async function verifyLoginCredentials(email, password) {
       email AS "Email",
       first_name AS "FirstName",
       last_name AS "LastName",
+      phone_number AS "PhoneNumber",
+      whatsapp_number AS "WhatsappNumber",
+      preferred_contact_channel AS "PreferredContactChannel",
       country_code AS "CountryCode",
       accreditation_status AS "AccreditationStatus",
       kyc_status AS "KYCStatus",
@@ -1031,6 +1034,9 @@ app.get('/api/auth/me', async (req, res) => {
         email AS "Email",
         first_name AS "FirstName",
         last_name AS "LastName",
+        phone_number AS "PhoneNumber",
+        whatsapp_number AS "WhatsappNumber",
+        preferred_contact_channel AS "PreferredContactChannel",
         country_code AS "CountryCode",
         accreditation_status AS "AccreditationStatus",
         kyc_status AS "KYCStatus",
@@ -1863,7 +1869,14 @@ app.post('/api/ops/users', async (req, res) => {
 
     res.json({
       success: true,
-      data: { UserID: newUserId, Email: normalizedEmail, FirstName: firstName, LastName: lastName },
+      data: {
+        UserID: newUserId,
+        Email: normalizedEmail,
+        FirstName: firstName,
+        LastName: lastName,
+        KYCStatus: 'Approved',
+        AccreditationStatus: 'Verified',
+      },
       setupToken,
       message: 'Account created. Share the setup code with the investor so they can set their password from the "Forgot password" screen.',
     });
@@ -2095,7 +2108,146 @@ app.get('/api/ops/documents/:id/file', async (req, res) => {
   }
 });
 
-// GET /api/user/documents — an investor's own document list. Metadata only.
+// ── Investor: edit own contact info ──────────────────────────────────────────
+// C.1 item 5. Covers the full "contact fields" group from the PRD
+// (REQ-USR-14): phone, WhatsApp number, and preferred contact channel — all
+// three self-editable together, each optional in a given request. Per the
+// implementation spec, legal name, DOB, nationality (country_code),
+// residential address, and bank/payout details are all explicitly NOT
+// editable here — those either require a higher-friction flow (bank details
+// need step-up 2FA, not built yet — see C.1 item 6) or shouldn't change
+// post-KYC at all without a fresh review. Email changes are out of scope for
+// the pilot per the spec too.
+//
+// The request body is allow-listed to exactly these three fields, not
+// "accept anything and only read what we recognize" — an unexpected field is
+// rejected outright with a 400, so a client bug (or an attempt to sneak in
+// e.g. countryCode) can never silently slip through unnoticed.
+const CONTACT_CHANNELS = ['phone', 'whatsapp', 'email'];
+
+app.put('/api/user/profile/contact', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const allowedFields = ['phoneNumber', 'whatsappNumber', 'preferredContactChannel'];
+    const bodyKeys = Object.keys(req.body || {});
+    const unexpectedKeys = bodyKeys.filter((key) => !allowedFields.includes(key));
+    if (unexpectedKeys.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Unexpected field(s): ${unexpectedKeys.join(', ')}. Only ${allowedFields.join(', ')} can be updated here.`,
+      });
+    }
+    if (bodyKeys.length === 0) {
+      return res.status(400).json({ success: false, error: 'At least one field is required' });
+    }
+
+    // Loose, deliberately permissive E.164-ish check (optional leading +,
+    // digits/spaces, 7-20 chars) — enough to reject obvious garbage without
+    // being falsely restrictive on real international numbers, matching the
+    // "basic check" the spec calls for rather than full libphonenumber-style
+    // validation. Shared by both phone and WhatsApp since they're the same
+    // kind of value.
+    const isValidPhoneish = (value) => /^\+?[0-9 ]{7,20}$/.test(value);
+
+    const updates = {}; // column name -> new value, only for fields actually provided
+
+    if ('phoneNumber' in req.body) {
+      const trimmed = String(req.body.phoneNumber || '').trim();
+      if (!isValidPhoneish(trimmed)) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid phone number' });
+      }
+      updates.phone_number = trimmed;
+    }
+
+    if ('whatsappNumber' in req.body) {
+      // Allowed to be cleared (empty string -> null) — not everyone uses
+      // WhatsApp, unlike the phone number which is required at signup.
+      const raw = req.body.whatsappNumber;
+      const trimmed = raw == null ? '' : String(raw).trim();
+      if (trimmed !== '' && !isValidPhoneish(trimmed)) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid WhatsApp number' });
+      }
+      updates.whatsapp_number = trimmed === '' ? null : trimmed;
+    }
+
+    if ('preferredContactChannel' in req.body) {
+      const channel = String(req.body.preferredContactChannel || '').trim().toLowerCase();
+      if (!CONTACT_CHANNELS.includes(channel)) {
+        return res.status(400).json({
+          success: false,
+          error: `preferredContactChannel must be one of: ${CONTACT_CHANNELS.join(', ')}`,
+        });
+      }
+      updates.preferred_contact_channel = channel;
+    }
+
+    const before = await q(
+      `SELECT phone_number, whatsapp_number, preferred_contact_channel
+       FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
+    );
+    if (before.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    const previous = before[0];
+
+    // Only actually changed fields go into the UPDATE and the audit line —
+    // avoids a pointless write and a misleading log entry for a field the
+    // investor submitted unchanged (e.g. the frontend always sends all
+    // three current values, not just the one they edited).
+    const changedColumns = Object.keys(updates).filter((col) => (previous[col] || null) !== (updates[col] || null));
+
+    if (changedColumns.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          PhoneNumber: previous.phone_number,
+          WhatsappNumber: previous.whatsapp_number,
+          PreferredContactChannel: previous.preferred_contact_channel,
+        },
+        message: 'No change.',
+      });
+    }
+
+    const setClauses = changedColumns.map((col, i) => `${col} = $${i + 1}`);
+    const values = changedColumns.map((col) => updates[col]);
+    await q(
+      `UPDATE users SET ${setClauses.join(', ')}, updated_at = NOW() WHERE user_id = $${values.length + 1}`,
+      [...values, userId]
+    );
+
+    // This app doesn't have a persisted, queryable audit-log table for
+    // low-risk profile fields the way it does for KYC decisions — a console
+    // log matches the same lightweight pattern already used for
+    // password-reset and account-setup events. If this needs to become
+    // queryable later (e.g. for a support ticket), that's a small follow-up,
+    // not a reason to block this low-risk field on a bigger table now.
+    changedColumns.forEach((col) => {
+      console.log(`[profile.contact_updated] user_id=${userId} ${col}: "${previous[col] || ''}" -> "${updates[col] || ''}"`);
+    });
+
+    const after = await q(
+      `SELECT phone_number, whatsapp_number, preferred_contact_channel FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        PhoneNumber: after[0].phone_number,
+        WhatsappNumber: after[0].whatsapp_number,
+        PreferredContactChannel: after[0].preferred_contact_channel,
+      },
+      message: 'Contact information updated.',
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+
 app.get('/api/user/documents', async (req, res) => {
   try {
     const userId = requireAuthenticatedUserId(req, res);

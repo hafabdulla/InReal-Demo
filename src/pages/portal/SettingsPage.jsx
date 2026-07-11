@@ -4,24 +4,85 @@ import {
   User,
   Mail,
   Phone,
+  MessageCircle,
   Shield,
   Bell,
   CreditCard,
   Globe,
   Lock,
   Camera,
-  Check,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
+import { getApiBase } from '@/lib/utils';
+import { useToast } from '@/components/ui/use-toast';
+
+const countryNames = {
+  US: 'United States', GB: 'United Kingdom', AE: 'United Arab Emirates',
+  DE: 'Germany', IT: 'Italy', SG: 'Singapore', TH: 'Thailand',
+};
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, session, refreshUser } = useAuth();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('profile');
-  const [saved, setSaved] = useState(false);
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  // Contact-info editing — the full "contact fields" group from the PRD:
+  // phone, WhatsApp, and preferred contact channel. Legal name, email, and
+  // country/nationality remain display-only elsewhere on this page: name and
+  // nationality shouldn't change post-KYC without a fresh review, and email
+  // changes are a separate, higher-friction flow out of scope for the pilot.
+  const [phoneNumber, setPhoneNumber] = useState(user?.PhoneNumber || '');
+  const [whatsappNumber, setWhatsappNumber] = useState(user?.WhatsappNumber || '');
+  const [preferredContactChannel, setPreferredContactChannel] = useState(user?.PreferredContactChannel || 'phone');
+  const [contactError, setContactError] = useState('');
+  const [savingContact, setSavingContact] = useState(false);
+
+  const isValidPhoneish = (value) => /^\+?[0-9 ]{7,20}$/.test(value);
+
+  const handleSaveContact = async () => {
+    setContactError('');
+    const trimmedPhone = phoneNumber.trim();
+    const trimmedWhatsapp = whatsappNumber.trim();
+
+    if (!isValidPhoneish(trimmedPhone)) {
+      setContactError('Please enter a valid phone number');
+      return;
+    }
+    if (trimmedWhatsapp !== '' && !isValidPhoneish(trimmedWhatsapp)) {
+      setContactError('Please enter a valid WhatsApp number, or leave it blank');
+      return;
+    }
+
+    setSavingContact(true);
+    try {
+      const response = await fetch(`${getApiBase()}/api/user/profile/contact`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({
+          phoneNumber: trimmedPhone,
+          whatsappNumber: trimmedWhatsapp,
+          preferredContactChannel,
+        }),
+      });
+      const data = await response.json();
+
+      if (!data.success) {
+        setContactError(data.error || 'Could not update your contact information.');
+        setSavingContact(false);
+        return;
+      }
+
+      await refreshUser();
+      toast({ title: 'Contact info updated', description: 'Your contact information has been saved.' });
+    } catch (error) {
+      console.error('Failed to update contact info:', error);
+      setContactError("We couldn't reach the server. Please try again.");
+    } finally {
+      setSavingContact(false);
+    }
   };
 
   const tabs = [
@@ -66,90 +127,133 @@ export default function SettingsPage() {
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="portal-card space-y-6"
+              className="space-y-6"
             >
-              <h3 className="font-semibold text-portal-primary text-lg">Profile Information</h3>
+              <div className="portal-card space-y-6">
+                <h3 className="font-semibold text-portal-primary text-lg">Profile Information</h3>
 
-              <div className="flex items-center gap-5">
-                <div className="relative">
-                  <div className="w-20 h-20 rounded-2xl bg-[#01CED1]/10 flex items-center justify-center">
-                    <User className="w-8 h-8 text-[#01CED1]" />
+                <div className="flex items-center gap-5">
+                  <div className="relative">
+                    <div className="w-20 h-20 rounded-2xl bg-[#01CED1]/10 flex items-center justify-center">
+                      <User className="w-8 h-8 text-[#01CED1]" />
+                    </div>
+                    <button className="absolute -bottom-1 -right-1 w-7 h-7 bg-[#01CED1] text-[#0F0F0F] rounded-lg flex items-center justify-center hover:bg-[#00B8BB] transition-colors">
+                      <Camera className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                  <button className="absolute -bottom-1 -right-1 w-7 h-7 bg-[#01CED1] text-[#0F0F0F] rounded-lg flex items-center justify-center hover:bg-[#00B8BB] transition-colors">
-                    <Camera className="w-3.5 h-3.5" />
-                  </button>
+                  <div>
+                    <p className="font-medium text-portal-primary">Profile Photo</p>
+                    <p className="text-sm text-portal-secondary">JPG, PNG or GIF. Max 5MB.</p>
+                  </div>
                 </div>
+
+                {/* Read-only: legal name, email, and nationality shouldn't
+                    change post-KYC without a fresh compliance review, and
+                    email changes are a separate flow out of scope for the
+                    pilot. Not a bug that these can't be edited — that's the
+                    point. */}
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-portal-secondary mb-1.5">First Name</label>
+                    <input type="text" value={user?.FirstName || ''} readOnly className="portal-input opacity-80" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-portal-secondary mb-1.5">Last Name</label>
+                    <input type="text" value={user?.LastName || ''} readOnly className="portal-input opacity-80" />
+                  </div>
+                </div>
+
                 <div>
-                  <p className="font-medium text-portal-primary">Profile Photo</p>
-                  <p className="text-sm text-portal-secondary">JPG, PNG or GIF. Max 5MB.</p>
+                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">Email Address</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
+                    <input
+                      type="email"
+                      value={user?.Email || ''}
+                      readOnly
+                      className="portal-input pl-10 opacity-80"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div className="grid sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">First Name</label>
-                  <input
-                    type="text"
-                    defaultValue={user?.FirstName || ''}
-                    className="portal-input"
-                  />
+                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">Country</label>
+                  <div className="relative">
+                    <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
+                    <input
+                      type="text"
+                      value={countryNames[user?.CountryCode] || user?.CountryCode || ''}
+                      readOnly
+                      className="portal-input pl-10 opacity-80"
+                    />
+                  </div>
                 </div>
+
+                <p className="text-xs text-portal-tertiary">
+                  Need to update your legal name, nationality, or address? Contact support — these require a fresh identity check and can't be changed here.
+                </p>
+              </div>
+
+              {/* The one genuinely editable field on this page, deliberately
+                  separated into its own card with its own save action —
+                  everything above is read-only, so a single shared "Save
+                  Changes" button covering both would be misleading. */}
+              <div className="portal-card space-y-4">
+                <h3 className="font-semibold text-portal-primary text-lg">Contact Information</h3>
                 <div>
-                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">Last Name</label>
-                  <input
-                    type="text"
-                    defaultValue={user?.LastName || ''}
-                    className="portal-input"
-                  />
+                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">Phone Number</label>
+                  <div className="relative">
+                    <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
+                    <input
+                      type="tel"
+                      value={phoneNumber}
+                      onChange={(e) => { setPhoneNumber(e.target.value); setContactError(''); }}
+                      placeholder="+65 91234567"
+                      className="portal-input pl-10"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-portal-secondary mb-1.5">Email Address</label>
-                <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
-                  <input
-                    type="email"
-                    defaultValue={user?.Email || ''}
-                    readOnly
-                    className="portal-input pl-10 opacity-80"
-                  />
+                <div>
+                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">
+                    WhatsApp Number <span className="text-portal-tertiary font-normal">(optional)</span>
+                  </label>
+                  <div className="relative">
+                    <MessageCircle className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
+                    <input
+                      type="tel"
+                      value={whatsappNumber}
+                      onChange={(e) => { setWhatsappNumber(e.target.value); setContactError(''); }}
+                      placeholder="Leave blank if same as phone, or not on WhatsApp"
+                      className="portal-input pl-10"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-portal-secondary mb-1.5">Phone Number</label>
-                <div className="relative">
-                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
-                  <input
-                    type="tel"
-                    defaultValue=""
-                    placeholder="Not set"
-                    className="portal-input pl-10"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-portal-secondary mb-1.5">Country</label>
-                <div className="relative">
-                  <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
-                  <select className="portal-input pl-10 appearance-none" defaultValue={user?.CountryCode || ''}>
-                    <option value="US">United States</option>
-                    <option value="GB">United Kingdom</option>
-                    <option value="AE">United Arab Emirates</option>
-                    <option value="DE">Germany</option>
-                    <option value="IT">Italy</option>
-                    <option value="SG">Singapore</option>
-                    <option value="TH">Thailand</option>
+                <div>
+                  <label className="block text-sm font-medium text-portal-secondary mb-1.5">Preferred Contact Method</label>
+                  <select
+                    value={preferredContactChannel}
+                    onChange={(e) => { setPreferredContactChannel(e.target.value); setContactError(''); }}
+                    className="portal-input appearance-none"
+                  >
+                    <option value="phone">Phone call / SMS</option>
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="email">Email</option>
                   </select>
                 </div>
-              </div>
 
-              <div className="flex justify-end pt-2">
-                <button onClick={handleSave} className="portal-btn-primary text-sm py-2.5">
-                  {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Changes'}
-                </button>
+                {contactError && <p className="text-sm text-red-400">{contactError}</p>}
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleSaveContact}
+                    disabled={savingContact}
+                    className="portal-btn-primary text-sm py-2.5 disabled:opacity-60"
+                  >
+                    {savingContact ? 'Saving...' : 'Save Contact Info'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           )}

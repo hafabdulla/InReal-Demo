@@ -26,3 +26,10 @@ infra/DEPLOY_RENDER_VERCEL.md
 infra/vercel-env.example
 infra
 InReal_Master_Tracker.md
+# Docs not needed for deployment / not meant to be public
+API_SETUP.md
+DATABASE_SCHEMA.md
+README.md
+database/README.md
+database/SETUP_CHECKLIST.md
+ops-admin-portal/README.md

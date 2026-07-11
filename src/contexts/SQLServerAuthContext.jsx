@@ -14,6 +14,40 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
+  // Re-fetches the current user from the server and updates both the cached
+  // user object and the persisted session, so a profile change (like the
+  // contact-info edit) is reflected everywhere without requiring a full
+  // logout/login. Shared with the initial session check below rather than
+  // duplicating the fetch logic in two places.
+  const refreshUser = useCallback(async () => {
+    const storedSession = localStorage.getItem('inreal_session');
+    if (!storedSession) return null;
+
+    let sessionData;
+    try {
+      sessionData = JSON.parse(storedSession);
+    } catch {
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${sessionData.token}` },
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) return null;
+
+      const refreshedSession = { ...sessionData, user: data.data };
+      localStorage.setItem('inreal_session', JSON.stringify(refreshedSession));
+      setSession(refreshedSession);
+      setUser(data.data);
+      return data.data;
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+      return null;
+    }
+  }, []);
+
   // Check for existing session on mount, and confirm the token is still valid
   // server-side (handles expiry and the rollout of real JWTs replacing old tokens).
   useEffect(() => {
@@ -139,8 +173,9 @@ export const AuthProvider = ({ children }) => {
       isAdmin,
       signIn,
       signOut,
+      refreshUser,
     }),
-    [user, session, loading, isAuthenticated, isAdmin, signIn, signOut]
+    [user, session, loading, isAuthenticated, isAdmin, signIn, signOut, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
