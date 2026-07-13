@@ -1155,8 +1155,159 @@ function bindKycEvents() {
   document.getElementById('kycDeclineBtn').addEventListener('click', () => submitKycDecision('decline'));
 }
 
+// ── Bank detail change requests (C.1 item 6c) ────────────────────────────────
+// Same table+drawer pattern as KYC review above, deliberately — an admin
+// who already knows that screen shouldn't have to learn a new layout for
+// this one. The proposed/prior values arrive already decrypted from the
+// server (GET /api/ops/bank-detail-requests) — this file never handles
+// encryption itself, that's entirely a server-side concern.
+let bankRequestQueue = [];
+let selectedBankRequest = null;
+
+async function loadBankRequestQueue() {
+  const result = await apiFetch('/api/ops/bank-detail-requests');
+  bankRequestQueue = result.data || [];
+}
+
+function renderBankRequestQueue() {
+  const countLabel = document.getElementById('bankRequestCountLabel');
+  const tbody = document.getElementById('bankRequestTableBody');
+  if (!countLabel || !tbody) return;
+
+  countLabel.textContent = `${bankRequestQueue.length} pending`;
+
+  if (bankRequestQueue.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="helper" style="text-align:center;padding:24px">No pending bank detail requests.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = bankRequestQueue.map((r) => `
+      <tr class="kyc-row" data-requestid="${r.RequestID}">
+        <td>
+          <strong>${escapeHtml(r.FirstName)} ${escapeHtml(r.LastName)}</strong><br>
+          <span class="helper">${escapeHtml(r.Email)}</span>
+        </td>
+        <td>${escapeHtml(r.ProposedValues?.bankName || '—')}</td>
+        <td>${formatDate(r.CreatedAt)}</td>
+        <td>
+          <button class="ghost-btn bank-review-btn" data-requestid="${r.RequestID}" style="font-size:0.8rem;padding:4px 10px">
+            Review
+          </button>
+        </td>
+      </tr>
+    `).join('');
+
+  refreshIcons();
+}
+
+function openBankRequestDrawer(requestId) {
+  const request = bankRequestQueue.find((r) => String(r.RequestID) === String(requestId));
+  if (!request) return;
+  selectedBankRequest = request;
+
+  document.getElementById('bankDrawerName').textContent = `${request.FirstName} ${request.LastName}`;
+  document.getElementById('bankDrawerEmail').textContent = request.Email;
+  document.getElementById('bankDrawerStepUpAt').textContent = formatDate(request.StepUpVerifiedAt);
+
+  const proposed = request.ProposedValues || {};
+  document.getElementById('bankDrawerProposedHolder').textContent = proposed.accountHolderName || '—';
+  document.getElementById('bankDrawerProposedBank').textContent = proposed.bankName || '—';
+  document.getElementById('bankDrawerProposedNumber').textContent = proposed.accountNumber || '—';
+  document.getElementById('bankDrawerProposedSwift').textContent = proposed.swiftBic || '—';
+  document.getElementById('bankDrawerProposedCountry').textContent = proposed.countryCode || '—';
+
+  const prior = request.PriorValues;
+  const priorEmpty = document.getElementById('bankDrawerPriorEmpty');
+  const priorGrid = document.getElementById('bankDrawerPriorGrid');
+  if (prior && prior.accountNumber) {
+    priorEmpty.classList.add('hidden');
+    priorGrid.classList.remove('hidden');
+    document.getElementById('bankDrawerPriorHolder').textContent = prior.accountHolderName || '—';
+    document.getElementById('bankDrawerPriorBank').textContent = prior.bankName || '—';
+    document.getElementById('bankDrawerPriorNumber').textContent = prior.accountNumber || '—';
+  } else {
+    priorEmpty.classList.remove('hidden');
+    priorGrid.classList.add('hidden');
+  }
+
+  document.getElementById('bankRejectionNote').value = '';
+  document.getElementById('bankFormError').classList.add('hidden');
+  document.getElementById('bankFormError').textContent = '';
+
+  document.getElementById('bankRequestDrawer').classList.remove('hidden');
+  refreshIcons();
+}
+
+function closeBankRequestDrawer() {
+  selectedBankRequest = null;
+  document.getElementById('bankRequestDrawer').classList.add('hidden');
+}
+
+async function submitBankRequestDecision(action) {
+  if (!selectedBankRequest) return;
+
+  const rejectionNote = document.getElementById('bankRejectionNote').value.trim();
+  const errorEl = document.getElementById('bankFormError');
+
+  if (action === 'reject' && !rejectionNote) {
+    errorEl.textContent = 'A rejection note is required.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const verifyBtn = document.getElementById('bankVerifyBtn');
+  const rejectBtn = document.getElementById('bankRejectBtn');
+  verifyBtn.disabled = true;
+  rejectBtn.disabled = true;
+  errorEl.classList.add('hidden');
+
+  try {
+    const path = action === 'verify'
+      ? `/api/ops/bank-detail-requests/${selectedBankRequest.RequestID}/verify`
+      : `/api/ops/bank-detail-requests/${selectedBankRequest.RequestID}/reject`;
+    const body = action === 'verify' ? undefined : JSON.stringify({ rejectionNote });
+
+    await apiFetch(path, { method: 'POST', body });
+
+    const investorName = `${selectedBankRequest.FirstName} ${selectedBankRequest.LastName}`;
+    addAudit(
+      `Bank detail request ${action === 'verify' ? 'verified' : 'rejected'} — ${investorName}`,
+      `${authSession?.user?.Email || 'Ops'} • just now`,
+      action === 'verify' ? 'Applied to the live account.' : `Reason: ${rejectionNote}`,
+    );
+
+    closeBankRequestDrawer();
+    await loadBankRequestQueue();
+    renderBankRequestQueue();
+    renderAudit();
+    saveWorkspaceState();
+  } catch (err) {
+    errorEl.textContent = err.message || 'Decision could not be recorded. Try again.';
+    errorEl.classList.remove('hidden');
+  } finally {
+    verifyBtn.disabled = false;
+    rejectBtn.disabled = false;
+  }
+}
+
+function bindBankRequestEvents() {
+  document.getElementById('refreshBankRequestsBtn').addEventListener('click', async () => {
+    await loadBankRequestQueue();
+    renderBankRequestQueue();
+  });
+
+  document.getElementById('bankRequestTableBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('.bank-review-btn');
+    if (btn) openBankRequestDrawer(btn.dataset.requestid);
+  });
+
+  document.getElementById('bankDrawerCloseBtn').addEventListener('click', closeBankRequestDrawer);
+  document.getElementById('bankVerifyBtn').addEventListener('click', () => submitBankRequestDecision('verify'));
+  document.getElementById('bankRejectBtn').addEventListener('click', () => submitBankRequestDecision('reject'));
+}
+
 async function refreshLiveData() {
-  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments()]);
+  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments(), loadBankRequestQueue()]);
   render();
 }
 
@@ -1168,6 +1319,7 @@ function render() {
   renderFiles();
   renderQueue();
   renderKycQueue();
+  renderBankRequestQueue();
   renderAudit();
   saveWorkspaceState();
   refreshIcons();
@@ -1178,4 +1330,5 @@ authEls.logoutBtn.addEventListener('click', handleLogout);
 
 bindWorkspaceEvents();
 bindKycEvents();
+bindBankRequestEvents();
 bootstrapAuth();

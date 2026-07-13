@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   User,
@@ -8,6 +8,7 @@ import {
   Shield,
   Bell,
   CreditCard,
+  Building2,
   Globe,
   Lock,
   Camera,
@@ -82,6 +83,235 @@ export default function SettingsPage() {
       setContactError("We couldn't reach the server. Please try again.");
     } finally {
       setSavingContact(false);
+    }
+  };
+
+  // Two-factor authentication (TOTP) — prerequisite for bank-detail
+  // step-up, not built yet. 'idle' -> 'enrolling' (QR shown, awaiting a
+  // code to confirm) -> 'recoveryCodes' (shown exactly once) -> back to
+  // 'idle' with 2FA now active.
+  const [totpEnabled, setTotpEnabled] = useState(false);
+  const [totpStep, setTotpStep] = useState('idle');
+  const [totpLoading, setTotpLoading] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
+  const [totpSecret, setTotpSecret] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
+  const [totpError, setTotpError] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState([]);
+  const [showDisablePrompt, setShowDisablePrompt] = useState(false);
+  const [disableCode, setDisableCode] = useState('');
+
+  useEffect(() => {
+    const fetchTotpStatus = async () => {
+      if (!session?.token) return;
+      try {
+        const res = await fetch(`${getApiBase()}/api/auth/totp/status`, {
+          headers: { Authorization: `Bearer ${session.token}` },
+        });
+        const data = await res.json();
+        if (data.success) setTotpEnabled(data.data.enabled);
+      } catch (error) {
+        console.error('Failed to fetch 2FA status:', error);
+      }
+    };
+    fetchTotpStatus();
+  }, [session]);
+
+  const handleStartEnroll = async () => {
+    setTotpError('');
+    setTotpLoading(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/auth/totp/enroll`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.token || ''}` },
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTotpError(data.error || 'Could not start enrollment.');
+        setTotpLoading(false);
+        return;
+      }
+      setQrCodeDataUrl(data.data.qrCodeDataUrl);
+      setTotpSecret(data.data.secret);
+      setTotpStep('enrolling');
+    } catch (error) {
+      console.error('Failed to start 2FA enrollment:', error);
+      setTotpError("We couldn't reach the server. Please try again.");
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  const handleVerifyEnroll = async () => {
+    setTotpError('');
+    if (!/^\d{6}$/.test(verifyCode.trim())) {
+      setTotpError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+    setTotpLoading(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/auth/totp/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({ code: verifyCode.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTotpError(data.error || 'Invalid code. Please try again.');
+        setTotpLoading(false);
+        return;
+      }
+      setRecoveryCodes(data.data.recoveryCodes);
+      setTotpStep('recoveryCodes');
+      setTotpEnabled(true);
+      setVerifyCode('');
+    } catch (error) {
+      console.error('Failed to verify 2FA code:', error);
+      setTotpError("We couldn't reach the server. Please try again.");
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  const handleCancelEnroll = () => {
+    setTotpStep('idle');
+    setQrCodeDataUrl('');
+    setTotpSecret('');
+    setVerifyCode('');
+    setTotpError('');
+  };
+
+  const handleFinishEnroll = () => {
+    setTotpStep('idle');
+    setRecoveryCodes([]);
+    setQrCodeDataUrl('');
+    setTotpSecret('');
+  };
+
+  const handleDisable = async () => {
+    setTotpError('');
+    if (!/^\d{6}$/.test(disableCode.trim())) {
+      setTotpError('Enter your current 6-digit authenticator code.');
+      return;
+    }
+    setTotpLoading(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/auth/totp/disable`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({ code: disableCode.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTotpError(data.error || 'Could not disable two-factor authentication.');
+        setTotpLoading(false);
+        return;
+      }
+      setTotpEnabled(false);
+      setShowDisablePrompt(false);
+      setDisableCode('');
+      toast({
+        title: 'Two-factor authentication disabled',
+        description: 'You can also delete the "InReal" entry from your authenticator app now — it no longer works.',
+      });
+    } catch (error) {
+      console.error('Failed to disable 2FA:', error);
+      setTotpError("We couldn't reach the server. Please try again.");
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  // Bank details — C.1 item 6, the highest-risk field on this whole page.
+  // A request here NEVER updates bank details directly; it only creates a
+  // pending row an admin has to separately approve (see the backend). The
+  // one thing enforced client-side too, not just trusted from the server,
+  // is that the change form only opens at all once 2FA is confirmed enabled
+  // — matches the backend's own hard requirement, just surfaced earlier so
+  // the investor isn't led through a form only to be rejected at the end.
+  const [bankDetails, setBankDetails] = useState(null); // null = loading
+  const [pendingBankRequest, setPendingBankRequest] = useState(null);
+  const [showBankForm, setShowBankForm] = useState(false);
+  const [bankForm, setBankForm] = useState({
+    accountHolderName: '', bankName: '', accountNumber: '', swiftBic: '', countryCode: '', code: '',
+  });
+  const [bankFormError, setBankFormError] = useState('');
+  const [savingBankRequest, setSavingBankRequest] = useState(false);
+
+  useEffect(() => {
+    const fetchBankInfo = async () => {
+      if (!session?.token) return;
+      const authHeader = { Authorization: `Bearer ${session.token}` };
+      try {
+        const [detailsRes, requestsRes] = await Promise.all([
+          fetch(`${getApiBase()}/api/user/profile/bank-details`, { headers: authHeader }),
+          fetch(`${getApiBase()}/api/user/bank-detail-requests`, { headers: authHeader }),
+        ]);
+        const detailsData = await detailsRes.json();
+        const requestsData = await requestsRes.json();
+        if (detailsData.success) setBankDetails(detailsData.data);
+        if (requestsData.success) {
+          const stillPending = (requestsData.data || []).find((r) => r.Status === 'pending');
+          setPendingBankRequest(stillPending || null);
+        }
+      } catch (error) {
+        console.error('Failed to fetch bank details:', error);
+      }
+    };
+    fetchBankInfo();
+  }, [session]);
+
+  const handleSubmitBankRequest = async () => {
+    setBankFormError('');
+    const { accountHolderName, bankName, accountNumber, countryCode, code } = bankForm;
+    if (!accountHolderName.trim() || !bankName.trim() || !accountNumber.trim() || !countryCode.trim()) {
+      setBankFormError('All fields except SWIFT/BIC are required.');
+      return;
+    }
+    if (!/^\d{6}$/.test(code.trim())) {
+      setBankFormError('Enter the 6-digit code from your authenticator app to confirm this change.');
+      return;
+    }
+
+    setSavingBankRequest(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/user/profile/bank-detail-request`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({
+          accountHolderName: accountHolderName.trim(),
+          bankName: bankName.trim(),
+          accountNumber: accountNumber.trim(),
+          swiftBic: bankForm.swiftBic.trim() || undefined,
+          countryCode: countryCode.trim().toUpperCase(),
+          code: code.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setBankFormError(data.error || 'Could not submit your request.');
+        setSavingBankRequest(false);
+        return;
+      }
+
+      setPendingBankRequest({ RequestID: data.data.requestId, Status: 'pending', CreatedAt: data.data.createdAt });
+      setShowBankForm(false);
+      setBankForm({ accountHolderName: '', bankName: '', accountNumber: '', swiftBic: '', countryCode: '', code: '' });
+      toast({ title: 'Request submitted', description: 'Your bank detail change is now pending review.' });
+    } catch (error) {
+      console.error('Failed to submit bank detail request:', error);
+      setBankFormError("We couldn't reach the server. Please try again.");
+    } finally {
+      setSavingBankRequest(false);
     }
   };
 
@@ -283,7 +513,7 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <div className="portal-card">
+              <div className="portal-card space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-portal-tertiary flex items-center justify-center">
@@ -291,11 +521,110 @@ export default function SettingsPage() {
                     </div>
                     <div>
                       <p className="font-medium text-portal-primary">Two-Factor Authentication</p>
-                      <p className="text-sm text-portal-secondary">Add an extra layer of security</p>
+                      <p className="text-sm text-portal-secondary">
+                        {totpEnabled ? 'Enabled — using an authenticator app' : 'Add an extra layer of security'}
+                      </p>
                     </div>
                   </div>
-                  <button className="portal-btn-secondary text-sm py-2 px-4">Enable</button>
+                  {totpStep === 'idle' && !totpEnabled && (
+                    <button onClick={handleStartEnroll} disabled={totpLoading} className="portal-btn-secondary text-sm py-2 px-4 disabled:opacity-60">
+                      {totpLoading ? 'Loading...' : 'Enable'}
+                    </button>
+                  )}
+                  {totpStep === 'idle' && totpEnabled && !showDisablePrompt && (
+                    <button onClick={() => { setShowDisablePrompt(true); setTotpError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                      Disable
+                    </button>
+                  )}
                 </div>
+
+                {/* Step 1: scan the QR code, enter a code to confirm */}
+                {totpStep === 'enrolling' && (
+                  <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-4">
+                    <p className="text-sm text-portal-secondary">
+                      Scan this with an authenticator app (Google Authenticator, Authy, etc.), or enter the code manually.
+                    </p>
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                      <p className="text-xs text-amber-400">
+                        <strong>Re-enrolling?</strong> This creates a brand new code — your app won't automatically remove
+                        an old "InReal" entry from before. Delete any existing InReal entry in your authenticator app now,
+                        so you don't end up with two and aren't sure which one still works.
+                      </p>
+                    </div>
+                    {qrCodeDataUrl && (
+                      <img src={qrCodeDataUrl} alt="2FA QR code" className="rounded-lg border border-[hsl(var(--portal-border-subtle))] w-40 h-40" />
+                    )}
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Manual entry code</label>
+                      <input type="text" readOnly value={totpSecret} className="portal-input font-mono text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Enter the 6-digit code from your app</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={verifyCode}
+                        onChange={(e) => { setVerifyCode(e.target.value.replace(/\D/g, '')); setTotpError(''); }}
+                        placeholder="123456"
+                        className="portal-input font-mono tracking-widest text-center"
+                      />
+                    </div>
+                    {totpError && <p className="text-sm text-red-400">{totpError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button onClick={handleCancelEnroll} className="portal-btn-secondary text-sm py-2 px-4">Cancel</button>
+                      <button onClick={handleVerifyEnroll} disabled={totpLoading} className="portal-btn-primary text-sm py-2 px-4 disabled:opacity-60">
+                        {totpLoading ? 'Verifying...' : 'Verify & Enable'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: recovery codes, shown exactly once */}
+                {totpStep === 'recoveryCodes' && (
+                  <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-4">
+                    <p className="text-sm font-medium text-emerald-400">✓ Two-factor authentication is now enabled.</p>
+                    <p className="text-sm text-portal-secondary">
+                      Save these recovery codes somewhere safe. Each one can be used once, if you ever lose access to your authenticator app.
+                      <strong> They're shown here only this one time.</strong>
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 bg-portal-tertiary rounded-lg p-4 font-mono text-sm">
+                      {recoveryCodes.map((code) => (
+                        <div key={code}>{code}</div>
+                      ))}
+                    </div>
+                    <div className="flex justify-end">
+                      <button onClick={handleFinishEnroll} className="portal-btn-primary text-sm py-2 px-4">
+                        I've saved these codes
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Disable — always requires a fresh code, never a plain toggle */}
+                {showDisablePrompt && (
+                  <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-3">
+                    <p className="text-sm text-portal-secondary">Enter your current authenticator code to disable two-factor authentication.</p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={disableCode}
+                      onChange={(e) => { setDisableCode(e.target.value.replace(/\D/g, '')); setTotpError(''); }}
+                      placeholder="123456"
+                      className="portal-input font-mono tracking-widest text-center"
+                    />
+                    {totpError && <p className="text-sm text-red-400">{totpError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => { setShowDisablePrompt(false); setDisableCode(''); setTotpError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                        Cancel
+                      </button>
+                      <button onClick={handleDisable} disabled={totpLoading} className="portal-btn-primary text-sm py-2 px-4 disabled:opacity-60">
+                        {totpLoading ? 'Disabling...' : 'Confirm Disable'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="portal-card">
@@ -351,25 +680,135 @@ export default function SettingsPage() {
               animate={{ opacity: 1, y: 0 }}
               className="space-y-4"
             >
-              <div className="portal-card">
-                <h3 className="font-semibold text-portal-primary text-lg mb-4">Linked Bank Accounts</h3>
-                <div className="space-y-3">
+              <div className="portal-card space-y-4">
+                <h3 className="font-semibold text-portal-primary text-lg">Bank Details</h3>
+
+                {/* Current linked account, masked — never the full number */}
+                {bankDetails?.linked && (
                   <div className="flex items-center justify-between p-4 border border-portal-subtle rounded-xl bg-portal-tertiary">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-portal-secondary flex items-center justify-center">
-                        <CreditCard className="w-5 h-5 text-[#01CED1]" />
+                        <Building2 className="w-5 h-5 text-[#01CED1]" />
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-portal-primary">Chase Bank ****4821</p>
-                        <p className="text-xs text-portal-tertiary">Checking Account</p>
+                        <p className="text-sm font-medium text-portal-primary">{bankDetails.bankName} {bankDetails.maskedAccountNumber}</p>
+                        <p className="text-xs text-portal-tertiary">{bankDetails.accountHolderName}</p>
                       </div>
                     </div>
-                    <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-medium rounded-lg">Primary</span>
+                    <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-medium rounded-lg">On file</span>
                   </div>
-                </div>
-                <button className="mt-4 w-full py-2.5 border-2 border-dashed border-portal-subtle text-portal-secondary hover:border-[#01CED1] hover:text-[#01CED1] rounded-xl text-sm font-medium transition-colors">
-                  + Add Bank Account
-                </button>
+                )}
+                {bankDetails && !bankDetails.linked && (
+                  <p className="text-sm text-portal-secondary">No bank account on file yet.</p>
+                )}
+
+                {/* A request is already pending review */}
+                {pendingBankRequest && (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                    <p className="text-sm font-medium text-amber-400">Change pending review</p>
+                    <p className="text-xs text-portal-secondary mt-1">
+                      Submitted {new Date(pendingBankRequest.CreatedAt).toLocaleDateString()}. This can take up to 2 business days.
+                    </p>
+                  </div>
+                )}
+
+                {/* Everything below requires 2FA to be enabled first — same
+                    rule the backend enforces, surfaced here before the
+                    investor fills out a form only to be rejected at the end. */}
+                {!totpEnabled && !pendingBankRequest && (
+                  <p className="text-sm text-portal-secondary">
+                    Enable two-factor authentication in the <button onClick={() => setActiveTab('security')} className="text-[#01CED1] hover:underline">Security tab</button> before changing bank details — this protects against your account being used to redirect your payouts.
+                  </p>
+                )}
+
+                {totpEnabled && !pendingBankRequest && !showBankForm && (
+                  <button
+                    onClick={() => setShowBankForm(true)}
+                    className="w-full py-2.5 border-2 border-dashed border-portal-subtle text-portal-secondary hover:border-[#01CED1] hover:text-[#01CED1] rounded-xl text-sm font-medium transition-colors"
+                  >
+                    {bankDetails?.linked ? '+ Request a Change' : '+ Add Bank Account'}
+                  </button>
+                )}
+
+                {showBankForm && (
+                  <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-3">
+                    <p className="text-sm text-portal-secondary">
+                      This change goes to our team for review before it takes effect — it won't update immediately.
+                    </p>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Account Holder Name</label>
+                      <input
+                        type="text"
+                        value={bankForm.accountHolderName}
+                        onChange={(e) => setBankForm({ ...bankForm, accountHolderName: e.target.value })}
+                        className="portal-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Bank Name</label>
+                      <input
+                        type="text"
+                        value={bankForm.bankName}
+                        onChange={(e) => setBankForm({ ...bankForm, bankName: e.target.value })}
+                        className="portal-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Account Number</label>
+                      <input
+                        type="text"
+                        value={bankForm.accountNumber}
+                        onChange={(e) => setBankForm({ ...bankForm, accountNumber: e.target.value })}
+                        className="portal-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">
+                        SWIFT/BIC <span className="text-portal-tertiary font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.swiftBic}
+                        onChange={(e) => setBankForm({ ...bankForm, swiftBic: e.target.value })}
+                        className="portal-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Bank Country (2-letter code)</label>
+                      <input
+                        type="text"
+                        maxLength={2}
+                        value={bankForm.countryCode}
+                        onChange={(e) => setBankForm({ ...bankForm, countryCode: e.target.value.toUpperCase() })}
+                        placeholder="SG"
+                        className="portal-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">
+                        Authenticator Code <span className="text-portal-tertiary font-normal">(confirms it's really you)</span>
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={bankForm.code}
+                        onChange={(e) => setBankForm({ ...bankForm, code: e.target.value.replace(/\D/g, '') })}
+                        placeholder="123456"
+                        className="portal-input font-mono tracking-widest text-center"
+                      />
+                    </div>
+                    {bankFormError && <p className="text-sm text-red-400">{bankFormError}</p>}
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button onClick={() => { setShowBankForm(false); setBankFormError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                        Cancel
+                      </button>
+                      <button onClick={handleSubmitBankRequest} disabled={savingBankRequest} className="portal-btn-primary text-sm py-2 px-4 disabled:opacity-60">
+                        {savingBankRequest ? 'Submitting...' : 'Submit for Review'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

@@ -10,7 +10,9 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
-import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual, createHash } from 'crypto';
+import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual, createHash, createCipheriv, createDecipheriv } from 'crypto';
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
 
@@ -814,6 +816,65 @@ function hashResetToken(token) {
   return createHash('sha256').update(token).digest('hex');
 }
 
+// ── Encryption for small, recoverable secrets ────────────────────────────────
+// Used for anything that must be decrypted back to its real value later —
+// TOTP secrets (to check future codes against) and bank account numbers (to
+// show/verify them). NOT for passwords or reset tokens, which use one-way
+// hashing instead because they never need to be recovered, only compared.
+// AES-256-GCM; the IV and auth tag travel alongside the ciphertext in the
+// same stored value rather than needing a separate column each, and GCM's
+// auth tag means a tampered ciphertext fails to decrypt rather than
+// silently decrypting to garbage.
+//
+// Deliberately NOT a hard boot-time requirement the way SUPABASE_URL is —
+// both features that use this are additive, and a missing key here
+// shouldn't take down every other unrelated endpoint. Callers get a clear
+// 500 instead. One key (TOTP_ENCRYPTION_KEY) covers both use cases —
+// same algorithm, same risk profile, no reason to ask for a second key/env
+// var to protect a second category of data.
+function getEncryptionKey() {
+  const keyHex = process.env.TOTP_ENCRYPTION_KEY;
+  if (!keyHex || keyHex.length !== 64) {
+    throw new Error(
+      'TOTP_ENCRYPTION_KEY is not configured correctly (must be exactly 64 hex characters / 32 bytes).'
+    );
+  }
+  return Buffer.from(keyHex, 'hex');
+}
+
+function encryptValue(plainText) {
+  const key = getEncryptionKey();
+  const iv = randomBytes(12); // standard IV size for GCM
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return Buffer.concat([iv, authTag, encrypted]).toString('base64');
+}
+
+function decryptValue(encryptedBase64) {
+  const key = getEncryptionKey();
+  const buf = Buffer.from(encryptedBase64, 'base64');
+  const iv = buf.subarray(0, 12);
+  const authTag = buf.subarray(12, 28);
+  const ciphertext = buf.subarray(28);
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString('utf8');
+}
+
+// Reusable step-up check — verifies a fresh code against the user's ACTIVE
+// TOTP secret. Used by /totp/disable now; this is exactly the function
+// C.1 item 6's bank-detail step-up middleware will also call, so that
+// flow doesn't need to reinvent TOTP verification later.
+async function verifyFreshTotpCode(userId, code) {
+  if (!code) return false;
+  const rows = await q('SELECT secret_encrypted, is_active FROM user_totp WHERE user_id = $1', [userId]);
+  if (rows.length === 0 || !rows[0].is_active) return false;
+  const secret = decryptValue(rows[0].secret_encrypted);
+  return authenticator.check(String(code).trim(), secret);
+}
+
 const GENERIC_RESET_REQUEST_MESSAGE =
   'If an account exists for that email, password reset instructions have been sent.';
 
@@ -947,6 +1008,163 @@ app.post('/api/auth/password-reset/confirm', async (req, res) => {
   } catch (error) {
     console.error('API error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ── TOTP two-factor authentication ───────────────────────────────────────────
+// C.1 item 6a — prerequisite for bank-detail step-up (item 6b/6c, not built
+// yet). Standard authenticator-app flow: enroll (generate a secret, not yet
+// active) -> verify (user proves they scanned it, THEN it activates) ->
+// disable (requires a fresh code, never a plain on/off toggle).
+
+// Shared by every TOTP route's catch block below, so "is this the
+// missing-encryption-key case?" is checked in exactly one named place
+// instead of being re-typed at each call site.
+function sendTotpErrorResponse(error, res) {
+  console.error('API error:', error);
+  if (String(error.message || '').includes('TOTP_ENCRYPTION_KEY')) {
+    return res.status(500).json({ success: false, error: 'Two-factor authentication is not yet configured on this server.' });
+  }
+  res.status(500).json({ success: false, error: 'Internal server error' });
+}
+
+// POST /api/auth/totp/enroll — starts enrollment. Does not activate 2FA by
+// itself; nothing is enforced until /verify succeeds. Re-enrolling while
+// already active is blocked — must disable (with a valid code) first,
+// so a compromised session can't quietly swap out an owner's real 2FA.
+app.post('/api/auth/totp/enroll', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const existing = await q('SELECT is_active FROM user_totp WHERE user_id = $1', [userId]);
+    if (existing.length > 0 && existing[0].is_active) {
+      return res.status(409).json({
+        success: false,
+        error: 'Two-factor authentication is already enabled. Disable it first to re-enroll.',
+      });
+    }
+
+    const userRows = await q('SELECT email FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false', [userId]);
+    if (userRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const secret = authenticator.generateSecret();
+    const encryptedSecret = encryptValue(secret);
+    const otpauthUrl = authenticator.keyuri(userRows[0].email, 'InReal', secret);
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl);
+
+    await q(
+      `INSERT INTO user_totp (user_id, secret_encrypted, is_active)
+       VALUES ($1, $2, false)
+       ON CONFLICT (user_id) DO UPDATE SET
+         secret_encrypted = EXCLUDED.secret_encrypted,
+         is_active = false,
+         enrolled_at = NULL,
+         recovery_codes_hash = NULL,
+         updated_at = NOW()`,
+      [userId, encryptedSecret]
+    );
+
+    // The raw secret is returned once, for manual entry if the investor
+    // can't scan the QR code — same one-time-disclosure principle as a
+    // password-reset token or an account-setup code elsewhere in this app.
+    res.json({ success: true, data: { qrCodeDataUrl, secret, otpauthUrl } });
+  } catch (error) {
+    sendTotpErrorResponse(error, res);
+  }
+});
+
+// POST /api/auth/totp/verify — proves the investor actually has the secret
+// (scanned it into a real authenticator app) before 2FA becomes active.
+// Issues one-time recovery codes on success, shown exactly once.
+app.post('/api/auth/totp/verify', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ success: false, error: 'Code is required' });
+    }
+
+    const rows = await q('SELECT secret_encrypted, is_active FROM user_totp WHERE user_id = $1', [userId]);
+    if (rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'No pending enrollment found. Start enrollment first.' });
+    }
+    if (rows[0].is_active) {
+      return res.status(409).json({ success: false, error: 'Two-factor authentication is already enabled.' });
+    }
+
+    const secret = decryptValue(rows[0].secret_encrypted);
+    const isValid = authenticator.check(String(code).trim(), secret);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Invalid code. Please try again.' });
+    }
+
+    // 8 recovery codes, shown once, stored only as SHA-256 hashes — same
+    // non-reversible pattern as password-reset tokens. Redemption (using a
+    // recovery code in place of a live TOTP code) isn't wired into
+    // login/step-up yet; tracked as a known follow-up, not silently skipped.
+    const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));
+    const hashedRecoveryCodes = recoveryCodes.map((c) => hashResetToken(c));
+
+    await q(
+      `UPDATE user_totp SET is_active = true, enrolled_at = NOW(), recovery_codes_hash = $1, updated_at = NOW() WHERE user_id = $2`,
+      [hashedRecoveryCodes, userId]
+    );
+
+    console.log(`[totp.enabled] user_id=${userId}`);
+
+    res.json({
+      success: true,
+      data: { recoveryCodes },
+      message: 'Two-factor authentication enabled.',
+    });
+  } catch (error) {
+    sendTotpErrorResponse(error, res);
+  }
+});
+
+// POST /api/auth/totp/disable — deliberately requires a fresh valid code,
+// never a plain toggle. If an attacker has a stolen session but not the
+// investor's phone, they still can't turn off the one protection standing
+// between them and a bank-detail change.
+app.post('/api/auth/totp/disable', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const { code } = req.body;
+    const isValid = await verifyFreshTotpCode(userId, code);
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid current authenticator code is required to disable two-factor authentication.',
+      });
+    }
+
+    await q('DELETE FROM user_totp WHERE user_id = $1', [userId]);
+    console.log(`[totp.disabled] user_id=${userId}`);
+
+    res.json({ success: true, message: 'Two-factor authentication disabled.' });
+  } catch (error) {
+    sendTotpErrorResponse(error, res);
+  }
+});
+
+// GET /api/auth/totp/status — lets the frontend show enabled/disabled
+// without needing to know anything about the secret itself.
+app.get('/api/auth/totp/status', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const rows = await q('SELECT is_active FROM user_totp WHERE user_id = $1', [userId]);
+    res.json({ success: true, data: { enabled: rows.length > 0 && rows[0].is_active === true } });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -1786,7 +2004,187 @@ app.get('/api/ops/kyc-reviews/:userId/history', async (req, res) => {
   }
 });
 
-// ── Admin: create an investor account, credentials sent (never seen) ────────
+// ── Admin: bank-detail change review (C.1 item 6c) ───────────────────────────
+// The role check here is a deliberate, clearly-labeled stopgap: the spec
+// calls for gating this behind finance_admin/super_admin specifically, but
+// that tiered role model (F8) doesn't exist yet — this app currently only
+// has a binary admin/user role. Per the same pattern the spec itself
+// endorses for the portfolio-adjustment item, this gates behind "any
+// authenticated admin" for now and MUST be retrofitted to the real role
+// check the moment F8 lands — this is not meant to become permanent.
+
+// GET /api/ops/bank-detail-requests — pending requests queue, decrypted for
+// review. Only admins ever see the decrypted proposed/prior values —
+// the investor who submitted it never sees this endpoint at all.
+app.get('/api/ops/bank-detail-requests', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const rows = await q(
+      `SELECT
+         r.request_id               AS "RequestID",
+         r.user_id                  AS "UserID",
+         u.first_name               AS "FirstName",
+         u.last_name                AS "LastName",
+         u.email                    AS "Email",
+         r.proposed_values_encrypted,
+         r.prior_values_encrypted,
+         r.status                   AS "Status",
+         r.step_up_verified_at      AS "StepUpVerifiedAt",
+         r.created_at               AS "CreatedAt"
+       FROM bank_detail_requests r
+       JOIN users u ON u.user_id = r.user_id
+       WHERE r.status = 'pending'
+       ORDER BY r.created_at ASC`
+    );
+
+    const data = rows.map((row) => ({
+      RequestID: row.RequestID,
+      UserID: row.UserID,
+      FirstName: row.FirstName,
+      LastName: row.LastName,
+      Email: row.Email,
+      Status: row.Status,
+      StepUpVerifiedAt: row.StepUpVerifiedAt,
+      CreatedAt: row.CreatedAt,
+      ProposedValues: JSON.parse(decryptValue(row.proposed_values_encrypted)),
+      PriorValues: row.prior_values_encrypted ? JSON.parse(decryptValue(row.prior_values_encrypted)) : null,
+    }));
+
+    res.json({ success: true, data, count: data.length });
+  } catch (error) {
+    console.error('API error:', error);
+    if (String(error.message || '').includes('TOTP_ENCRYPTION_KEY')) {
+      return res.status(500).json({ success: false, error: 'This feature is not yet configured on this server.' });
+    }
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/bank-detail-requests/:id/verify — applies the proposed
+// values to the live users row. Transactional and row-locked, same pattern
+// as the KYC decision endpoint above, so two admins can't both approve the
+// same request at once.
+app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const requestId = req.params.id;
+
+    const result = await withTransaction(async (tx) => {
+      const locked = await tx(
+        `SELECT request_id, user_id, proposed_values_encrypted, status FROM bank_detail_requests WHERE request_id = $1 FOR UPDATE`,
+        [requestId]
+      );
+      if (locked.length === 0) {
+        throw Object.assign(new Error('Request not found'), { httpStatus: 404 });
+      }
+      if (locked[0].status !== 'pending') {
+        throw Object.assign(
+          new Error(`This request is already '${locked[0].status}' — decision was already recorded`),
+          { httpStatus: 409 }
+        );
+      }
+
+      const proposed = JSON.parse(decryptValue(locked[0].proposed_values_encrypted));
+
+      await tx(
+        `UPDATE users SET
+           bank_account_holder_name       = $1,
+           bank_name                      = $2,
+           bank_account_number_encrypted  = $3,
+           bank_swift_bic                 = $4,
+           bank_country_code              = $5,
+           bank_account_linked            = true,
+           updated_at                     = NOW()
+         WHERE user_id = $6`,
+        [
+          proposed.accountHolderName,
+          proposed.bankName,
+          encryptValue(proposed.accountNumber),
+          proposed.swiftBic,
+          proposed.countryCode,
+          locked[0].user_id,
+        ]
+      );
+
+      await tx(
+        `UPDATE bank_detail_requests SET status = 'verified', reviewed_by = $1, reviewed_at = NOW() WHERE request_id = $2`,
+        [adminUserId, requestId]
+      );
+
+      return { userId: locked[0].user_id };
+    });
+
+    console.log(`[bank_detail.change_verified] request_id=${requestId} user_id=${result.userId} reviewed_by=${adminUserId}`);
+
+    res.json({ success: true, message: 'Bank detail change verified and applied.' });
+  } catch (error) {
+    if (error.httpStatus) {
+      return res.status(error.httpStatus).json({ success: false, error: error.message });
+    }
+    console.error('API error:', error);
+    if (String(error.message || '').includes('TOTP_ENCRYPTION_KEY')) {
+      return res.status(500).json({ success: false, error: 'This feature is not yet configured on this server.' });
+    }
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/bank-detail-requests/:id/reject — a rejection note is
+// mandatory, not optional, so there's always a real explanation on record
+// for why a bank-detail change didn't go through.
+app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const requestId = req.params.id;
+    const { rejectionNote } = req.body;
+    if (!rejectionNote || String(rejectionNote).trim().length === 0) {
+      return res.status(400).json({ success: false, error: 'rejectionNote is required' });
+    }
+
+    const result = await withTransaction(async (tx) => {
+      const locked = await tx(
+        `SELECT request_id, user_id, status FROM bank_detail_requests WHERE request_id = $1 FOR UPDATE`,
+        [requestId]
+      );
+      if (locked.length === 0) {
+        throw Object.assign(new Error('Request not found'), { httpStatus: 404 });
+      }
+      if (locked[0].status !== 'pending') {
+        throw Object.assign(
+          new Error(`This request is already '${locked[0].status}' — decision was already recorded`),
+          { httpStatus: 409 }
+        );
+      }
+
+      await tx(
+        `UPDATE bank_detail_requests
+         SET status = 'rejected', reviewed_by = $1, reviewed_at = NOW(), rejection_note = $2
+         WHERE request_id = $3`,
+        [adminUserId, String(rejectionNote).trim(), requestId]
+      );
+
+      return { userId: locked[0].user_id };
+    });
+
+    console.log(`[bank_detail.change_rejected] request_id=${requestId} user_id=${result.userId} reviewed_by=${adminUserId}`);
+
+    res.json({ success: true, message: 'Bank detail change rejected.' });
+  } catch (error) {
+    if (error.httpStatus) {
+      return res.status(error.httpStatus).json({ success: false, error: error.message });
+    }
+    console.error('API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+
 // C.1 item 3. The account is created with a random password that is
 // generated, hashed, and immediately discarded — no one, including this
 // admin, ever knows it or could reconstruct it. The investor's real first
@@ -2211,6 +2609,10 @@ app.put('/api/user/profile/contact', async (req, res) => {
       });
     }
 
+    // Builds e.g. "phone_number = $1, whatsapp_number = $2" for only the
+    // fields that changed, in the same order as `values` below — so $1
+    // always lines up with values[0], and userId is appended last, one
+    // placeholder past however many fields changed.
     const setClauses = changedColumns.map((col, i) => `${col} = $${i + 1}`);
     const values = changedColumns.map((col) => updates[col]);
     await q(
@@ -2246,6 +2648,179 @@ app.put('/api/user/profile/contact', async (req, res) => {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
+
+// ── Investor: bank details (C.1 item 6 — the highest-risk item on the pilot
+// list; see the tracker's C.0.3/C.4 notes on why this one isn't allowed to
+// be shortcut). Unlike contact-info editing, a request here NEVER touches
+// the live bank fields directly — it only ever creates a pending row that
+// an admin has to separately approve. See bank-detail-request below for the
+// step-up requirement that gates even creating that pending row.
+
+function maskAccountNumber(accountNumber) {
+  if (!accountNumber) return null;
+  const digits = String(accountNumber);
+  if (digits.length <= 4) return '••••';
+  return `••••${digits.slice(-4)}`;
+}
+
+// GET /api/user/profile/bank-details — the investor's own CURRENT (live,
+// already-approved) bank details, masked. Never the full account number —
+// there's no legitimate reason the investor's own browser needs to display
+// the whole thing back to them once it's already on file.
+app.get('/api/user/profile/bank-details', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const rows = await q(
+      `SELECT bank_account_holder_name, bank_name, bank_account_number_encrypted, bank_swift_bic, bank_country_code, bank_account_linked
+       FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    const row = rows[0];
+
+    if (!row.bank_account_linked || !row.bank_account_number_encrypted) {
+      return res.json({ success: true, data: { linked: false } });
+    }
+
+    const accountNumber = decryptValue(row.bank_account_number_encrypted);
+    res.json({
+      success: true,
+      data: {
+        linked: true,
+        accountHolderName: row.bank_account_holder_name,
+        bankName: row.bank_name,
+        maskedAccountNumber: maskAccountNumber(accountNumber),
+        swiftBic: row.bank_swift_bic,
+        countryCode: row.bank_country_code,
+      },
+    });
+  } catch (error) {
+    console.error('API error:', error);
+    if (String(error.message || '').includes('TOTP_ENCRYPTION_KEY')) {
+      return res.status(500).json({ success: false, error: 'This feature is not yet configured on this server.' });
+    }
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/user/bank-detail-requests — the investor's own change requests
+// and their status (pending/verified/rejected), so they can see where a
+// request stands without contacting support. Masked the same way as above.
+app.get('/api/user/bank-detail-requests', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const rows = await q(
+      `SELECT request_id AS "RequestID", status AS "Status", rejection_note AS "RejectionNote",
+              created_at AS "CreatedAt", reviewed_at AS "ReviewedAt"
+       FROM bank_detail_requests
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT 10`,
+      [userId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/user/profile/bank-detail-request — the ONLY way an investor can
+// propose a bank-detail change. Requires a fresh, valid TOTP code in the
+// same request (step-up) — without it, this never even creates a pending
+// row. Creating the row itself doesn't touch the live bank fields; an admin
+// has to separately verify it (see /api/ops/bank-detail-requests/:id/verify).
+app.post('/api/user/profile/bank-detail-request', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const { code, accountHolderName, bankName, accountNumber, swiftBic, countryCode } = req.body;
+
+    const hasValidCode = await verifyFreshTotpCode(userId, code);
+    if (!hasValidCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid authenticator code is required to change bank details. Set up two-factor authentication in Security settings first if you haven\'t already.',
+      });
+    }
+
+    if (!accountHolderName || !bankName || !accountNumber || !countryCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'accountHolderName, bankName, accountNumber, and countryCode are required',
+      });
+    }
+    const trimmedAccountNumber = String(accountNumber).trim();
+    if (trimmedAccountNumber.length < 4) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid account number' });
+    }
+
+    const before = await q(
+      `SELECT bank_account_holder_name, bank_name, bank_account_number_encrypted, bank_swift_bic, bank_country_code
+       FROM users WHERE user_id = $1`,
+      [userId]
+    );
+    const priorValues = before.length > 0 ? before[0] : null;
+
+    const proposedValues = {
+      accountHolderName: String(accountHolderName).trim(),
+      bankName: String(bankName).trim(),
+      accountNumber: trimmedAccountNumber,
+      swiftBic: swiftBic ? String(swiftBic).trim() : null,
+      countryCode: String(countryCode).trim().toUpperCase(),
+    };
+
+    // Prior values are stored encrypted too — a snapshot of what's about to
+    // be replaced, kept for the admin's review screen and for the record,
+    // never re-decrypted-and-shown anywhere except that review screen.
+    const priorValuesForStorage = priorValues
+      ? {
+          accountHolderName: priorValues.bank_account_holder_name,
+          bankName: priorValues.bank_name,
+          accountNumber: priorValues.bank_account_number_encrypted
+            ? decryptValue(priorValues.bank_account_number_encrypted)
+            : null,
+          swiftBic: priorValues.bank_swift_bic,
+          countryCode: priorValues.bank_country_code,
+        }
+      : null;
+
+    const inserted = await q(
+      `INSERT INTO bank_detail_requests (user_id, proposed_values_encrypted, prior_values_encrypted, step_up_verified_at, status)
+       VALUES ($1, $2, $3, NOW(), 'pending')
+       RETURNING request_id AS "RequestID", created_at AS "CreatedAt"`,
+      [
+        userId,
+        encryptValue(JSON.stringify(proposedValues)),
+        priorValuesForStorage ? encryptValue(JSON.stringify(priorValuesForStorage)) : null,
+      ]
+    );
+
+    // Matches the lightweight console-log audit pattern used elsewhere in
+    // this app (password-reset, account-setup, contact-info) — never logs
+    // the actual account number, only that a request happened.
+    console.log(`[bank_detail.change_requested] user_id=${userId} request_id=${inserted[0].RequestID}`);
+
+    res.json({
+      success: true,
+      data: { requestId: inserted[0].RequestID, createdAt: inserted[0].CreatedAt },
+      message: 'Your bank detail change has been submitted for review. This can take up to 2 business days.',
+    });
+  } catch (error) {
+    console.error('API error:', error);
+    if (String(error.message || '').includes('TOTP_ENCRYPTION_KEY')) {
+      return res.status(500).json({ success: false, error: 'This feature is not yet configured on this server.' });
+    }
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 
 
 app.get('/api/user/documents', async (req, res) => {
