@@ -805,11 +805,34 @@ tbody tr:hover td {
 }
 
 .kyc-drawer {
-  margin-top: 20px;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  max-width: 92vw;
   background: var(--portal-bg-secondary);
-  border: 1px solid var(--portal-border-default);
-  border-radius: var(--radius);
-  overflow: hidden;
+  border-left: 1px solid var(--portal-border-default);
+  border-radius: 0;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.5);
+  animation: drawerSlideIn 0.2s ease-out;
+}
+@keyframes drawerSlideIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Shared backdrop behind whichever drawer (KYC / bank requests / portfolio)
+   is currently open — dims and blocks the underlying table so a decision
+   can't be made while accidentally clicking something behind it, and gives
+   a click-to-close target too. */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
 }
 
 .kyc-drawer-header {

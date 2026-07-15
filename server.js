@@ -330,7 +330,21 @@ async function getUserFinancialSummary(userId) {
     [userId]
   );
 
-  return rows[0] || null;
+  const summary = rows[0] || null;
+  if (!summary) return null;
+
+  // Portfolio adjustments (C.1 item 7) — ops-entered corrections, ADDED to
+  // the real, investment-derived value above. Deliberately never replaces
+  // or hides the underlying calculation — TotalInvested and
+  // TotalDistributions above are untouched; only the final displayed
+  // PortfolioValue includes the adjustment total.
+  const adjustmentRows = await q(
+    `SELECT COALESCE(SUM(adjustment_amount), 0) AS total FROM portfolio_adjustments WHERE user_id = $1`,
+    [userId]
+  );
+  summary.PortfolioValue = Number(summary.PortfolioValue) + Number(adjustmentRows[0]?.total || 0);
+
+  return summary;
 }
 
 function generateTransferReference() {
@@ -2277,6 +2291,123 @@ app.post('/api/ops/users', async (req, res) => {
       },
       setupToken,
       message: 'Account created. Share the setup code with the investor so they can set their password from the "Forgot password" screen.',
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ── Admin: portfolio value adjustments (C.1 item 7) ──────────────────────────
+// Deliberately append-only — see database/pg/06-add-portfolio-adjustments.sql.
+// This NEVER becomes a raw `UPDATE users SET portfolio_value = X`; every
+// adjustment is its own row with a mandatory reason, added on top of the
+// real, investment-derived value (see getUserFinancialSummary above), not
+// a replacement for it. The whole point is that the number an investor
+// sees is always explainable from this ledger, not just typed in once and
+// forgotten.
+//
+// Same role-gating stopgap as bank-detail review (D.8): the spec calls for
+// finance_admin/super_admin specifically, but that tiered role model (F8)
+// doesn't exist yet. Gated behind "any authenticated admin" for now,
+// clearly flagged here to retrofit the moment F8 lands — not meant to
+// become permanent.
+
+// POST /api/ops/users/:userId/portfolio-adjustment — creates one ledger
+// entry. Never updates an existing row.
+app.post('/api/ops/users/:userId/portfolio-adjustment', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid user id' });
+    }
+
+    const { amount, reason } = req.body;
+    const numericAmount = Number(amount);
+    if (amount === undefined || amount === null || Number.isNaN(numericAmount) || numericAmount === 0) {
+      return res.status(400).json({ success: false, error: 'amount is required and must be a non-zero number' });
+    }
+    if (!reason || String(reason).trim().length === 0) {
+      return res.status(400).json({ success: false, error: 'reason is required' });
+    }
+
+    const targetUser = await q(
+      `SELECT user_id FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [targetUserId]
+    );
+    if (targetUser.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const inserted = await q(
+      `INSERT INTO portfolio_adjustments (user_id, adjustment_amount, reason, created_by)
+       VALUES ($1, $2, $3, $4)
+       RETURNING adjustment_id AS "AdjustmentID", created_at AS "CreatedAt"`,
+      [targetUserId, numericAmount, String(reason).trim(), adminUserId]
+    );
+
+    console.log(
+      `[portfolio.adjustment_created] user_id=${targetUserId} amount=${numericAmount} created_by=${adminUserId} reason="${String(reason).trim()}"`
+    );
+
+    // Return the updated live summary so the admin UI can show the new
+    // total immediately, without a second round trip.
+    const updatedSummary = await getUserFinancialSummary(targetUserId);
+
+    res.json({
+      success: true,
+      data: {
+        AdjustmentID: inserted[0].AdjustmentID,
+        CreatedAt: inserted[0].CreatedAt,
+        NewPortfolioValue: updatedSummary?.PortfolioValue ?? null,
+      },
+      message: 'Adjustment recorded.',
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/users/:userId/portfolio-adjustments — the ledger itself.
+// Without this, "audited" would just mean rows nobody ever looks at.
+app.get('/api/ops/users/:userId/portfolio-adjustments', async (req, res) => {
+  try {
+    const adminUserId = await requireAdmin(req, res);
+    if (!adminUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid user id' });
+    }
+
+    const rows = await q(
+      `SELECT
+         a.adjustment_id     AS "AdjustmentID",
+         a.adjustment_amount AS "Amount",
+         a.reason            AS "Reason",
+         a.created_at        AS "CreatedAt",
+         u.first_name        AS "CreatedByFirstName",
+         u.last_name         AS "CreatedByLastName",
+         u.email             AS "CreatedByEmail"
+       FROM portfolio_adjustments a
+       JOIN users u ON u.user_id = a.created_by
+       WHERE a.user_id = $1
+       ORDER BY a.created_at DESC`,
+      [targetUserId]
+    );
+
+    // Bundled with the history in one response, rather than a separate
+    // endpoint just for this one number — the frontend always needs both
+    // together when opening the adjustment drawer.
+    const currentSummary = await getUserFinancialSummary(targetUserId);
+
+    res.json({
+      success: true,
+      data: rows,
+      count: rows.length,
+      currentPortfolioValue: currentSummary?.PortfolioValue ?? null,
     });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });

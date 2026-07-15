@@ -328,7 +328,7 @@ function renderUsers() {
   if (filtered.length === 0) {
     els.userTableBody.innerHTML = `
       <tr>
-        <td colspan="5" class="helper">No users loaded. Check API connection or refresh after sign-in.</td>
+        <td colspan="6" class="helper">No users loaded. Check API connection or refresh after sign-in.</td>
       </tr>
     `;
     return;
@@ -346,6 +346,11 @@ function renderUsers() {
         <td>${user.country}</td>
         <td><span class="tag ${statusClass(user.status)}">${user.status}</span></td>
         <td><span class="tag">${user.role}</span></td>
+        <td>
+          <button class="ghost-btn portfolio-adjust-btn" data-userid="${user.id}" style="font-size:0.8rem;padding:4px 10px">
+            Adjust
+          </button>
+        </td>
       </tr>
     `,
     )
@@ -1306,6 +1311,138 @@ function bindBankRequestEvents() {
   document.getElementById('bankRejectBtn').addEventListener('click', () => submitBankRequestDecision('reject'));
 }
 
+// ── Portfolio value adjustments (C.1 item 7) ─────────────────────────────────
+// Deliberately append-only on the server — see server.js's comment on
+// POST /api/ops/users/:userId/portfolio-adjustment. This file only ever
+// calls that endpoint to add a new ledger row; there is no "edit" or
+// "delete" action for an existing adjustment anywhere in this UI, on purpose.
+let selectedPortfolioUserId = null;
+
+function formatCurrency(amount) {
+  const num = Number(amount || 0);
+  return num.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+}
+
+async function openPortfolioDrawer(userId) {
+  const user = state.apiUsers.find((u) => String(u.id) === String(userId));
+  if (!user) return;
+
+  selectedPortfolioUserId = userId;
+  document.getElementById('portfolioDrawerName').textContent = user.name;
+  document.getElementById('portfolioDrawerEmail').textContent = user.email;
+  document.getElementById('portfolioDrawerCurrentValue').textContent = 'Loading…';
+  document.getElementById('portfolioAdjustmentAmount').value = '';
+  document.getElementById('portfolioAdjustmentReason').value = '';
+  document.getElementById('portfolioFormError').classList.add('hidden');
+  document.getElementById('portfolioDrawer').classList.remove('hidden');
+  refreshIcons();
+
+  await loadPortfolioHistory(userId);
+}
+
+function closePortfolioDrawer() {
+  selectedPortfolioUserId = null;
+  document.getElementById('portfolioDrawer').classList.add('hidden');
+}
+
+async function loadPortfolioHistory(userId) {
+  const emptyEl = document.getElementById('portfolioHistoryEmpty');
+  const listEl = document.getElementById('portfolioHistoryList');
+
+  try {
+    const result = await apiFetch(`/api/ops/users/${userId}/portfolio-adjustments`);
+    const history = result?.data || [];
+
+    document.getElementById('portfolioDrawerCurrentValue').textContent = formatCurrency(result.currentPortfolioValue);
+
+    if (history.length === 0) {
+      emptyEl.classList.remove('hidden');
+      listEl.classList.add('hidden');
+      return;
+    }
+
+    listEl.innerHTML = history
+      .map((h) => `
+        <li class="kyc-history-item">
+          <span class="kyc-history-action ${Number(h.Amount) >= 0 ? 'approve' : 'decline'}">
+            ${Number(h.Amount) >= 0 ? '+' : ''}${formatCurrency(h.Amount)}
+          </span>
+          <span class="kyc-history-meta">by ${escapeHtml(h.CreatedByFirstName)} ${escapeHtml(h.CreatedByLastName)} (${escapeHtml(h.CreatedByEmail)}) • ${formatDate(h.CreatedAt)}</span>
+          <span class="kyc-history-meta">${escapeHtml(h.Reason)}</span>
+        </li>
+      `)
+      .join('');
+    emptyEl.classList.add('hidden');
+    listEl.classList.remove('hidden');
+  } catch (err) {
+    document.getElementById('portfolioDrawerCurrentValue').textContent = '—';
+    emptyEl.textContent = `Could not load history: ${err.message}`;
+    emptyEl.classList.remove('hidden');
+    listEl.classList.add('hidden');
+  }
+}
+
+async function submitPortfolioAdjustment() {
+  if (!selectedPortfolioUserId) return;
+
+  const amountInput = document.getElementById('portfolioAdjustmentAmount');
+  const reasonInput = document.getElementById('portfolioAdjustmentReason');
+  const errorEl = document.getElementById('portfolioFormError');
+
+  const amount = Number(amountInput.value);
+  const reason = reasonInput.value.trim();
+
+  if (!amountInput.value || Number.isNaN(amount) || amount === 0) {
+    errorEl.textContent = 'Enter a non-zero amount.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!reason) {
+    errorEl.textContent = 'A reason is required.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const submitBtn = document.getElementById('portfolioSubmitBtn');
+  submitBtn.disabled = true;
+  errorEl.classList.add('hidden');
+
+  try {
+    await apiFetch(`/api/ops/users/${selectedPortfolioUserId}/portfolio-adjustment`, {
+      method: 'POST',
+      body: JSON.stringify({ amount, reason }),
+    });
+
+    const user = state.apiUsers.find((u) => String(u.id) === String(selectedPortfolioUserId));
+    addAudit(
+      `Portfolio adjustment — ${user?.name || 'user'}`,
+      `${authSession?.user?.Email || 'Ops'} • just now`,
+      `${amount >= 0 ? '+' : ''}${formatCurrency(amount)} — ${reason}`,
+    );
+
+    amountInput.value = '';
+    reasonInput.value = '';
+    await loadPortfolioHistory(selectedPortfolioUserId);
+    renderAudit();
+    saveWorkspaceState();
+  } catch (err) {
+    errorEl.textContent = err.message || 'Could not record the adjustment. Try again.';
+    errorEl.classList.remove('hidden');
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+function bindPortfolioEvents() {
+  document.getElementById('userTableBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('.portfolio-adjust-btn');
+    if (btn) openPortfolioDrawer(btn.dataset.userid);
+  });
+
+  document.getElementById('portfolioDrawerCloseBtn').addEventListener('click', closePortfolioDrawer);
+  document.getElementById('portfolioSubmitBtn').addEventListener('click', submitPortfolioAdjustment);
+}
+
 async function refreshLiveData() {
   await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments(), loadBankRequestQueue()]);
   render();
@@ -1331,4 +1468,5 @@ authEls.logoutBtn.addEventListener('click', handleLogout);
 bindWorkspaceEvents();
 bindKycEvents();
 bindBankRequestEvents();
+bindPortfolioEvents();
 bootstrapAuth();

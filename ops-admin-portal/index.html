@@ -469,10 +469,57 @@
                         <th>Country</th>
                         <th>Status</th>
                         <th>Role</th>
+                        <th>Portfolio</th>
                       </tr>
                     </thead>
                     <tbody id="userTableBody"></tbody>
                   </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Portfolio adjustment drawer — append-only ledger, never a
+                 raw edit of the displayed value. See C.1 item 7 / D.x. -->
+            <div class="kyc-drawer hidden" id="portfolioDrawer">
+              <div class="kyc-drawer-header">
+                <div>
+                  <p class="eyebrow">Portfolio adjustment</p>
+                  <h4 id="portfolioDrawerName">—</h4>
+                  <p class="helper" id="portfolioDrawerEmail">—</p>
+                </div>
+                <button class="ghost-btn" id="portfolioDrawerCloseBtn" type="button">
+                  <i data-lucide="x" style="width:16px;height:16px"></i>
+                </button>
+              </div>
+
+              <div class="kyc-drawer-body">
+                <div class="kyc-detail-item" style="margin-bottom:16px">
+                  <span class="kyc-detail-label">Current displayed portfolio value</span>
+                  <span class="kyc-detail-value" id="portfolioDrawerCurrentValue" style="font-size:1.3rem">—</span>
+                </div>
+
+                <div class="kyc-form">
+                  <label class="kyc-form-label">
+                    Adjustment amount <span class="helper">(positive to add, negative to subtract)</span>
+                    <input class="field" id="portfolioAdjustmentAmount" type="number" step="0.01" placeholder="e.g. 5000 or -1200" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Reason <span class="helper">(required — this becomes part of the permanent record)</span>
+                    <textarea class="field textarea" id="portfolioAdjustmentReason" rows="2" placeholder="Why this adjustment is being made…"></textarea>
+                  </label>
+                  <p class="kyc-form-error hidden" id="portfolioFormError"></p>
+                  <div class="kyc-decision-btns">
+                    <button class="approve-btn" id="portfolioSubmitBtn" type="button" style="width:100%">
+                      <i data-lucide="plus-circle" style="width:15px;height:15px"></i>
+                      Record Adjustment
+                    </button>
+                  </div>
+                </div>
+
+                <div class="kyc-history">
+                  <p class="kyc-form-label" style="margin-bottom:8px">Adjustment history</p>
+                  <p class="helper" id="portfolioHistoryEmpty">No adjustments recorded for this user yet.</p>
+                  <ul class="kyc-history-list hidden" id="portfolioHistoryList"></ul>
                 </div>
               </div>
             </div>
