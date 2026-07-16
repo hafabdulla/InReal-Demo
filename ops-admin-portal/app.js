@@ -998,6 +998,15 @@ function renderKycQueue() {
   refreshIcons();
 }
 
+// Shared by all three drawers (KYC / bank requests / portfolio) — one
+// backdrop element, shown/hidden alongside whichever drawer is open.
+function showDrawerBackdrop() {
+  document.getElementById('drawerBackdrop').classList.remove('hidden');
+}
+function hideDrawerBackdrop() {
+  document.getElementById('drawerBackdrop').classList.add('hidden');
+}
+
 function openKycDrawer(userId) {
   const user = kycQueue.find((u) => String(u.UserID) === String(userId));
   if (!user) return;
@@ -1026,6 +1035,7 @@ function openKycDrawer(userId) {
   document.getElementById('kycFormError').textContent = '';
 
   document.getElementById('kycDrawer').classList.remove('hidden');
+  showDrawerBackdrop();
   refreshIcons();
 
   loadKycHistory(user.UserID);
@@ -1092,6 +1102,7 @@ function escapeAttr(value) {
 function closeKycDrawer() {
   selectedKycUser = null;
   document.getElementById('kycDrawer').classList.add('hidden');
+  hideDrawerBackdrop();
 }
 
 async function submitKycDecision(action) {
@@ -1240,12 +1251,14 @@ function openBankRequestDrawer(requestId) {
   document.getElementById('bankFormError').textContent = '';
 
   document.getElementById('bankRequestDrawer').classList.remove('hidden');
+  showDrawerBackdrop();
   refreshIcons();
 }
 
 function closeBankRequestDrawer() {
   selectedBankRequest = null;
   document.getElementById('bankRequestDrawer').classList.add('hidden');
+  hideDrawerBackdrop();
 }
 
 async function submitBankRequestDecision(action) {
@@ -1335,6 +1348,7 @@ async function openPortfolioDrawer(userId) {
   document.getElementById('portfolioAdjustmentReason').value = '';
   document.getElementById('portfolioFormError').classList.add('hidden');
   document.getElementById('portfolioDrawer').classList.remove('hidden');
+  showDrawerBackdrop();
   refreshIcons();
 
   await loadPortfolioHistory(userId);
@@ -1343,6 +1357,7 @@ async function openPortfolioDrawer(userId) {
 function closePortfolioDrawer() {
   selectedPortfolioUserId = null;
   document.getElementById('portfolioDrawer').classList.add('hidden');
+  hideDrawerBackdrop();
 }
 
 async function loadPortfolioHistory(userId) {
@@ -1469,4 +1484,13 @@ bindWorkspaceEvents();
 bindKycEvents();
 bindBankRequestEvents();
 bindPortfolioEvents();
+
+// Backdrop click closes whichever of the three drawers is currently open —
+// harmless to call close on ones that aren't open, they're already hidden.
+document.getElementById('drawerBackdrop').addEventListener('click', () => {
+  closeKycDrawer();
+  closeBankRequestDrawer();
+  closePortfolioDrawer();
+});
+
 bootstrapAuth();

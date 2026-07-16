@@ -666,6 +666,11 @@
       </div>
     </div>
 
+    <!-- Shared backdrop for whichever drawer (KYC / bank requests / portfolio)
+         is currently open. Only one drawer is ever open at a time, so one
+         shared backdrop is enough rather than one per drawer. -->
+    <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>
+
     <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
     <script src="./config.js"></script>
     <script src="./app.js"></script>
