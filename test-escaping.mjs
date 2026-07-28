@@ -82,5 +82,87 @@ check(
   2 // only the two quotes that legitimately open/close data-doc-name
 );
 
+// ---------------------------------------------------------------------------
+// Regression guard for the CALL SITES, not just the helpers.
+//
+// Everything above proves escapeHtml/escapeAttr behave correctly. They always
+// did — and the portal still shipped three unescaped render sites anyway (the
+// Users table, the Intents table, and the KYC queue), because nothing checked
+// that the render functions actually CALL them. That gap produced a real
+// stored-XSS on 28 July 2026, reachable by anyone via public signup: a crafted
+// first name executed in an admin's session the moment they opened Users or
+// KYC Review, where the admin bearer token sits in localStorage.
+//
+// Testing the helper and not the usage is what let that survive an earlier
+// fix. So this section reads the real source and fails if any template literal
+// that builds HTML interpolates server data without running it through an
+// escaper. It is deliberately source-level: it cannot be satisfied by a
+// passing unit test on a function nobody calls.
+
+const htmlSource = readFileSync("./ops-admin-portal/app.js", "utf8");
+
+// Identifiers whose values originate server-side and can therefore carry
+// whatever an attacker typed into a signup form.
+const TAINTED_ROOT = /^(user|intent|doc|row|req|r|h|u)\b/;
+
+// Wrappers that make an interpolation safe: real escapers, plus formatters
+// that can only ever emit digits/dates, plus the internal enum-to-CSS-class
+// helpers which never see user input.
+const SAFE_WRAPPER =
+  /\b(escapeHtml|escapeAttr|formatDate|formatMoney|formatCurrency|statusClass|tierClass|Number|encodeURIComponent)\s*\(/;
+
+// Pull out every template literal in the file.
+const templates = htmlSource.match(/`(?:[^`\\]|\\[\s\S])*`/g) || [];
+
+// Only care about the ones that actually build markup.
+const htmlTemplates = templates.filter((t) => /<\s*[a-zA-Z]/.test(t));
+
+function extractInterpolations(tpl) {
+  const out = [];
+  for (let i = 0; i < tpl.length - 1; i++) {
+    if (tpl[i] === "$" && tpl[i + 1] === "{") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < tpl.length && depth > 0) {
+        if (tpl[j] === "{") depth++;
+        else if (tpl[j] === "}") depth--;
+        if (depth > 0) j++;
+      }
+      out.push(tpl.slice(i + 2, j));
+      i = j;
+    }
+  }
+  return out;
+}
+
+const unescaped = [];
+for (const tpl of htmlTemplates) {
+  for (const expr of extractInterpolations(tpl)) {
+    const trimmed = expr.trim();
+    if (!TAINTED_ROOT.test(trimmed)) continue;   // not server data
+    if (SAFE_WRAPPER.test(trimmed)) continue;    // already wrapped
+    unescaped.push(trimmed);
+  }
+}
+
+check(
+  "no HTML template interpolates unescaped server data",
+  unescaped.length === 0 ? "none" : unescaped.join(" | "),
+  "none"
+);
+
+// Sanity-check that the guard above can actually fail — otherwise a broken
+// detector would silently "pass" forever, which is the same class of mistake
+// as testing a helper nobody calls.
+const decoyUnescaped = extractInterpolations("`<td>${user.name}</td>`").filter(
+  (e) => TAINTED_ROOT.test(e.trim()) && !SAFE_WRAPPER.test(e.trim())
+);
+check("guard detects a known-bad interpolation (self-test)", decoyUnescaped.length, 1);
+
+const decoySafe = extractInterpolations("`<td>${escapeHtml(user.name)}</td>`").filter(
+  (e) => TAINTED_ROOT.test(e.trim()) && !SAFE_WRAPPER.test(e.trim())
+);
+check("guard accepts a correctly escaped interpolation (self-test)", decoySafe.length, 0);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

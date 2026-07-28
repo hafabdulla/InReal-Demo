@@ -339,15 +339,15 @@ function renderUsers() {
       (user) => `
       <tr>
         <td>
-          <strong>${user.name}</strong><br />
-          <span class="helper">${user.notes}</span>
+          <strong>${escapeHtml(user.name)}</strong><br />
+          <span class="helper">${escapeHtml(user.notes)}</span>
         </td>
-        <td>${user.email}</td>
-        <td>${user.country}</td>
-        <td><span class="tag ${statusClass(user.status)}">${user.status}</span></td>
-        <td><span class="tag">${user.role}</span></td>
+        <td>${escapeHtml(user.email)}</td>
+        <td>${escapeHtml(user.country)}</td>
+        <td><span class="tag ${statusClass(user.status)}">${escapeHtml(user.status)}</span></td>
+        <td><span class="tag">${escapeHtml(user.role)}</span></td>
         <td>
-          <button class="ghost-btn portfolio-adjust-btn" data-userid="${user.id}" style="font-size:0.8rem;padding:4px 10px">
+          <button class="ghost-btn portfolio-adjust-btn" data-userid="${escapeAttr(user.id)}" style="font-size:0.8rem;padding:4px 10px">
             Adjust
           </button>
         </td>
@@ -373,12 +373,12 @@ function renderIntents() {
     .map(
       (intent) => `
       <tr>
-        <td><strong>${intent.referenceCode || '—'}</strong></td>
-        <td>${intent.user?.name || '—'}<br /><span class="helper">${intent.user?.email || ''}</span></td>
-        <td>${intent.propertyName || '—'}</td>
+        <td><strong>${escapeHtml(intent.referenceCode || '—')}</strong></td>
+        <td>${escapeHtml(intent.user?.name || '—')}<br /><span class="helper">${escapeHtml(intent.user?.email || '')}</span></td>
+        <td>${escapeHtml(intent.propertyName || '—')}</td>
         <td>${formatMoney(intent.amount, intent.currency)}</td>
-        <td><span class="tag">${intent.workflowStatus || '—'}</span></td>
-        <td>${intent.proofStatus || '—'}</td>
+        <td><span class="tag">${escapeHtml(intent.workflowStatus || '—')}</span></td>
+        <td>${escapeHtml(intent.proofStatus || '—')}</td>
       </tr>
     `,
     )
@@ -700,7 +700,7 @@ function bindWorkspaceEvents() {
         els.docUserResults.innerHTML = matches.length
           ? matches
               .map(
-                (u) => `<button type="button" data-user-id="${u.UserID}">${escapeHtml([u.FirstName, u.LastName].filter(Boolean).join(' '))} — ${escapeHtml(u.Email)}</button>`,
+                (u) => `<button type="button" data-user-id="${escapeAttr(u.UserID)}">${escapeHtml([u.FirstName, u.LastName].filter(Boolean).join(' '))} — ${escapeHtml(u.Email)}</button>`,
               )
               .join('')
           : `<span class="helper">No matching users.</span>`;
@@ -977,17 +977,17 @@ function renderKycQueue() {
   tbody.innerHTML = kycQueue.map((user) => {
     const risk = getCountryRisk(user.CountryCode);
     return `
-      <tr class="kyc-row" data-userid="${user.UserID}">
+      <tr class="kyc-row" data-userid="${escapeAttr(user.UserID)}">
         <td>
-          <strong>${user.FirstName} ${user.LastName}</strong><br>
-          <span class="helper">${user.Email}</span>
+          <strong>${escapeHtml(user.FirstName)} ${escapeHtml(user.LastName)}</strong><br>
+          <span class="helper">${escapeHtml(user.Email)}</span>
         </td>
-        <td>${user.CountryCode || '—'}</td>
-        <td><span class="${tierClass(risk.tier)}">${risk.tier}</span></td>
-        <td><span class="helper">${risk.dd}</span></td>
+        <td>${escapeHtml(user.CountryCode || '—')}</td>
+        <td><span class="${tierClass(risk.tier)}">${escapeHtml(risk.tier)}</span></td>
+        <td><span class="helper">${escapeHtml(risk.dd)}</span></td>
         <td>${formatDate(user.CreatedAt)}</td>
         <td>
-          <button class="ghost-btn kyc-review-btn" data-userid="${user.UserID}" style="font-size:0.8rem;padding:4px 10px">
+          <button class="ghost-btn kyc-review-btn" data-userid="${escapeAttr(user.UserID)}" style="font-size:0.8rem;padding:4px 10px">
             Review
           </button>
         </td>
@@ -1198,7 +1198,7 @@ function renderBankRequestQueue() {
   }
 
   tbody.innerHTML = bankRequestQueue.map((r) => `
-      <tr class="kyc-row" data-requestid="${r.RequestID}">
+      <tr class="kyc-row" data-requestid="${escapeAttr(r.RequestID)}">
         <td>
           <strong>${escapeHtml(r.FirstName)} ${escapeHtml(r.LastName)}</strong><br>
           <span class="helper">${escapeHtml(r.Email)}</span>
@@ -1206,7 +1206,7 @@ function renderBankRequestQueue() {
         <td>${escapeHtml(r.ProposedValues?.bankName || '—')}</td>
         <td>${formatDate(r.CreatedAt)}</td>
         <td>
-          <button class="ghost-btn bank-review-btn" data-requestid="${r.RequestID}" style="font-size:0.8rem;padding:4px 10px">
+          <button class="ghost-btn bank-review-btn" data-requestid="${escapeAttr(r.RequestID)}" style="font-size:0.8rem;padding:4px 10px">
             Review
           </button>
         </td>
