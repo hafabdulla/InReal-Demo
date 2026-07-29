@@ -199,6 +199,60 @@ const generalLimiter = rateLimit({
 
 app.use('/api', generalLimiter);
 
+// ── Declined-account lockout ─────────────────────────────────────────────────
+// Product owner decision, 28 July 2026: a declined account is locked, not left
+// dormant. It authenticates only far enough to show the decline notice, with no
+// further navigation.
+//
+// This is enforced HERE, server-side, rather than by hiding navigation in the
+// investor site. A declined user still holds a perfectly valid, unexpired JWT —
+// nothing about being declined invalidates it — so without this middleware that
+// token would keep opening /api/user/documents, portfolio data and everything
+// else, no matter what the UI chose to render. Hidden navigation is not an
+// access control.
+//
+// The allow-list is deliberately tiny: only what the decline screen itself
+// needs. /api/auth/me supplies the KYC status and decline reason the notice is
+// built from; login must keep working so they can reach that notice at all;
+// logout must keep working so they can leave.
+const DECLINED_ACCOUNT_ALLOWED_PATHS = new Set([
+  '/api/auth/me',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/health',
+]);
+
+app.use('/api', async (req, res, next) => {
+  try {
+    // req.path here is relative to the '/api' mount point, so rebuild the full
+    // path before comparing against the allow-list above.
+    const fullPath = `/api${req.path}`;
+    if (DECLINED_ACCOUNT_ALLOWED_PATHS.has(fullPath)) return next();
+
+    // Unauthenticated requests are none of this middleware's business — they
+    // are rejected (or not) by each route's own auth check. Skipping them also
+    // keeps the extra query off every public request.
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) return next();
+
+    const rows = await q('SELECT kyc_status FROM users WHERE user_id = $1', [userId]);
+    if (rows[0]?.kyc_status === 'Declined') {
+      return res.status(403).json({
+        success: false,
+        error: 'This account is closed. Please see the notice on your account for details.',
+        code: 'ACCOUNT_DECLINED',
+      });
+    }
+    return next();
+  } catch (error) {
+    // A failure to establish whether the account is declined must not fall
+    // through as "not declined" — that would turn a database blip into an
+    // access-control bypass. Fail closed.
+    console.error('Declined-account check failed:', error);
+    return res.status(503).json({ success: false, error: 'Service temporarily unavailable' });
+  }
+});
+
 // Password-reset-request limiter — separate from the login lockout above.
 // There's no "account" to lock yet at this point (we haven't confirmed the
 // email belongs to anyone), so this limits by IP: 5 reset requests per
@@ -416,6 +470,12 @@ async function verifyLoginCredentials(email, password) {
       whatsapp_number AS "WhatsappNumber",
       preferred_contact_channel AS "PreferredContactChannel",
       country_code AS "CountryCode",
+      country_of_residence AS "CountryOfResidence",
+      nationalities AS "Nationalities",
+      us_person AS "UsPerson",
+      profile_completed_at AS "ProfileCompletedAt",
+      kyc_decline_reason_type AS "KycDeclineReasonType",
+      kyc_declined_at AS "KycDeclinedAt",
       accreditation_status AS "AccreditationStatus",
       kyc_status AS "KYCStatus",
       identity_verified AS "IdentityVerified",
@@ -631,11 +691,18 @@ async function ensureUserDocumentsTable() {
       mime_type            TEXT NOT NULL,
       uploaded_by_admin_id INTEGER NOT NULL REFERENCES users(user_id),
       is_superseded        BOOLEAN NOT NULL DEFAULT false,
-      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      -- NULL = a general document (not tied to one property). See
+      -- database/pg/09-add-document-property-link.sql for the full reasoning.
+      -- Declared here as well as in that migration so a FRESH database gets the
+      -- column too — this CREATE TABLE only runs when the table doesn't exist,
+      -- so a new install would otherwise never receive it.
+      property_id          BIGINT REFERENCES properties(property_id)
     )
   `);
   await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_user_id ON user_documents(user_id)`);
   await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_created_at ON user_documents(created_at DESC)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_user_property ON user_documents(user_id, property_id)`);
 }
 
 async function bootstrapAdminUsers() {
@@ -1270,6 +1337,12 @@ app.get('/api/auth/me', async (req, res) => {
         whatsapp_number AS "WhatsappNumber",
         preferred_contact_channel AS "PreferredContactChannel",
         country_code AS "CountryCode",
+        country_of_residence AS "CountryOfResidence",
+        nationalities AS "Nationalities",
+        us_person AS "UsPerson",
+        profile_completed_at AS "ProfileCompletedAt",
+        kyc_decline_reason_type AS "KycDeclineReasonType",
+        kyc_declined_at AS "KycDeclinedAt",
         accreditation_status AS "AccreditationStatus",
         kyc_status AS "KYCStatus",
         identity_verified AS "IdentityVerified",
@@ -1303,12 +1376,26 @@ app.get('/api/auth/me', async (req, res) => {
 });
 
 // Hard jurisdiction exclusions per the Compliance Owner's KYC/AML policy (Appendix A.14).
-// This is a self-declared, preliminary check at signup — the same role Step 2 of the
-// manual onboarding workflow plays ("decision to proceed or decline"). It is NOT a
-// substitute for the full citizenship/residency verification that happens later via
-// documents (Section 5) — a user can misreport their country here, same as the manual
-// process already accounts for. The point is to stop the obvious cases automatically
-// rather than waiting for a human to catch them during document review.
+//
+// WHERE THIS IS ENFORCED — changed 28 July 2026 on the product owner's decision.
+// This list used to hard-block signup with a 403. It no longer does: anyone can
+// create an account from any country, and the jurisdiction decision is made by an
+// admin at KYC review instead. The control was MOVED, not removed — see
+// assessJurisdiction() below and the approval guard in the KYC decision endpoint,
+// which refuses to approve a prohibited jurisdiction at all.
+//
+// The reasoning for moving it: the country checked at signup was previously
+// *inferred* from the phone dial code the user picked, so it screened a guess
+// rather than a declaration. Deciding at review time means screening the
+// nationality and country of residence the investor actually declared, which is
+// both better AML data and what Appendix A.16 (dual nationality — highest risk
+// tier across all held nationalities) requires. It also gives Appendix A.15 the
+// "unlisted jurisdiction routes to manual review" behaviour it always wanted,
+// which a binary allow/block at signup could never express.
+//
+// A self-declared country is still not a substitute for the full
+// citizenship/residency verification done via documents (Section 5) — a user can
+// misreport, exactly as the manual process already accounts for.
 const EXCLUDED_COUNTRY_CODES = new Set([
   'US', // United States — policy exclusion (FATCA / Reg S)
   'RU', // Russia — comprehensive UK/EU/US sanctions
@@ -1335,6 +1422,125 @@ const EXCLUDED_COUNTRY_CODES = new Set([
   'CN', // China (PRC) — Phase 1 exclusion (SAFE FX restrictions, sanctions complexity)
 ]);
 
+// FATF grey-list / elevated-risk jurisdictions requiring Enhanced Due Diligence
+// (Compliance Manual Appendix A). Distinct from the list above: EDD countries
+// CAN be onboarded, with extra documentation. Prohibited ones cannot, at all.
+// Kept server-side deliberately — the admin portal used to hold the only copy
+// of this, which meant the risk tier shown to a reviewer was computed entirely
+// in the browser and could not be trusted for an actual access decision.
+const EDD_COUNTRY_CODES = new Set([
+  'LB','TR','AL','BH','BI','CM','HT','KH','KG','LA','MA','MZ','NI','NG',
+  'PK','PA','PH','SN','TZ','TT','UG','VN','ZA','KE',
+]);
+
+// The three kinds of decline. Only 'jurisdiction' is ever disclosed to the
+// investor; the other two produce the PRD's neutral message (REQ-USR-13)
+// because naming them would tip off the subject of a screening finding.
+// 'suspicion' additionally has no automatic route back — a further application
+// needs a founders' resolution first.
+const DECLINE_REASON_TYPES = ['jurisdiction', 'compliance', 'suspicion'];
+
+// Medium-risk jurisdictions (Compliance Manual Appendix A): standard due
+// diligence plus enhanced source-of-funds evidence. Moved here from the admin
+// portal for the same reason as the EDD list — one authoritative copy, so the
+// tier a reviewer sees is by construction the tier the approval endpoint
+// applies, rather than two lists that can quietly drift apart.
+const MEDIUM_COUNTRY_CODES = new Set([
+  'DZ','AD','AO','AR','AM','AZ','BD','BJ','BT','BO','BA','BN','BG',
+  'CO','EG','GH','GE','GT','ID','JO','KZ','MV','MX','MD','MN','ME',
+  'NA','NP','MK','PE','SM','RS','LK','TH','TN','UA','UZ',
+]);
+
+// Highest-risk-wins assessment across every jurisdiction an investor is
+// connected to — their declared nationalities (which may be several, per
+// Appendix A.16) plus their country of residence plus the country recorded at
+// signup. Appendix A.16 is explicit that where multiple nationalities are held,
+// the HIGHEST risk tier among them applies; this is what implements that.
+//
+// Tiers, worst first:
+//   Prohibited — an excluded jurisdiction. Cannot be approved. Hard stop.
+//   EDD        — elevated risk. Approvable with enhanced due diligence.
+//   Unlisted   — country not on any list. Appendix A.15 requires this to route
+//                to manual review rather than silently pass as low-risk, which
+//                is exactly what used to happen.
+//   Standard   — normal due diligence.
+function assessJurisdiction({ countryCode, countryOfResidence, nationalities }) {
+  const codes = [
+    countryCode,
+    countryOfResidence,
+    ...(Array.isArray(nationalities) ? nationalities : []),
+  ]
+    .filter(Boolean)
+    .map((c) => String(c).trim().toUpperCase())
+    .filter((c) => /^[A-Z]{2}$/.test(c));
+
+  const uniqueCodes = [...new Set(codes)];
+
+  const prohibited = uniqueCodes.filter((c) => EXCLUDED_COUNTRY_CODES.has(c));
+  if (prohibited.length > 0) {
+    return {
+      tier: 'Prohibited',
+      canApprove: false,
+      countries: uniqueCodes,
+      triggeredBy: prohibited,
+      reason: `Prohibited jurisdiction(s): ${prohibited.join(', ')}. Compliance Manual Appendix A excludes these outright.`,
+    };
+  }
+
+  const edd = uniqueCodes.filter((c) => EDD_COUNTRY_CODES.has(c));
+  if (edd.length > 0) {
+    return {
+      tier: 'EDD',
+      canApprove: true,
+      countries: uniqueCodes,
+      triggeredBy: edd,
+      reason: `Enhanced Due Diligence required for: ${edd.join(', ')}.`,
+    };
+  }
+
+  const medium = uniqueCodes.filter((c) => MEDIUM_COUNTRY_CODES.has(c));
+  if (medium.length > 0) {
+    return {
+      tier: 'Medium',
+      canApprove: true,
+      countries: uniqueCodes,
+      triggeredBy: medium,
+      reason: `Standard due diligence plus enhanced source-of-funds evidence for: ${medium.join(', ')}.`,
+    };
+  }
+
+  if (uniqueCodes.length === 0) {
+    return {
+      tier: 'Unlisted',
+      canApprove: true,
+      countries: [],
+      triggeredBy: [],
+      reason: 'No jurisdiction declared yet — manual review required before approval.',
+    };
+  }
+
+  // KNOWN GAP — Appendix A.15 (catch-all for unlisted jurisdictions).
+  // The manual requires that a country appearing on NO tier of the risk matrix
+  // routes to manual compliance review rather than passing as low-risk. That is
+  // not implemented here, because doing it properly needs an authoritative list
+  // of which countries ARE explicitly assessed as standard-risk, and no such
+  // list exists in the repo or the manual excerpt this code was written against.
+  // Inventing one would mean fabricating compliance data.
+  //
+  // Consequence today: a country on none of the three lists falls through to
+  // 'Standard' below. That is the pre-existing behaviour, not a regression
+  // introduced by moving the check to review time — but it IS still the A.15
+  // gap already recorded in the tracker (C.3), and it needs the compliance
+  // owner to supply the standard-risk list before it can be closed.
+  return {
+    tier: 'Standard',
+    canApprove: true,
+    countries: uniqueCodes,
+    triggeredBy: [],
+    reason: 'Standard due diligence.',
+  };
+}
+
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { firstName, lastName, phoneCode, phone, countryCode, password } = req.body;
@@ -1347,13 +1553,23 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(400).json({ success: false, error: 'All fields are required' });
     }
 
+    // Normalized to uppercase before STORAGE, not just before comparison.
+    // Now that jurisdiction is judged at KYC review rather than here, the
+    // stored value is the thing that gets screened later — so letting both
+    // "ru" and "RU" persist would hand someone a trivial casing bypass of the
+    // review-time check. One canonical form only.
     const normalizedCountryCode = String(countryCode).trim().toUpperCase();
-    if (EXCLUDED_COUNTRY_CODES.has(normalizedCountryCode)) {
-      return res.status(403).json({
-        success: false,
-        error: 'InReal is unable to accept participants from this jurisdiction at this time.',
-      });
-    }
+
+    // Signup deliberately does NOT reject excluded jurisdictions any more
+    // (product owner decision, 28 July 2026). Anyone may create an account;
+    // the jurisdiction call is made by an admin at KYC review, and the
+    // approval endpoint hard-refuses prohibited jurisdictions there.
+    //
+    // This is only safe because a self-signed-up account lands as
+    // kyc_status='Pending' and therefore MUST pass through that review before
+    // it can do anything. Note the contrast with POST /api/ops/users, which
+    // creates accounts already 'Approved' and so still keeps its own hard
+    // block — there is no later review on that path to catch anything.
 
     // LOWER() on the column, not just a lowercased input, so this still
     // catches a match against any pre-existing row that was stored with
@@ -1380,7 +1596,7 @@ app.post('/api/auth/signup', async (req, res) => {
         0, 0, 0,
         'user', true, false, NOW(), NOW()
       ) RETURNING user_id AS "UserID"`,
-      [email, firstName, lastName, countryCode, fullPhoneNumber, hash, salt]
+      [email, firstName, lastName, normalizedCountryCode, fullPhoneNumber, hash, salt]
     );
 
     const newUserId = inserted[0].UserID;
@@ -1861,10 +2077,13 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
          last_name            AS "LastName",
          email                AS "Email",
          country_code         AS "CountryCode",
+         country_of_residence AS "CountryOfResidence",
+         nationalities        AS "Nationalities",
          phone_number         AS "PhoneNumber",
          kyc_status           AS "KYCStatus",
          accreditation_status AS "AccreditationStatus",
          identity_verified    AS "IdentityVerified",
+         profile_completed_at AS "ProfileCompletedAt",
          created_at           AS "CreatedAt"
        FROM users
        WHERE kyc_status = 'Pending'
@@ -1873,7 +2092,22 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
        ORDER BY created_at ASC`
     );
 
-    return res.json({ success: true, data: rows, count: rows.length });
+    // Risk tier is computed HERE, not in the browser. The admin portal used to
+    // hold the only copy of the country lists and derive the tier client-side,
+    // which was fine while it was merely decorative — but now that a
+    // Prohibited tier actually blocks approval, the reviewer must be shown the
+    // same verdict the approval endpoint will enforce. Deriving it in two
+    // places invites the two from drifting apart.
+    const withJurisdiction = rows.map((row) => ({
+      ...row,
+      Jurisdiction: assessJurisdiction({
+        countryCode: row.CountryCode,
+        countryOfResidence: row.CountryOfResidence,
+        nationalities: row.Nationalities,
+      }),
+    }));
+
+    return res.json({ success: true, data: withJurisdiction, count: withJurisdiction.length });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
@@ -1889,13 +2123,37 @@ app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid userId' });
     }
 
-    const { action, reviewerName, notes = '' } = req.body;
+    const { action, reviewerName, notes = '', declineReasonType } = req.body;
 
     if (!['approve', 'decline'].includes(action)) {
       return res.status(400).json({ success: false, error: "action must be 'approve' or 'decline'" });
     }
     if (!reviewerName || String(reviewerName).trim().length === 0) {
       return res.status(400).json({ success: false, error: 'reviewerName is required' });
+    }
+
+    // A decline must say WHICH KIND it is, because the two kinds behave
+    // differently for the investor (product owner decision, 28 July 2026):
+    // 'jurisdiction' is disclosed to them plainly, while 'compliance' and
+    // 'suspicion' only ever produce the PRD's neutral message because naming
+    // them would be tipping off.
+    //
+    // Required rather than defaulted, deliberately. A default would eventually
+    // mislabel a sanctions hit as a jurisdiction decline and disclose a
+    // screening finding to its subject — the failure mode here is regulatory,
+    // not cosmetic, so the reviewer has to choose.
+    if (action === 'decline') {
+      if (!DECLINE_REASON_TYPES.includes(declineReasonType)) {
+        return res.status(400).json({
+          success: false,
+          error: `declineReasonType is required for a decline and must be one of: ${DECLINE_REASON_TYPES.join(', ')}`,
+        });
+      }
+    } else if (declineReasonType !== undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'declineReasonType only applies to a decline',
+      });
     }
 
     // Confirm the target user exists and is actually in Pending status.
@@ -1925,7 +2183,8 @@ app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
       // Re-check status inside the transaction (not just the earlier read) to close the
       // race where two admins submit a decision for the same user at nearly the same time.
       const locked = await tx(
-        `SELECT user_id, kyc_status FROM users WHERE user_id = $1 FOR UPDATE`,
+        `SELECT user_id, kyc_status, country_code, country_of_residence, nationalities
+         FROM users WHERE user_id = $1 FOR UPDATE`,
         [targetUserId]
       );
       if (locked.length === 0) {
@@ -1938,17 +2197,53 @@ app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
         );
       }
 
+      // Prohibited jurisdictions can never be APPROVED. This is the control
+      // that replaced the old signup-time 403 (removed 28 July 2026), so it is
+      // now the only thing standing between a sanctioned jurisdiction and an
+      // approved account — it lives here, server-side and inside the same
+      // transaction as the status write, not in the admin UI. The portal also
+      // disables the approve button, but a disabled button is a convenience,
+      // never a control: this check is what actually enforces it.
+      //
+      // Declining is always permitted — the whole point is that these accounts
+      // can be resolved, just never approved.
+      if (isApprove) {
+        const jurisdiction = assessJurisdiction({
+          countryCode: locked[0].country_code,
+          countryOfResidence: locked[0].country_of_residence,
+          nationalities: locked[0].nationalities,
+        });
+        if (!jurisdiction.canApprove) {
+          throw Object.assign(
+            new Error(
+              `Cannot approve: ${jurisdiction.reason} This account may only be declined.`
+            ),
+            { httpStatus: 422 }
+          );
+        }
+      }
+
+      // kyc_declined_at is the anchor the retention tier is measured from —
+      // someone declined before submitting any documents has no "end of the
+      // Participant relationship" for the Manual's 7-year clock to run from,
+      // so this decision date is the only clean start point that cohort has.
+      // Cleared on approval so a previously-declined-then-approved account
+      // doesn't carry a stale decline date or reason.
       await tx(
         `UPDATE users SET
-           kyc_status           = $1,
-           accreditation_status = $2,
-           identity_verified    = $3,
-           updated_at           = NOW()
-         WHERE user_id = $4`,
+           kyc_status              = $1,
+           accreditation_status    = $2,
+           identity_verified       = $3,
+           kyc_decline_reason_type = $4,
+           kyc_declined_at         = $5,
+           updated_at              = NOW()
+         WHERE user_id = $6`,
         [
           isApprove ? 'Approved' : 'Declined',
           isApprove ? 'Verified' : 'Unverified',
           isApprove,
+          isApprove ? null : declineReasonType,
+          isApprove ? null : new Date(),
           targetUserId,
         ]
       );
@@ -2229,6 +2524,16 @@ app.post('/api/ops/users', async (req, res) => {
 
     const normalizedEmail = String(email).trim().toLowerCase();
     const normalizedCountryCode = String(countryCode).trim().toUpperCase();
+
+    // This block STAYS, even though the equivalent one was removed from public
+    // signup on 28 July 2026. The two paths are not symmetrical: a self-signed-up
+    // account is created 'Pending' and must pass KYC review, where the
+    // jurisdiction decision now happens. An admin-created account is inserted
+    // already 'Approved' / identity_verified=true (see the INSERT below), because
+    // the premise is that manual KYC was completed outside the app first — so it
+    // never enters the review queue, and there is no later checkpoint that would
+    // catch a prohibited jurisdiction. Removing this would mean an excluded
+    // jurisdiction could be onboarded and approved with no screening whatsoever.
     if (EXCLUDED_COUNTRY_CODES.has(normalizedCountryCode)) {
       return res.status(403).json({
         success: false,
@@ -2471,11 +2776,27 @@ app.post('/api/ops/documents', async (req, res) => {
     const adminUserId = await requireAdmin(req, res);
     if (!adminUserId) return;
 
-    const { userId, category, label, fileBase64, fileName, mimeType = 'application/octet-stream' } = req.body;
+    const { userId, category, label, fileBase64, fileName, propertyId, mimeType = 'application/octet-stream' } = req.body;
 
     const targetUserId = Number(userId);
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
       return res.status(400).json({ success: false, error: 'A valid userId is required' });
+    }
+
+    // Optional property link (PO requirement #3). Absent/null/empty means a
+    // general document — a real category, not a missing value.
+    //
+    // Validated against the real properties table below for the same reason the
+    // user reference is: a client-supplied id that is written straight into a
+    // row is a client-controlled foreign key. The database FK would catch a
+    // bogus id too, but as a 500 rather than a clear 404, and after the file has
+    // already been uploaded to storage.
+    let targetPropertyId = null;
+    if (propertyId !== undefined && propertyId !== null && propertyId !== '') {
+      targetPropertyId = Number(propertyId);
+      if (!Number.isInteger(targetPropertyId) || targetPropertyId <= 0) {
+        return res.status(400).json({ success: false, error: 'propertyId must be a positive integer' });
+      }
     }
     if (!DOCUMENT_CATEGORIES.has(category)) {
       return res.status(400).json({ success: false, error: "category must be 'KYC', 'Finance', or 'Property'" });
@@ -2494,6 +2815,18 @@ app.post('/api/ops/documents', async (req, res) => {
     );
     if (targetUsers.length === 0) {
       return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Checked before the file is uploaded, not after, so a bad property id
+    // fails fast without leaving an orphaned object in storage.
+    if (targetPropertyId !== null) {
+      const targetProperties = await q(
+        `SELECT property_id FROM properties WHERE property_id = $1`,
+        [targetPropertyId]
+      );
+      if (targetProperties.length === 0) {
+        return res.status(404).json({ success: false, error: 'Property not found' });
+      }
     }
 
     // Same magic-byte validation as every other upload path in this app —
@@ -2529,10 +2862,10 @@ app.post('/api/ops/documents', async (req, res) => {
 
     const inserted = await q(
       `INSERT INTO user_documents (
-         user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id, property_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING document_id AS "DocumentID", created_at AS "CreatedAt"`,
-      [targetUserId, category, String(label).trim(), storagePath, correctedFileName, mimeType, adminUserId]
+      [targetUserId, category, String(label).trim(), storagePath, correctedFileName, mimeType, adminUserId, targetPropertyId]
     );
 
     res.status(201).json({
@@ -2540,6 +2873,7 @@ app.post('/api/ops/documents', async (req, res) => {
       data: {
         documentId: inserted[0].DocumentID,
         userId: targetUserId,
+        propertyId: targetPropertyId,
         category,
         label: String(label).trim(),
         originalFileName: correctedFileName,
@@ -2580,10 +2914,13 @@ app.get('/api/ops/documents', async (req, res) => {
          d.mime_type            AS "MimeType",
          d.is_superseded        AS "IsSuperseded",
          d.created_at           AS "CreatedAt",
+         d.property_id          AS "PropertyID",
+         p.property_name        AS "PropertyName",
          a.email                AS "UploadedByEmail"
        FROM user_documents d
        JOIN users u ON u.user_id = d.user_id
        JOIN users a ON a.user_id = d.uploaded_by_admin_id
+       LEFT JOIN properties p ON p.property_id = d.property_id
        ${whereClause}
        ORDER BY d.created_at DESC
        LIMIT 200`,
@@ -2780,6 +3117,202 @@ app.put('/api/user/profile/contact', async (req, res) => {
   }
 });
 
+// ── Investor: declared identity — nationality + country of residence ─────────
+// New PO requirement #1 (28 July 2026): profile details the investor completes
+// AFTER signup, rather than being guessed from their phone dial code.
+//
+// These are NOT contact fields and deliberately do not live on the contact
+// endpoint above. They feed the jurisdiction assessment an admin uses to
+// approve or refuse KYC (see assessJurisdiction), so they belong to a
+// different risk tier entirely — mixing them into the contact allow-list would
+// quietly collapse the tiering REQ-USR-14 sets up.
+//
+// LOCKED ONCE KYC IS APPROVED — the product owner's explicit decision. Freely
+// editable while an application is Pending; afterwards a change needs support,
+// exactly as legal name does today. This is the control that prevents the
+// obvious bypass now that the jurisdiction check happens at review rather than
+// at signup: sign up declaring an acceptable country, get approved, then
+// quietly switch nationality to a prohibited one afterwards. Without this
+// lock, moving the check to review time would have opened that door.
+//
+// `nationalities` is an array because Appendix A.16 requires every nationality
+// held to be captured for dual/multi-nationals, with the highest risk tier
+// among them applying.
+app.put('/api/user/profile/identity', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    // Same allow-list-and-reject approach as the contact endpoint: an
+    // unexpected field is a 400, never silently dropped, so a client bug that
+    // thinks it changed something can't go unnoticed.
+    const allowedFields = ['nationalities', 'countryOfResidence', 'usPerson'];
+    const bodyKeys = Object.keys(req.body || {});
+    const unexpectedKeys = bodyKeys.filter((key) => !allowedFields.includes(key));
+    if (unexpectedKeys.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Unexpected field(s): ${unexpectedKeys.join(', ')}. Only ${allowedFields.join(', ')} can be updated here.`,
+      });
+    }
+    if (bodyKeys.length === 0) {
+      return res.status(400).json({ success: false, error: 'At least one field is required' });
+    }
+
+    const current = await q(
+      `SELECT kyc_status, country_of_residence, nationalities, profile_completed_at, us_person
+       FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
+    );
+    if (current.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // The lock. Checked server-side against the authenticated session's own
+    // row — the frontend also hides the form once approved, but that is a
+    // convenience, not the control.
+    if (current[0].kyc_status === 'Approved') {
+      return res.status(403).json({
+        success: false,
+        error: 'Your identity details are locked because your verification has been completed. Please contact support to request a change.',
+      });
+    }
+
+    const updates = {};
+
+    if ('nationalities' in req.body) {
+      const raw = req.body.nationalities;
+      if (!Array.isArray(raw)) {
+        return res.status(400).json({ success: false, error: 'nationalities must be an array of 2-letter country codes' });
+      }
+      if (raw.length === 0) {
+        return res.status(400).json({ success: false, error: 'At least one nationality is required' });
+      }
+      if (raw.length > 5) {
+        return res.status(400).json({ success: false, error: 'At most 5 nationalities can be declared' });
+      }
+      const normalized = raw.map((c) => String(c ?? '').trim().toUpperCase());
+      const invalid = normalized.filter((c) => !/^[A-Z]{2}$/.test(c));
+      if (invalid.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid country code(s): ${invalid.join(', ')}. Use 2-letter ISO codes.`,
+        });
+      }
+      // De-duplicated: declaring the same nationality twice is meaningless and
+      // would skew nothing but would look like corrupt data on a compliance record.
+      updates.nationalities = [...new Set(normalized)];
+    }
+
+    if ('countryOfResidence' in req.body) {
+      const value = String(req.body.countryOfResidence ?? '').trim().toUpperCase();
+      if (!/^[A-Z]{2}$/.test(value)) {
+        return res.status(400).json({
+          success: false,
+          error: 'countryOfResidence must be a 2-letter ISO country code',
+        });
+      }
+      updates.country_of_residence = value;
+    }
+
+    // US-person hard gate. Appendix A of the Compliance Manual excludes US
+    // citizens, US tax residents and Green Card holders outright in Phase 1, so
+    // this is refused at the profile step rather than accepted and then declined
+    // later at review — there is no outcome where declaring true leads anywhere,
+    // and running someone through document upload first would waste their time
+    // and collect personal data we have no basis to hold.
+    //
+    // Deliberately NOT stored as true: the declaration is refused, so there is
+    // nothing to record. Storing it would create a US-person register out of
+    // people who never became participants.
+    //
+    // This is a self-declaration and therefore a speed bump, not enforcement —
+    // anyone can answer "no". The real control stays the KYC-NUS declaration
+    // document verified at review. A stored `false` here means "said no", never
+    // "confirmed not a US person".
+    if ('usPerson' in req.body) {
+      const value = req.body.usPerson;
+      if (typeof value !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'usPerson must be true or false' });
+      }
+      if (value === true) {
+        return res.status(403).json({
+          success: false,
+          code: 'US_PERSON_INELIGIBLE',
+          error: 'InReal is not able to accept US persons — this includes US citizens, US tax residents and Green Card holders — during this phase. We are sorry we cannot help on this occasion.',
+        });
+      }
+      updates.us_person = false;
+    }
+
+    const previous = current[0];
+    const sameArray = (a, b) =>
+      Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+
+    const changedColumns = Object.keys(updates).filter((col) => {
+      if (col === 'nationalities') return !sameArray(previous.nationalities, updates.nationalities);
+      // us_person is a boolean, so `|| null` would collapse a genuine false
+      // into null and make "first time answering no" look like no change.
+      if (col === 'us_person') return previous.us_person !== updates.us_person;
+      return (previous[col] || null) !== (updates[col] || null);
+    });
+
+    if (changedColumns.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          Nationalities: previous.nationalities,
+          CountryOfResidence: previous.country_of_residence,
+          UsPerson: previous.us_person,
+          ProfileCompletedAt: previous.profile_completed_at,
+        },
+        message: 'No change.',
+      });
+    }
+
+    // profile_completed_at is stamped once both fields are present — it marks
+    // that the investor has finished the post-signup step, which is what the
+    // frontend uses to decide whether to keep prompting them.
+    const willHaveNationalities = updates.nationalities || previous.nationalities;
+    const willHaveResidence = updates.country_of_residence || previous.country_of_residence;
+    const stampCompletion = Boolean(willHaveNationalities && willHaveResidence) && !previous.profile_completed_at;
+
+    const setClauses = changedColumns.map((col, i) => `${col} = $${i + 1}`);
+    const values = changedColumns.map((col) => updates[col]);
+    if (stampCompletion) setClauses.push('profile_completed_at = NOW()');
+
+    await q(
+      `UPDATE users SET ${setClauses.join(', ')}, updated_at = NOW() WHERE user_id = $${values.length + 1}`,
+      [...values, userId]
+    );
+
+    changedColumns.forEach((col) => {
+      const before = Array.isArray(previous[col]) ? previous[col].join('+') : (previous[col] || '');
+      const after = Array.isArray(updates[col]) ? updates[col].join('+') : (updates[col] || '');
+      console.log(`[profile.identity_updated] user_id=${userId} ${col}: "${before}" -> "${after}"`);
+    });
+
+    const after = await q(
+      `SELECT nationalities, country_of_residence, us_person, profile_completed_at
+       FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        Nationalities: after[0].nationalities,
+        CountryOfResidence: after[0].country_of_residence,
+        UsPerson: after[0].us_person,
+        ProfileCompletedAt: after[0].profile_completed_at,
+      },
+      message: 'Identity details updated.',
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // ── Investor: bank details (C.1 item 6 — the highest-risk item on the pilot
 // list; see the tracker's C.0.3/C.4 notes on why this one isn't allowed to
 // be shortcut). Unlike contact-info editing, a request here NEVER touches
@@ -2959,17 +3492,29 @@ app.get('/api/user/documents', async (req, res) => {
     const userId = requireAuthenticatedUserId(req, res);
     if (!userId) return;
 
+    // The property join is a LEFT join, deliberately: a document with no
+    // property is a general document, which is a normal and permanent state,
+    // not missing data. An inner join would silently hide every general
+    // document from the investor's own list.
+    //
+    // The scoping that matters is unchanged — `WHERE d.user_id = $1` against
+    // the authenticated session. property_id is only a grouping label here and
+    // is never used to find documents; see the note in migration 09.
     const rows = await q(
       `SELECT
-         document_id          AS "DocumentID",
-         category              AS "Category",
-         label                 AS "Label",
-         original_file_name    AS "OriginalFileName",
-         mime_type             AS "MimeType",
-         created_at            AS "CreatedAt"
-       FROM user_documents
-       WHERE user_id = $1 AND is_superseded = false
-       ORDER BY created_at DESC`,
+         d.document_id          AS "DocumentID",
+         d.category             AS "Category",
+         d.label                AS "Label",
+         d.original_file_name   AS "OriginalFileName",
+         d.mime_type            AS "MimeType",
+         d.created_at           AS "CreatedAt",
+         d.property_id          AS "PropertyID",
+         p.property_name        AS "PropertyName",
+         p.city                 AS "PropertyCity"
+       FROM user_documents d
+       LEFT JOIN properties p ON p.property_id = d.property_id
+       WHERE d.user_id = $1 AND d.is_superseded = false
+       ORDER BY d.created_at DESC`,
       [userId]
     );
 

@@ -937,6 +937,24 @@ tbody tr:hover td {
   line-height: 1.55;
 }
 
+/* Prohibited-jurisdiction banner. Same shape as .edd-warning deliberately —
+   an admin already knows how to read that component — but in danger red
+   rather than amber, because the two mean materially different things: EDD
+   is "approvable with extra work", this is "cannot be approved at all". */
+.prohibited-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 0.82rem;
+  color: var(--portal-danger);
+  line-height: 1.55;
+  font-weight: 500;
+}
+
 .kyc-history {
   border: 1px solid var(--portal-border, rgba(255,255,255,0.08));
   border-radius: 8px;

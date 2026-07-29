@@ -49,6 +49,7 @@ const els = {
   dismissSetupCodeBtn: document.getElementById('dismissSetupCodeBtn'),
   closeSetupCodeBtn: document.getElementById('closeSetupCodeBtn'),
   uploadForm: document.getElementById('uploadForm'),
+  docPropertyId: document.getElementById('docPropertyId'),
   dropzoneEmptyState: document.getElementById('dropzoneEmptyState'),
   dropzoneFileState: document.getElementById('dropzoneFileState'),
   dropzoneThumbnail: document.getElementById('dropzoneThumbnail'),
@@ -264,6 +265,29 @@ async function loadDocuments() {
   state.files = result.data || [];
 }
 
+// Fills the optional "Property" dropdown on the upload form. Reuses the
+// existing /api/properties endpoint rather than adding an ops-specific one —
+// the property list is the same data either way, and a second endpoint would be
+// a second thing to keep in sync.
+//
+// Failure here is deliberately non-fatal: the property link is optional, so if
+// the list can't load the admin can still upload a general document rather than
+// being blocked entirely.
+async function loadPropertyOptions() {
+  if (!els.docPropertyId) return;
+  try {
+    const result = await apiFetch('/api/properties');
+    const properties = result.data || [];
+    const options = properties
+      .map((p) => `<option value="${escapeAttr(p.PropertyID)}">${escapeHtml(p.PropertyName)}</option>`)
+      .join('');
+    els.docPropertyId.innerHTML =
+      `<option value="">General — not property-specific</option>${options}`;
+  } catch (error) {
+    console.error('Could not load properties for the document form:', error);
+  }
+}
+
 
 function renderSummary() {
   const verified = state.apiUsers.filter((user) => user.status === 'Verified').length;
@@ -399,6 +423,7 @@ function renderFiles() {
         <td><strong>${escapeHtml(file.Label)}</strong>${supersededTag}</td>
         <td>${escapeHtml(format)}</td>
         <td>${escapeHtml(file.Category)}</td>
+        <td>${file.PropertyName ? escapeHtml(file.PropertyName) : '<span class="helper">General</span>'}</td>
         <td>${escapeHtml(assignedName)}<br /><span class="helper">${escapeHtml(file.UserEmail)}</span></td>
         <td>${formatDate(file.CreatedAt)}</td>
         <td><button class="doc-download-btn" data-doc-id="${file.DocumentID}" data-doc-name="${escapeAttr(file.OriginalFileName)}">Download</button></td>
@@ -406,7 +431,7 @@ function renderFiles() {
     `;
         })
         .join('')
-    : `<tr><td colspan="6" class="helper">No documents uploaded yet.</td></tr>`;
+    : `<tr><td colspan="7" class="helper">No documents uploaded yet.</td></tr>`;
 }
 
 function renderQueue() {
@@ -768,6 +793,9 @@ function bindWorkspaceEvents() {
     const label = String(formData.get('label') || '').trim();
     const category = String(formData.get('category') || '');
     const userId = els.docUserId.value;
+    // Empty string means "general" — sent as null rather than '' so the server
+    // stores a real NULL instead of trying to coerce an empty string to an id.
+    const propertyId = String(formData.get('propertyId') || '') || null;
     const file = els.fileInput.files[0];
 
     if (!label) {
@@ -803,13 +831,18 @@ function bindWorkspaceEvents() {
           fileBase64,
           fileName: file.name,
           mimeType: file.type || 'application/octet-stream',
+          propertyId: propertyId ? Number(propertyId) : null,
         }),
       });
+
+      const propertyLabel = propertyId
+        ? (els.docPropertyId.selectedOptions[0]?.textContent || `property #${propertyId}`)
+        : 'General';
 
       addAudit(
         'Document assigned',
         `${authSession?.user?.Email || 'Ops'} • just now`,
-        `${label} (${category}) assigned to ${selectedDocUser?.Email || 'user #' + userId}.`,
+        `${label} (${category}, ${propertyLabel}) assigned to ${selectedDocUser?.Email || 'user #' + userId}.`,
       );
 
       els.uploadForm.reset();
@@ -925,31 +958,57 @@ function bindWorkspaceEvents() {
 
 // ── KYC Review ───────────────────────────────────────────────────────────────
 
-// Risk tier derived from Appendix A of the Compliance Manual.
-// EDD = FATF grey-list or elevated risk indicators.
-// Excluded countries are already blocked at signup (server.js).
-const EDD_COUNTRY_CODES = new Set([
-  'LB','TR','AL','BH','BF','BI','CM','CD','HT','IR','KH','KG','LA','LY','ML',
-  'MA','MM','MZ','NI','NG','KP','PK','PA','PH','RU','SN','SS','SY','TZ','TT',
-  'UG','VN','YE','ZW','BY','AF','IQ','SD','SO','VE','ZA','KE',
-]);
+// Jurisdiction risk is computed by the SERVER (assessJurisdiction in server.js)
+// and arrives on each queue row as `Jurisdiction`. This file no longer keeps its
+// own copy of the country lists.
+//
+// Why that changed: the tier used to be derived here, in the browser, from lists
+// that lived only in this file. That was tolerable while the tier was decorative.
+// It is not tolerable now that a Prohibited tier actually blocks approval — a
+// reviewer must be shown the same verdict the approval endpoint will enforce,
+// and two copies of a compliance list are two things that can drift apart. The
+// old local lists also had no Prohibited tier at all, so they classified Russia,
+// Iran, North Korea and Syria as merely 'EDD' (i.e. approvable with extra
+// paperwork), which is exactly the misclassification this replaces.
+const DD_LABEL = {
+  Prohibited: 'Cannot be onboarded',
+  EDD: 'Enhanced Due Diligence',
+  Medium: 'SDD + enhanced SoF',
+  Unlisted: 'Manual compliance review',
+  Standard: 'Standard Due Diligence',
+};
 
-const MEDIUM_COUNTRY_CODES = new Set([
-  'DZ','AD','AO','AR','AM','AZ','BD','BJ','BT','BO','BA','BN','BG','KH',
-  'CO','EG','GH','GE','GT','ID','JO','KZ','KG','MV','MX','MD','MN','ME',
-  'MA','NA','NP','MK','PE','SM','RS','LK','TH','TN','UA','UZ',
-]);
-
-function getCountryRisk(countryCode) {
-  const code = String(countryCode || '').toUpperCase();
-  if (EDD_COUNTRY_CODES.has(code)) return { tier: 'EDD', dd: 'Enhanced Due Diligence', isEDD: true };
-  if (MEDIUM_COUNTRY_CODES.has(code)) return { tier: 'Medium', dd: 'SDD + enhanced SoF', isEDD: false };
-  return { tier: 'Low', dd: 'Standard Due Diligence', isEDD: false };
+// Reads the server's verdict. Deliberately FAILS CLOSED: if the assessment is
+// missing or malformed — an older API build, a partial deploy, a shape change —
+// this returns a tier that cannot be approved, rather than defaulting to
+// something permissive. A missing compliance verdict is not evidence of low
+// risk, and the server would refuse the approval anyway.
+function getJurisdiction(user) {
+  const j = user && user.Jurisdiction;
+  if (!j || typeof j.tier !== 'string') {
+    return {
+      tier: 'Unknown',
+      dd: 'Assessment unavailable',
+      isEDD: false,
+      canApprove: false,
+      reason: 'No jurisdiction assessment returned by the server. Approval is blocked until this resolves — refresh, and check the API build if it persists.',
+      triggeredBy: [],
+    };
+  }
+  return {
+    tier: j.tier,
+    dd: DD_LABEL[j.tier] || 'Manual compliance review',
+    isEDD: j.tier === 'EDD',
+    canApprove: j.canApprove !== false,
+    reason: j.reason || '',
+    triggeredBy: Array.isArray(j.triggeredBy) ? j.triggeredBy : [],
+  };
 }
 
 function tierClass(tier) {
+  if (tier === 'Prohibited' || tier === 'Unknown') return 'tag suspended';
   if (tier === 'EDD') return 'tag suspended';
-  if (tier === 'Medium') return 'tag pending';
+  if (tier === 'Medium' || tier === 'Unlisted') return 'tag pending';
   return 'tag verified';
 }
 
@@ -975,7 +1034,7 @@ function renderKycQueue() {
   }
 
   tbody.innerHTML = kycQueue.map((user) => {
-    const risk = getCountryRisk(user.CountryCode);
+    const risk = getJurisdiction(user);
     return `
       <tr class="kyc-row" data-userid="${escapeAttr(user.UserID)}">
         <td>
@@ -1012,7 +1071,7 @@ function openKycDrawer(userId) {
   if (!user) return;
   selectedKycUser = user;
 
-  const risk = getCountryRisk(user.CountryCode);
+  const risk = getJurisdiction(user);
 
   document.getElementById('kycDrawerName').textContent = `${user.FirstName} ${user.LastName}`;
   document.getElementById('kycDrawerEmail').textContent = user.Email;
@@ -1029,8 +1088,25 @@ function openKycDrawer(userId) {
   const eddWarning = document.getElementById('eddWarning');
   eddWarning.classList.toggle('hidden', !risk.isEDD);
 
+  // Prohibited (or an unavailable assessment) blocks approval. Declining stays
+  // available on purpose — the account still needs resolving, it just can never
+  // be resolved as approved. The server enforces this independently; disabling
+  // the button here is so the reviewer isn't invited to attempt something that
+  // will be refused, not the control itself.
+  const prohibitedWarning = document.getElementById('prohibitedWarning');
+  const approveBtn = document.getElementById('kycApproveBtn');
+  prohibitedWarning.classList.toggle('hidden', risk.canApprove);
+  if (!risk.canApprove) {
+    document.getElementById('prohibitedWarningText').textContent = risk.reason;
+  }
+  approveBtn.disabled = !risk.canApprove;
+  approveBtn.title = risk.canApprove ? '' : risk.reason;
+
   document.getElementById('kycReviewerName').value = '';
   document.getElementById('kycNotes').value = '';
+  // Reset to unselected every time the drawer opens, so a reason chosen for a
+  // previous applicant can never carry over onto a different person.
+  document.getElementById('kycDeclineReasonType').value = '';
   document.getElementById('kycFormError').classList.add('hidden');
   document.getElementById('kycFormError').textContent = '';
 
@@ -1118,6 +1194,16 @@ async function submitKycDecision(action) {
     return;
   }
 
+  // The server requires a reason type on a decline and rejects one on an
+  // approve, so send it only for declines and validate here first to give the
+  // reviewer a useful message rather than a raw 400.
+  const declineReasonType = document.getElementById('kycDeclineReasonType').value;
+  if (action === 'decline' && !declineReasonType) {
+    errorEl.textContent = 'Select a reason for the decline. This determines what the investor is told.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
   const approveBtn = document.getElementById('kycApproveBtn');
   const declineBtn = document.getElementById('kycDeclineBtn');
   approveBtn.disabled = true;
@@ -1125,9 +1211,12 @@ async function submitKycDecision(action) {
   errorEl.classList.add('hidden');
 
   try {
+    const payload = { action, reviewerName, notes };
+    if (action === 'decline') payload.declineReasonType = declineReasonType;
+
     await apiFetch(`/api/ops/kyc-reviews/${selectedKycUser.UserID}/decision`, {
       method: 'POST',
-      body: JSON.stringify({ action, reviewerName, notes }),
+      body: JSON.stringify(payload),
     });
 
     const userName = `${selectedKycUser.FirstName} ${selectedKycUser.LastName}`;
@@ -1150,8 +1239,14 @@ async function submitKycDecision(action) {
     errorEl.textContent = err.message || 'Decision could not be recorded. Try again.';
     errorEl.classList.remove('hidden');
   } finally {
-    approveBtn.disabled = false;
+    // Restore to the jurisdiction-correct state, NOT unconditionally enabled.
+    // A blanket `approveBtn.disabled = false` here would re-enable approval on a
+    // prohibited account the moment any decision attempt finished — including a
+    // failed decline — leaving an enabled Approve button sitting directly under
+    // a banner saying the account cannot be approved. The server refuses it
+    // either way, so this is a UX correctness fix rather than a security one.
     declineBtn.disabled = false;
+    approveBtn.disabled = selectedKycUser ? !getJurisdiction(selectedKycUser).canApprove : false;
   }
 }
 
@@ -1459,7 +1554,7 @@ function bindPortfolioEvents() {
 }
 
 async function refreshLiveData() {
-  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments(), loadBankRequestQueue()]);
+  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments(), loadBankRequestQueue(), loadPropertyOptions()]);
   render();
 }
 

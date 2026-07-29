@@ -13,6 +13,7 @@ import {
   User
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
+import AccountDeclinedNotice from '@/pages/portal/AccountDeclinedNotice';
 
 const navigation = [
   { name: 'Dashboard', href: '/portal', icon: LayoutDashboard },
@@ -28,6 +29,17 @@ export default function PortalLayout({ children }) {
   const { signOut, user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024);
+
+  // A declined account never reaches the portal. Intercepting here rather than
+  // per-page means a new page added later is covered automatically, instead of
+  // silently becoming reachable because someone forgot to add a guard to it.
+  //
+  // Note this hook order: the interception happens AFTER all hooks above have
+  // run, and the early return sits below the remaining hooks too, because
+  // returning before a hook would change the hook count between renders and
+  // break React. The real access control is the server's anyway — this only
+  // decides what the person sees.
+  const accountDeclined = user?.KYCStatus === 'Declined';
 
   useEffect(() => {
     const handleResize = () => {
@@ -46,6 +58,12 @@ export default function PortalLayout({ children }) {
     signOut();
     navigate('/auth', { replace: true });
   };
+
+  // Placed after every hook above, so the hook count stays identical between
+  // the declined and normal renders.
+  if (accountDeclined) {
+    return <AccountDeclinedNotice />;
+  }
 
   return (
     <div className="w-full h-screen bg-portal-primary flex flex-col overflow-hidden">

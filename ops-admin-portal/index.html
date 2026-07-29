@@ -212,6 +212,16 @@
                   </div>
                 </div>
 
+                <!-- Prohibited-jurisdiction warning. Shown when the SERVER's
+                     jurisdiction assessment returns canApprove=false; the
+                     approve button is disabled alongside it. The server
+                     refuses the approval regardless — this is the reviewer
+                     seeing the same verdict rather than a separate rule. -->
+                <div class="prohibited-warning hidden" id="prohibitedWarning">
+                  <i data-lucide="shield-alert" style="width:14px;height:14px;flex-shrink:0"></i>
+                  <span id="prohibitedWarningText">Prohibited jurisdiction — this account cannot be approved.</span>
+                </div>
+
                 <!-- EDD warning shown only for EDD-tier participants -->
                 <div class="edd-warning hidden" id="eddWarning">
                   <i data-lucide="alert-triangle" style="width:14px;height:14px;flex-shrink:0"></i>
@@ -233,6 +243,21 @@
                   <label class="kyc-form-label">
                     Notes
                     <textarea class="field textarea" id="kycNotes" rows="3" placeholder="Document references, screening result, conditions, or reason for decline…"></textarea>
+                  </label>
+                  <!-- Decline reason type. Required to decline, and deliberately
+                       has NO pre-selected value: picking "jurisdiction" for what
+                       was actually a screening hit would disclose that finding to
+                       its subject, so the reviewer has to choose consciously
+                       rather than accept a default. -->
+                  <label class="kyc-form-label">
+                    Reason for decline <span style="color:var(--portal-danger)">*</span>
+                    <select class="field" id="kycDeclineReasonType">
+                      <option value="">Select a reason…</option>
+                      <option value="jurisdiction">Jurisdiction — not an eligible market / US exclusion</option>
+                      <option value="compliance">Compliance — sanctions, PEP, adverse media, source of funds</option>
+                      <option value="suspicion">Suspicion — suspected fraud or sanctions match</option>
+                    </select>
+                    <span class="helper" id="kycDeclineReasonHelp">Only needed when declining. Jurisdiction is stated plainly to the investor; the other two show a neutral message and are never disclosed.</span>
                   </label>
                   <p class="kyc-form-error hidden" id="kycFormError"></p>
                   <div class="kyc-decision-btns">
@@ -575,6 +600,16 @@
                   <input class="field" id="docUserSearch" autocomplete="off" placeholder="Search by name or email…" />
                   <input type="hidden" id="docUserId" name="userId" />
                 </label>
+                <!-- Optional property link. Blank = a general document, which is
+                     a real category (KYC files, statements), not an unset field
+                     — the investor portal shows those in their own box. -->
+                <label>
+                  Property <span class="helper">(optional)</span>
+                  <select class="field" id="docPropertyId" name="propertyId">
+                    <option value="">General — not property-specific</option>
+                  </select>
+                  <span class="helper">Pick a property to file this under it in the investor's portal, e.g. a transfer slip for a specific unit.</span>
+                </label>
                 <div id="docUserResults" class="user-search-results"></div>
                 <div id="docUserSelected" class="user-search-selected" hidden></div>
                 <p id="uploadFormError" class="helper" style="color:#ff6b6b;"></p>
@@ -597,6 +632,7 @@
                       <th>Document</th>
                       <th>Format</th>
                       <th>Category</th>
+                      <th>Property</th>
                       <th>Assigned</th>
                       <th>Created</th>
                       <th></th>

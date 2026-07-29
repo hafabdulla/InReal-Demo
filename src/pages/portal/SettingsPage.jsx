@@ -16,11 +16,7 @@ import {
 import { useAuth } from '@/contexts/SQLServerAuthContext';
 import { getApiBase } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
-
-const countryNames = {
-  US: 'United States', GB: 'United Kingdom', AE: 'United Arab Emirates',
-  DE: 'Germany', IT: 'Italy', SG: 'Singapore', TH: 'Thailand',
-};
+import { COUNTRIES, countryName } from '@/lib/countries';
 
 export default function SettingsPage() {
   const { user, session, refreshUser } = useAuth();
@@ -83,6 +79,88 @@ export default function SettingsPage() {
       setContactError("We couldn't reach the server. Please try again.");
     } finally {
       setSavingContact(false);
+    }
+  };
+
+  // Declared identity — nationality(ies) and country of residence (PO
+  // requirement #1). These are NOT contact fields: they feed the jurisdiction
+  // assessment an admin uses to approve or refuse KYC, so they save through a
+  // separate endpoint with different rules.
+  //
+  // Editable only while KYC is still pending. Once approved they lock, and a
+  // change has to go through support — matching how legal name already behaves,
+  // and closing the bypass where someone could be approved under an acceptable
+  // jurisdiction and quietly switch afterwards. The server enforces this
+  // independently (403); hiding the form here is presentation, not the control.
+  const identityLocked = user?.KYCStatus === 'Approved';
+  const [nationalities, setNationalities] = useState(user?.Nationalities || []);
+  const [countryOfResidence, setCountryOfResidence] = useState(user?.CountryOfResidence || '');
+  // null = not answered yet, so we can tell "hasn't said" apart from "said no".
+  const [usPerson, setUsPerson] = useState(
+    typeof user?.UsPerson === 'boolean' ? user.UsPerson : null
+  );
+  const [identityError, setIdentityError] = useState('');
+  const [savingIdentity, setSavingIdentity] = useState(false);
+
+  // The auth context populates asynchronously, so seed from `user` once it
+  // arrives rather than leaving the fields stuck on their initial empty value.
+  useEffect(() => {
+    if (user?.Nationalities) setNationalities(user.Nationalities);
+    if (user?.CountryOfResidence) setCountryOfResidence(user.CountryOfResidence);
+    if (typeof user?.UsPerson === 'boolean') setUsPerson(user.UsPerson);
+  }, [user?.Nationalities, user?.CountryOfResidence, user?.UsPerson]);
+
+  const toggleNationality = (code) => {
+    setNationalities((current) =>
+      current.includes(code) ? current.filter((c) => c !== code) : [...current, code]
+    );
+  };
+
+  const handleSaveIdentity = async () => {
+    setIdentityError('');
+
+    if (nationalities.length === 0) {
+      setIdentityError('Please select at least one nationality.');
+      return;
+    }
+    if (nationalities.length > 5) {
+      setIdentityError('You can declare at most 5 nationalities.');
+      return;
+    }
+    if (!countryOfResidence) {
+      setIdentityError('Please select your country of residence.');
+      return;
+    }
+    if (usPerson === null) {
+      setIdentityError('Please answer the US person question.');
+      return;
+    }
+
+    setSavingIdentity(true);
+    try {
+      const response = await fetch(`${getApiBase()}/api/user/profile/identity`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({ nationalities, countryOfResidence, usPerson }),
+      });
+      const data = await response.json();
+
+      if (!data.success) {
+        setIdentityError(data.error || 'Could not update your identity details.');
+        setSavingIdentity(false);
+        return;
+      }
+
+      await refreshUser();
+      toast({ title: 'Identity details saved', description: data.message || 'Your details have been updated.' });
+    } catch (error) {
+      console.error('Failed to update identity details:', error);
+      setIdentityError("We couldn't reach the server. Please try again.");
+    } finally {
+      setSavingIdentity(false);
     }
   };
 
@@ -412,7 +490,7 @@ export default function SettingsPage() {
                     <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
                     <input
                       type="text"
-                      value={countryNames[user?.CountryCode] || user?.CountryCode || ''}
+                      value={countryName(user?.CountryCode)}
                       readOnly
                       className="portal-input pl-10 opacity-80"
                     />
@@ -420,8 +498,174 @@ export default function SettingsPage() {
                 </div>
 
                 <p className="text-xs text-portal-tertiary">
-                  Need to update your legal name, nationality, or address? Contact support — these require a fresh identity check and can't be changed here.
+                  Need to update your legal name or email address? Contact support — these require a fresh identity check and can't be changed here.
                 </p>
+              </div>
+
+              {/* Declared identity (PO requirement #1). Its own card because it
+                  sits in a different tier from both the read-only block above
+                  and the freely-editable contact block below: editable, but only
+                  until KYC is approved, after which it locks. */}
+              <div className="portal-card space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-semibold text-portal-primary text-lg">Nationality &amp; Residence</h3>
+                  {identityLocked && (
+                    <span className="flex items-center gap-1.5 text-xs text-portal-tertiary whitespace-nowrap">
+                      <Lock className="w-3.5 h-3.5" />
+                      Locked
+                    </span>
+                  )}
+                </div>
+
+                {identityLocked ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Nationality</label>
+                      <input
+                        type="text"
+                        value={(user?.Nationalities || []).map(countryName).join(', ') || 'Not provided'}
+                        readOnly
+                        className="portal-input opacity-80"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Country of Residence</label>
+                      <input
+                        type="text"
+                        value={countryName(user?.CountryOfResidence) || 'Not provided'}
+                        readOnly
+                        className="portal-input opacity-80"
+                      />
+                    </div>
+                    <p className="text-xs text-portal-tertiary">
+                      Your verification is complete, so these details are now locked. Contact support if they need to change — an update requires a fresh identity check.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-portal-tertiary">
+                      We use these to complete your verification. Please list every nationality you hold — if you hold more than one, all of them need to be declared.
+                    </p>
+
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">
+                        Nationality <span className="text-portal-tertiary font-normal">(select all that apply)</span>
+                      </label>
+
+                      {nationalities.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {nationalities.map((code) => (
+                            <button
+                              key={code}
+                              type="button"
+                              onClick={() => toggleNationality(code)}
+                              className="flex items-center gap-1.5 rounded-full bg-teal-500/15 text-teal-300 px-3 py-1 text-xs hover:bg-teal-500/25 transition-colors"
+                              aria-label={`Remove ${countryName(code)}`}
+                            >
+                              {countryName(code)}
+                              <span aria-hidden="true">&times;</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      <select
+                        value=""
+                        onChange={(e) => { if (e.target.value) toggleNationality(e.target.value); }}
+                        className="portal-input"
+                        disabled={nationalities.length >= 5}
+                      >
+                        <option value="">
+                          {nationalities.length >= 5 ? 'Maximum of 5 reached' : 'Add a nationality…'}
+                        </option>
+                        {COUNTRIES.filter((c) => !nationalities.includes(c.code)).map((c) => (
+                          <option key={c.code} value={c.code}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">Country of Residence</label>
+                      <div className="relative">
+                        <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-portal-tertiary" />
+                        <select
+                          value={countryOfResidence}
+                          onChange={(e) => setCountryOfResidence(e.target.value)}
+                          className="portal-input pl-10"
+                        >
+                          <option value="">Select your country of residence…</option>
+                          {COUNTRIES.map((c) => (
+                            <option key={c.code} value={c.code}>{c.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* US-person declaration. Asked here, at the profile step,
+                        rather than later during document upload: US persons are
+                        excluded outright in this phase, so there is no outcome
+                        where answering yes leads anywhere. Asking now avoids
+                        walking someone through a document upload that was never
+                        going to be accepted. */}
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">
+                        Are you a US person?
+                      </label>
+                      <p className="text-xs text-portal-tertiary mb-2">
+                        This means a US citizen, a US tax resident, or a Green Card holder.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setUsPerson(false)}
+                          className={`flex-1 rounded-lg border px-4 py-2.5 text-sm transition-colors ${
+                            usPerson === false
+                              ? 'border-teal-400/60 bg-teal-500/15 text-teal-200'
+                              : 'border-white/10 text-portal-secondary hover:border-white/25'
+                          }`}
+                          aria-pressed={usPerson === false}
+                        >
+                          No
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUsPerson(true)}
+                          className={`flex-1 rounded-lg border px-4 py-2.5 text-sm transition-colors ${
+                            usPerson === true
+                              ? 'border-red-400/60 bg-red-500/15 text-red-200'
+                              : 'border-white/10 text-portal-secondary hover:border-white/25'
+                          }`}
+                          aria-pressed={usPerson === true}
+                        >
+                          Yes
+                        </button>
+                      </div>
+                      {usPerson === true && (
+                        <p className="mt-2 text-xs text-red-400 leading-relaxed">
+                          InReal isn’t able to accept US persons during this phase, so we won’t be able to open an account. We’re sorry we can’t help on this occasion.
+                        </p>
+                      )}
+                    </div>
+
+                    {identityError && (
+                      <p className="text-sm text-red-400">{identityError}</p>
+                    )}
+
+                    <div className="flex justify-end pt-2">
+                      <button
+                        onClick={handleSaveIdentity}
+                        disabled={savingIdentity || usPerson === true}
+                        className="portal-btn-primary text-sm py-2.5 disabled:opacity-60"
+                      >
+                        {savingIdentity ? 'Saving...' : 'Save Identity Details'}
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-portal-tertiary">
+                      These can be changed until your verification is approved. After that they're locked and a change needs support.
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* The one genuinely editable field on this page, deliberately
