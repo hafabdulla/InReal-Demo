@@ -3101,16 +3101,94 @@ app.get('/api/ops/documents', async (req, res) => {
     const adminUserId = await requireAdmin(req, res);
     if (!adminUserId) return;
 
-    const userIdFilter = req.query.userId ? Number(req.query.userId) : null;
+    // Filters. Every one of these is a bound parameter — none is ever
+    // interpolated into the SQL string, and the two enum-ish filters are
+    // additionally checked against the same Sets the upload endpoint validates
+    // against, so an unexpected value is a 400 rather than a query that
+    // silently matches nothing and looks like "no documents exist".
+    const conditions = [];
     const params = [];
-    let whereClause = '';
-    if (userIdFilter) {
-      params.push(userIdFilter);
-      whereClause = `WHERE d.user_id = $${params.length}`;
+
+    const addCondition = (sql, value) => {
+      params.push(value);
+      conditions.push(sql.replace('$?', `$${params.length}`));
+    };
+
+    if (req.query.userId) {
+      const userIdFilter = Number(req.query.userId);
+      if (!Number.isInteger(userIdFilter) || userIdFilter <= 0) {
+        return res.status(400).json({ success: false, error: 'userId must be a positive integer' });
+      }
+      addCondition('d.user_id = $?', userIdFilter);
     }
+
+    if (req.query.category) {
+      if (!DOCUMENT_CATEGORIES.has(req.query.category)) {
+        return res.status(400).json({ success: false, error: "category must be 'KYC', 'Finance', or 'Property'" });
+      }
+      addCondition('d.category = $?', req.query.category);
+    }
+
+    if (req.query.visibility) {
+      if (!DOCUMENT_VISIBILITIES.has(req.query.visibility)) {
+        return res.status(400).json({
+          success: false,
+          error: "visibility must be 'investor_visible' or 'operator_only'",
+        });
+      }
+      addCondition('d.visibility = $?', req.query.visibility);
+    }
+
+    // 'general' is a real filter value, not an absent one — it means "documents
+    // tied to no property", which is the box the investor portal shows
+    // alongside the per-property ones. It has to be spelled explicitly because
+    // an empty propertyId is indistinguishable from "no filter applied".
+    if (req.query.propertyId) {
+      if (req.query.propertyId === 'general') {
+        conditions.push('d.property_id IS NULL');
+      } else {
+        const propertyFilter = Number(req.query.propertyId);
+        if (!Number.isInteger(propertyFilter) || propertyFilter <= 0) {
+          return res.status(400).json({ success: false, error: 'propertyId must be a positive integer or "general"' });
+        }
+        addCondition('d.property_id = $?', propertyFilter);
+      }
+    }
+
+    // Free-text search across the label and the person it is filed against,
+    // because an admin looking for a document generally remembers one or the
+    // other. ILIKE with the wildcards in the BOUND VALUE, never in the SQL —
+    // the % characters are data here, not syntax.
+    if (req.query.q && String(req.query.q).trim()) {
+      const term = `%${String(req.query.q).trim()}%`;
+      params.push(term);
+      conditions.push(
+        `(d.label ILIKE $${params.length} OR u.email ILIKE $${params.length} OR (u.first_name || ' ' || u.last_name) ILIKE $${params.length})`
+      );
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Pagination, which is the half of this that actually fixes a bug rather
+    // than adding convenience. The previous version was a bare LIMIT 200 with
+    // no count and no offset: once an admin passed 200 documents the older ones
+    // simply stopped appearing, with nothing on screen to say so. Combined with
+    // there being no edit or delete path for a document, anything past the
+    // cutoff was unreachable through the UI entirely.
+    //
+    // Returning the total alongside the page is what makes that visible — the
+    // portal can say "showing 1–50 of 347" and page back, instead of quietly
+    // presenting a truncated list as if it were everything.
+    const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 50, 1), 200);
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const offset = (page - 1) * pageSize;
+
+    params.push(pageSize, offset);
+    const limitClause = `LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
     const rows = await q(
       `SELECT
+         COUNT(*) OVER()        AS "TotalCount",
          d.document_id          AS "DocumentID",
          d.user_id              AS "UserID",
          u.email                AS "UserEmail",
@@ -3136,11 +3214,28 @@ app.get('/api/ops/documents', async (req, res) => {
        LEFT JOIN properties p ON p.property_id = d.property_id
        ${whereClause}
        ORDER BY d.created_at DESC
-       LIMIT 200`,
+       ${limitClause}`,
       params
     );
 
-    res.json({ success: true, data: rows, count: rows.length });
+    // COUNT(*) OVER() rides on every row, so it is only readable when at least
+    // one row came back. An empty page means zero matches for these filters,
+    // which is a real total of 0 — not a missing value to guess at.
+    const total = rows.length > 0 ? Number(rows[0].TotalCount) : 0;
+    // Stripped from the payload: it is identical on every row and belongs in
+    // the envelope, not repeated inside each record where a caller might
+    // mistake it for a per-document field.
+    const data = rows.map(({ TotalCount, ...rest }) => rest);
+
+    res.json({
+      success: true,
+      data,
+      count: data.length,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(Math.ceil(total / pageSize), 1),
+    });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }

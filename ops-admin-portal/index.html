@@ -600,6 +600,16 @@
                   <input class="field" id="docUserSearch" autocomplete="off" placeholder="Search by name or email…" />
                   <input type="hidden" id="docUserId" name="userId" />
                 </label>
+                <!-- Both moved to sit directly under the search field they
+                     belong to, rather than after every field below (Property,
+                     Visibility). They're two states of the same widget — the
+                     match list while typing, the confirmation chip once picked
+                     — so they move together: fixing only one would leave the
+                     other still landing at the bottom, which is the same bug
+                     restated. Purely a DOM-order move; nothing in styles.css
+                     depends on where these sit relative to their siblings. -->
+                <div id="docUserResults" class="user-search-results"></div>
+                <div id="docUserSelected" class="user-search-selected" hidden></div>
                 <!-- Optional property link. Blank = a general document, which is
                      a real category (KYC files, statements), not an unset field
                      — the investor portal shows those in their own box. -->
@@ -624,8 +634,6 @@
                   </select>
                   <span class="helper">Internal documents never appear in the investor's portal. Screening results, compliance notes and anything supporting a SAR must be internal.</span>
                 </label>
-                <div id="docUserResults" class="user-search-results"></div>
-                <div id="docUserSelected" class="user-search-selected" hidden></div>
                 <p id="uploadFormError" class="helper" style="color:#ff6b6b;"></p>
                 <p id="uploadFormSuccess" class="upload-success-msg" hidden></p>
                 <button class="primary-btn" type="submit" id="uploadSubmitBtn">Upload &amp; assign</button>
@@ -638,6 +646,30 @@
                   <h4>Document queue</h4>
                   <p id="fileCountLabel">0 documents</p>
                 </div>
+              </div>
+              <!-- Filters are server-side, not a client-side pass over an
+                   already-fetched array. That matters: the query is paginated,
+                   so filtering in the browser would only ever search the rows
+                   on the current page and would quietly miss matches sitting on
+                   page 2. -->
+              <div class="doc-filters">
+                <input class="field" type="search" id="docFilterQuery" placeholder="Search label, name or email…" />
+                <select class="field" id="docFilterCategory">
+                  <option value="">All categories</option>
+                  <option value="KYC">KYC</option>
+                  <option value="Finance">Finance</option>
+                  <option value="Property">Property</option>
+                </select>
+                <select class="field" id="docFilterVisibility">
+                  <option value="">Investor-visible &amp; internal</option>
+                  <option value="investor_visible">Investor-visible only</option>
+                  <option value="operator_only">Internal only</option>
+                </select>
+                <select class="field" id="docFilterProperty">
+                  <option value="">All properties</option>
+                  <option value="general">General — no property</option>
+                </select>
+                <button type="button" id="docFilterReset" class="ghost-btn">Reset</button>
               </div>
               <div class="table-wrap">
                 <table>
@@ -655,6 +687,13 @@
                   </thead>
                   <tbody id="fileTableBody"></tbody>
                 </table>
+              </div>
+              <!-- Hidden entirely when everything fits on one page, so the
+                   common pilot-scale case doesn't carry dead controls. -->
+              <div class="doc-pagination" id="docPagination" hidden>
+                <button type="button" id="docPagePrev" class="ghost-btn">← Previous</button>
+                <span class="helper" id="docPageLabel"></span>
+                <button type="button" id="docPageNext" class="ghost-btn">Next →</button>
               </div>
             </div>
           </section>

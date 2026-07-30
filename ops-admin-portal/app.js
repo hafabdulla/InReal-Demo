@@ -67,6 +67,15 @@ const els = {
   userFilter: document.getElementById('userFilter'),
   userCountLabel: document.getElementById('userCountLabel'),
   fileCountLabel: document.getElementById('fileCountLabel'),
+  docFilterQuery: document.getElementById('docFilterQuery'),
+  docFilterCategory: document.getElementById('docFilterCategory'),
+  docFilterVisibility: document.getElementById('docFilterVisibility'),
+  docFilterProperty: document.getElementById('docFilterProperty'),
+  docFilterReset: document.getElementById('docFilterReset'),
+  docPagination: document.getElementById('docPagination'),
+  docPagePrev: document.getElementById('docPagePrev'),
+  docPageNext: document.getElementById('docPageNext'),
+  docPageLabel: document.getElementById('docPageLabel'),
   seedDemoBtn: document.getElementById('seedDemoBtn'),
   addQueueItemBtn: document.getElementById('addQueueItemBtn'),
   uploadDropzone: document.getElementById('uploadDropzone'),
@@ -260,9 +269,37 @@ async function loadInvestmentIntents() {
   addAudit('Intents synced', `${authSession.user.Email} • just now`, `Loaded ${state.intents.length} investment intents.`);
 }
 
+// Current filter + page state for the document queue. Kept in one object so
+// every filter change can reset the page in a single place — changing a filter
+// while sitting on page 4 would otherwise ask the server for page 4 of a much
+// smaller result set and render an empty table that looks like "no matches".
+const docQueryState = {
+  q: '',
+  category: '',
+  visibility: '',
+  propertyId: '',
+  page: 1,
+  pageSize: 50,
+  total: 0,
+  totalPages: 1,
+};
+
 async function loadDocuments() {
-  const result = await apiFetch('/api/ops/documents');
+  const params = new URLSearchParams();
+  if (docQueryState.q) params.set('q', docQueryState.q);
+  if (docQueryState.category) params.set('category', docQueryState.category);
+  if (docQueryState.visibility) params.set('visibility', docQueryState.visibility);
+  if (docQueryState.propertyId) params.set('propertyId', docQueryState.propertyId);
+  params.set('page', String(docQueryState.page));
+  params.set('pageSize', String(docQueryState.pageSize));
+
+  const result = await apiFetch(`/api/ops/documents?${params.toString()}`);
   state.files = result.data || [];
+  // Falls back to the row count when the server does not send a total, so an
+  // older API build degrades to the previous behaviour instead of rendering
+  // "showing 5 of 0".
+  docQueryState.total = Number.isFinite(result.total) ? result.total : state.files.length;
+  docQueryState.totalPages = Number.isFinite(result.totalPages) ? result.totalPages : 1;
 }
 
 // Fills the optional "Property" dropdown on the upload form. Reuses the
@@ -283,6 +320,18 @@ async function loadPropertyOptions() {
       .join('');
     els.docPropertyId.innerHTML =
       `<option value="">General — not property-specific</option>${options}`;
+
+    // The queue's property FILTER is filled from the same fetch rather than a
+    // second request. Its leading options differ from the upload form's on
+    // purpose: here an empty value means "don't filter", and "general" is an
+    // explicit choice meaning "documents tied to no property" — on the upload
+    // form empty IS "no property". Same list, opposite meaning for the blank
+    // option, which is worth stating because reusing the markup would have
+    // quietly made the filter unable to express "general only".
+    if (els.docFilterProperty) {
+      els.docFilterProperty.innerHTML =
+        `<option value="">All properties</option><option value="general">General — no property</option>${options}`;
+    }
   } catch (error) {
     console.error('Could not load properties for the document form:', error);
   }
@@ -410,7 +459,31 @@ function renderIntents() {
 }
 
 function renderFiles() {
-  els.fileCountLabel.textContent = `${state.files.length} document${state.files.length === 1 ? '' : 's'}`;
+  // Reports the TOTAL matching the current filters, not the number of rows on
+  // screen. The old label said "12 documents" while showing a page of 12 out of
+  // however many existed, which is exactly the silent-truncation problem this
+  // pagination was added to remove — a label that confidently understates the
+  // set is worse than no label.
+  const { total, page, pageSize, totalPages } = docQueryState;
+  const firstOnPage = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastOnPage = (page - 1) * pageSize + state.files.length;
+  const filtersActive = Boolean(
+    docQueryState.q || docQueryState.category || docQueryState.visibility || docQueryState.propertyId
+  );
+
+  els.fileCountLabel.textContent =
+    total === 0
+      ? (filtersActive ? 'No documents match these filters' : 'No documents uploaded yet')
+      : total <= pageSize
+        ? `${total} document${total === 1 ? '' : 's'}${filtersActive ? ' matching' : ''}`
+        : `Showing ${firstOnPage}–${lastOnPage} of ${total}${filtersActive ? ' matching' : ''}`;
+
+  if (els.docPagination) {
+    els.docPagination.hidden = totalPages <= 1;
+    els.docPageLabel.textContent = `Page ${page} of ${totalPages}`;
+    els.docPagePrev.disabled = page <= 1;
+    els.docPageNext.disabled = page >= totalPages;
+  }
 
   els.fileTableBody.innerHTML = state.files.length
     ? state.files
@@ -442,7 +515,11 @@ function renderFiles() {
     `;
         })
         .join('')
-    : `<tr><td colspan="8" class="helper">No documents uploaded yet.</td></tr>`;
+    : `<tr><td colspan="8" class="helper">${
+        filtersActive
+          ? 'No documents match these filters. Try clearing them.'
+          : 'No documents uploaded yet.'
+      }</td></tr>`;
 }
 
 function renderQueue() {
@@ -603,6 +680,75 @@ function bindWorkspaceEvents() {
 
   els.userSearch.addEventListener('input', renderUsers);
   els.userFilter.addEventListener('change', renderUsers);
+
+  // ── Document queue filters ────────────────────────────────────────────────
+  // Unlike the Users filters just above, these re-query the server rather than
+  // re-rendering a cached array, because the document list is paginated —
+  // filtering client-side would only ever search the current page.
+  let docFilterDebounce = null;
+
+  async function reloadDocuments({ resetPage = true } = {}) {
+    // Any filter change goes back to page 1. Staying on page 4 while narrowing
+    // the results would request a page past the end and render an empty table
+    // that reads as "no matches" when there are plenty on page 1.
+    if (resetPage) docQueryState.page = 1;
+    try {
+      await loadDocuments();
+      renderFiles();
+    } catch (error) {
+      console.error('Failed to load documents:', error);
+      els.fileCountLabel.textContent = 'Could not load documents';
+    }
+  }
+
+  els.docFilterQuery.addEventListener('input', () => {
+    // Debounced for the same reason the user-assign search is: this fires a
+    // real request per keystroke otherwise.
+    clearTimeout(docFilterDebounce);
+    docFilterDebounce = setTimeout(() => {
+      docQueryState.q = els.docFilterQuery.value.trim();
+      reloadDocuments();
+    }, 250);
+  });
+
+  els.docFilterCategory.addEventListener('change', () => {
+    docQueryState.category = els.docFilterCategory.value;
+    reloadDocuments();
+  });
+
+  els.docFilterVisibility.addEventListener('change', () => {
+    docQueryState.visibility = els.docFilterVisibility.value;
+    reloadDocuments();
+  });
+
+  els.docFilterProperty.addEventListener('change', () => {
+    docQueryState.propertyId = els.docFilterProperty.value;
+    reloadDocuments();
+  });
+
+  els.docFilterReset.addEventListener('click', () => {
+    els.docFilterQuery.value = '';
+    els.docFilterCategory.value = '';
+    els.docFilterVisibility.value = '';
+    els.docFilterProperty.value = '';
+    docQueryState.q = '';
+    docQueryState.category = '';
+    docQueryState.visibility = '';
+    docQueryState.propertyId = '';
+    reloadDocuments();
+  });
+
+  els.docPagePrev.addEventListener('click', () => {
+    if (docQueryState.page <= 1) return;
+    docQueryState.page -= 1;
+    reloadDocuments({ resetPage: false });
+  });
+
+  els.docPageNext.addEventListener('click', () => {
+    if (docQueryState.page >= docQueryState.totalPages) return;
+    docQueryState.page += 1;
+    reloadDocuments({ resetPage: false });
+  });
 
   els.userForm.addEventListener('submit', async (event) => {
     event.preventDefault();

@@ -17,6 +17,7 @@ import { useAuth } from '@/contexts/SQLServerAuthContext';
 import { getApiBase } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { COUNTRIES, countryName } from '@/lib/countries';
+import { getKycDisplay, KYC_TONE_CLASSES } from '@/lib/kycStatus';
 
 export default function SettingsPage() {
   const { user, session, refreshUser } = useAuth();
@@ -93,6 +94,12 @@ export default function SettingsPage() {
   // jurisdiction and quietly switch afterwards. The server enforces this
   // independently (403); hiding the form here is presentation, not the control.
   const identityLocked = user?.KYCStatus === 'Approved';
+
+  // Derived on every render from the live session user, so an approval that
+  // lands mid-session surfaces as soon as refreshUser() next runs — never a
+  // value captured once into state, which is how a "live" badge quietly
+  // becomes a stale one.
+  const kycDisplay = getKycDisplay(user?.KYCStatus);
   const [nationalities, setNationalities] = useState(user?.Nationalities || []);
   const [countryOfResidence, setCountryOfResidence] = useState(user?.CountryOfResidence || '');
   // null = not answered yet, so we can tell "hasn't said" apart from "said no".
@@ -518,7 +525,27 @@ export default function SettingsPage() {
               className="space-y-6"
             >
               <div className="portal-card space-y-6">
-                <h3 className="font-semibold text-portal-primary text-lg">Profile Information</h3>
+                {/* C.1 item 8 / F3: the KYC badge belongs on the investor's own
+                    PROFILE page, which is here — a version of this already
+                    existed on the Security tab, but that is not the surface the
+                    23 June action item named, and it read a different column
+                    (see src/lib/kycStatus.js). Both now render from the one
+                    helper, so they cannot disagree.
+
+                    Presentation-only by design: Phase 1 KYC decisions are made
+                    manually before the account is even created. It still reads
+                    live from kyc_status on every render rather than being a
+                    static badge, which was the explicit requirement — a
+                    hardcoded "Verified" would be worse than showing nothing. */}
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <h3 className="font-semibold text-portal-primary text-lg">Profile Information</h3>
+                  <span
+                    className={`px-3 py-1 text-sm font-medium rounded-lg ${KYC_TONE_CLASSES[kycDisplay.tone]}`}
+                    title={kycDisplay.description}
+                  >
+                    {kycDisplay.badge}
+                  </span>
+                </div>
 
                 <div className="flex items-center gap-5">
                   <div className="relative">
@@ -1002,18 +1029,16 @@ export default function SettingsPage() {
                     </div>
                     <div>
                       <p className="font-medium text-portal-primary">KYC Verification</p>
-                      <p className="text-sm text-portal-secondary">
-                        {/* CORRECTION 09 July 2026: 'Approved' was correct originally — reverted after a mis-read of the KYC-decision code's column order. */}
-                        {user?.KYCStatus === 'Approved' ? 'Identity verified' : 'Verification pending'}
-                      </p>
+                      {/* Both halves of this card now come from the same
+                          kyc_status. Previously the line below read KYCStatus
+                          while the pill to its right read IdentityVerified —
+                          two independent columns, so the card could state
+                          "Identity verified" next to an amber "Pending". */}
+                      <p className="text-sm text-portal-secondary">{kycDisplay.headline}</p>
                     </div>
                   </div>
-                  <span className={`px-3 py-1 text-sm font-medium rounded-lg ${
-                    user?.IdentityVerified
-                      ? 'bg-emerald-500/10 text-emerald-400'
-                      : 'bg-amber-500/10 text-amber-400'
-                  }`}>
-                    {user?.IdentityVerified ? 'Verified' : 'Pending'}
+                  <span className={`px-3 py-1 text-sm font-medium rounded-lg ${KYC_TONE_CLASSES[kycDisplay.tone]}`}>
+                    {kycDisplay.badge}
                   </span>
                 </div>
               </div>

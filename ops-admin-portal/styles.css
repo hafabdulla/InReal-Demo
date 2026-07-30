@@ -1099,6 +1099,36 @@ tbody tr:hover td {
   cursor: pointer;
   font-size: 12px;
 }
+/* Document queue filters + pagination.
+   min-width:0 on the flex children is the same guard the grid layouts need
+   elsewhere in this file — without it a long <option> label sets the control's
+   intrinsic width and the row refuses to wrap, pushing the table sideways
+   instead of stacking on a narrow screen. */
+.doc-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.doc-filters .field {
+  min-width: 0;
+  flex: 1 1 160px;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+.doc-filters #docFilterQuery { flex: 2 1 220px; }
+.doc-filters .ghost-btn { flex: 0 0 auto; }
+
+.doc-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+}
+.doc-pagination .ghost-btn { padding: 6px 12px; font-size: 13px; }
+.doc-pagination .ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .doc-download-btn {
   background: none;
   border: 1px solid rgba(1,206,209,0.35);
