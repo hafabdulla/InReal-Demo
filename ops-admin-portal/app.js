@@ -418,12 +418,23 @@ function renderFiles() {
           const format = (file.OriginalFileName || '').split('.').pop().toUpperCase() || '—';
           const assignedName = [file.UserFirstName, file.UserLastName].filter(Boolean).join(' ') || file.UserEmail;
           const supersededTag = file.IsSuperseded ? ' <span class="tag suspended">Superseded</span>' : '';
+          // Internal documents get the visually louder tag. The asymmetry is
+          // intentional: an investor-visible document behaving as expected is
+          // unremarkable, whereas an internal one sitting on someone's file is
+          // the thing an admin needs to spot at a glance — including spotting
+          // that something was filed internal when it should not have been.
+          // Falls back to the visible label for any legacy row that predates
+          // the column, which matches how migration 10 backfilled them.
+          const visibilityTag = file.Visibility === 'operator_only'
+            ? '<span class="tag suspended">Internal only</span>'
+            : '<span class="helper">Investor-visible</span>';
           return `
       <tr>
         <td><strong>${escapeHtml(file.Label)}</strong>${supersededTag}</td>
         <td>${escapeHtml(format)}</td>
         <td>${escapeHtml(file.Category)}</td>
         <td>${file.PropertyName ? escapeHtml(file.PropertyName) : '<span class="helper">General</span>'}</td>
+        <td>${visibilityTag}</td>
         <td>${escapeHtml(assignedName)}<br /><span class="helper">${escapeHtml(file.UserEmail)}</span></td>
         <td>${formatDate(file.CreatedAt)}</td>
         <td><button class="doc-download-btn" data-doc-id="${file.DocumentID}" data-doc-name="${escapeAttr(file.OriginalFileName)}">Download</button></td>
@@ -431,7 +442,7 @@ function renderFiles() {
     `;
         })
         .join('')
-    : `<tr><td colspan="7" class="helper">No documents uploaded yet.</td></tr>`;
+    : `<tr><td colspan="8" class="helper">No documents uploaded yet.</td></tr>`;
 }
 
 function renderQueue() {
@@ -624,7 +635,9 @@ function bindWorkspaceEvents() {
       addAudit(
         'Account created',
         `${authSession?.user?.Email || 'Ops'} • just now`,
-        `Created account for ${firstName} ${lastName} (${email}). Setup code issued — relay it via the manual channel, not email.`,
+        result.emailed
+          ? `Created account for ${firstName} ${lastName} (${email}). Setup code emailed automatically.`
+          : `Created account for ${firstName} ${lastName} (${email}). Setup email NOT sent (${result.emailFailureReason || 'unknown reason'}) — relay the code manually.`,
       );
 
       els.userForm.reset();
@@ -633,7 +646,19 @@ function bindWorkspaceEvents() {
       // again after this, so this panel stays open until the admin
       // dismisses it themselves, unlike other success messages in this app
       // that auto-hide after a few seconds.
-      els.setupCodeSummary.textContent = `${firstName} ${lastName} — ${email}`;
+      //
+      // It keeps being shown even when the email did go out. The admin has no
+      // way to see into the investor's inbox, and "sent" is not "arrived" —
+      // spam filters, typo'd addresses and full mailboxes all end here. The
+      // code on screen is what turns those into a thirty-second fix instead
+      // of a deleted-and-recreated account.
+      //
+      // textContent, not innerHTML — these are admin-typed values going into
+      // the page, which is the exact shape of the bug this file has now had
+      // five times (D.1, D.11).
+      els.setupCodeSummary.textContent = result.emailed
+        ? `${firstName} ${lastName} — ${email} · setup email sent`
+        : `${firstName} ${lastName} — ${email} · EMAIL NOT SENT, share this code directly`;
       els.setupCodeValue.value = result.setupToken;
       els.setupCodePanel.hidden = false;
 
@@ -796,10 +821,20 @@ function bindWorkspaceEvents() {
     // Empty string means "general" — sent as null rather than '' so the server
     // stores a real NULL instead of trying to coerce an empty string to an id.
     const propertyId = String(formData.get('propertyId') || '') || null;
+    // No fallback value here on purpose. Defaulting an unanswered visibility to
+    // 'investor_visible' would put the irreversible outcome one forgotten
+    // dropdown away; defaulting to 'operator_only' would silently stop the
+    // investor-facing feature working. So neither — it stays empty and the
+    // check below refuses to submit.
+    const visibility = String(formData.get('visibility') || '');
     const file = els.fileInput.files[0];
 
     if (!label) {
       els.uploadFormError.textContent = 'Document label is required.';
+      return;
+    }
+    if (!visibility) {
+      els.uploadFormError.textContent = 'Choose who can see this document.';
       return;
     }
     if (!userId) {
@@ -832,17 +867,19 @@ function bindWorkspaceEvents() {
           fileName: file.name,
           mimeType: file.type || 'application/octet-stream',
           propertyId: propertyId ? Number(propertyId) : null,
+          visibility,
         }),
       });
 
       const propertyLabel = propertyId
         ? (els.docPropertyId.selectedOptions[0]?.textContent || `property #${propertyId}`)
         : 'General';
+      const visibilityLabel = visibility === 'operator_only' ? 'INTERNAL ONLY' : 'investor-visible';
 
       addAudit(
         'Document assigned',
         `${authSession?.user?.Email || 'Ops'} • just now`,
-        `${label} (${category}, ${propertyLabel}) assigned to ${selectedDocUser?.Email || 'user #' + userId}.`,
+        `${label} (${category}, ${propertyLabel}, ${visibilityLabel}) assigned to ${selectedDocUser?.Email || 'user #' + userId}.`,
       );
 
       els.uploadForm.reset();
@@ -857,7 +894,9 @@ function bindWorkspaceEvents() {
       // especially on mobile where it's scrolled out of view — show an
       // explicit, unmissable confirmation right next to the button that was
       // just pressed, not just an audit-log entry the admin has to go look for.
-      els.uploadFormSuccess.textContent = `✓ "${label}" uploaded and assigned successfully.`;
+      els.uploadFormSuccess.textContent = visibility === 'operator_only'
+        ? `✓ "${label}" uploaded as INTERNAL ONLY — the investor will not see it.`
+        : `✓ "${label}" uploaded and assigned. The investor can see it in their portal.`;
       els.uploadFormSuccess.hidden = false;
       setTimeout(() => { els.uploadFormSuccess.hidden = true; }, 5000);
 

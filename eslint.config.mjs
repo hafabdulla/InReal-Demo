@@ -49,5 +49,11 @@ export default [
 			'import/no-cycle': 'off', // AI rarely makes this error, and the rule is very slow to run
 		},
 	},
-	{ files: ['tools/**/*.js', 'tailwind.config.js'], languageOptions: { globals: globals.node } },
+	// Backend files run in Node, not the browser. server.js was missing from
+	// this list, which is why `npm run lint` reported 35 phantom
+	// 'process is not defined' errors against a file that runs on Node fine.
+	{
+		files: ['tools/**/*.js', 'tailwind.config.js', 'server.js', 'mailer.js'],
+		languageOptions: { globals: globals.node },
+	},
 ];

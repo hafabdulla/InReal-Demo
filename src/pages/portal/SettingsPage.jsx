@@ -164,6 +164,86 @@ export default function SettingsPage() {
     }
   };
 
+  // Changing your own password while logged in. Until this was built the card
+  // below was three inputs wired to nothing and a button with no onClick — it
+  // looked finished and did nothing, so anyone wanting a new password had to
+  // log out and use "forgot password" instead.
+  //
+  // Errors are held per-field rather than as one banner because the two failure
+  // modes need to land in different places: a wrong CURRENT password is a
+  // problem with the top field, a too-short NEW one belongs beside the new
+  // password. A single message at the bottom of the card would leave the
+  // investor hunting for which of three boxes was wrong.
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
+  const [passwordErrors, setPasswordErrors] = useState({});
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const PASSWORD_MIN_LENGTH = 10; // matches MIN_PASSWORD_LENGTH in server.js
+
+  const handleChangePassword = async () => {
+    const errors = {};
+    if (!passwordForm.currentPassword) {
+      errors.currentPassword = 'Enter your current password';
+    }
+    if (!passwordForm.newPassword) {
+      errors.newPassword = 'Enter a new password';
+    } else if (passwordForm.newPassword.length < PASSWORD_MIN_LENGTH) {
+      errors.newPassword = `Password must be at least ${PASSWORD_MIN_LENGTH} characters`;
+    } else if (passwordForm.newPassword === passwordForm.currentPassword) {
+      errors.newPassword = 'New password must be different from your current one';
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      errors.confirmPassword = 'Passwords do not match';
+    }
+
+    setPasswordErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    setSavingPassword(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/user/password`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({
+          currentPassword: passwordForm.currentPassword,
+          newPassword: passwordForm.newPassword,
+        }),
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        // The server distinguishes "wrong current password" (403) from every
+        // other rejection, so put that one under the field it refers to and
+        // leave the rest on the new-password field where the policy lives.
+        setPasswordErrors(
+          res.status === 403
+            ? { currentPassword: data.error || 'Current password is incorrect' }
+            : { newPassword: data.error || 'Could not update your password.' }
+        );
+        return;
+      }
+
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPasswordErrors({});
+      toast({
+        title: 'Password updated',
+        description: 'Your password has been changed. Use it next time you sign in.',
+      });
+    } catch (error) {
+      console.error('Failed to change password:', error);
+      setPasswordErrors({ newPassword: "We couldn't reach the server. Please try again." });
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
   // Two-factor authentication (TOTP) — prerequisite for bank-detail
   // step-up, not built yet. 'idle' -> 'enrolling' (QR shown, awaiting a
   // code to confirm) -> 'recoveryCodes' (shown exactly once) -> back to
@@ -738,24 +818,67 @@ export default function SettingsPage() {
               animate={{ opacity: 1, y: 0 }}
               className="space-y-4"
             >
-              <div className="portal-card space-y-4">
+              <form
+                className="portal-card space-y-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleChangePassword();
+                }}
+              >
                 <h3 className="font-semibold text-portal-primary text-lg">Change Password</h3>
                 <div>
                   <label className="block text-sm font-medium text-portal-secondary mb-1.5">Current Password</label>
-                  <input type="password" className="portal-input" />
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    className="portal-input"
+                    value={passwordForm.currentPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                  />
+                  {passwordErrors.currentPassword && (
+                    <p className="text-sm text-red-400 mt-1.5">{passwordErrors.currentPassword}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-portal-secondary mb-1.5">New Password</label>
-                  <input type="password" className="portal-input" />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    className="portal-input"
+                    value={passwordForm.newPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                  />
+                  {passwordErrors.newPassword ? (
+                    <p className="text-sm text-red-400 mt-1.5">{passwordErrors.newPassword}</p>
+                  ) : (
+                    <p className="text-xs text-portal-secondary mt-1.5">
+                      At least {PASSWORD_MIN_LENGTH} characters.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-portal-secondary mb-1.5">Confirm New Password</label>
-                  <input type="password" className="portal-input" />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    className="portal-input"
+                    value={passwordForm.confirmPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                  />
+                  {passwordErrors.confirmPassword && (
+                    <p className="text-sm text-red-400 mt-1.5">{passwordErrors.confirmPassword}</p>
+                  )}
                 </div>
                 <div className="flex justify-end pt-2">
-                  <button className="portal-btn-primary text-sm py-2.5">Update Password</button>
+                  <button
+                    type="submit"
+                    disabled={savingPassword}
+                    className="portal-btn-primary text-sm py-2.5 disabled:opacity-60"
+                  >
+                    {savingPassword ? 'Updating…' : 'Update Password'}
+                  </button>
                 </div>
-              </div>
+              </form>
 
               <div className="portal-card space-y-4">
                 <div className="flex items-center justify-between">

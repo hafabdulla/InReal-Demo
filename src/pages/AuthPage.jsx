@@ -202,10 +202,24 @@ const countryCodes = [
   { code: "+263", country: "Zimbabwe", flag: "🇿🇼" },
 ];
 
+// Setup and reset emails link to /auth?code=… so the investor lands on the
+// code-entry screen with the code already filled in, rather than being asked
+// to copy a 64-character hex string out of an email by hand.
+//
+// Read once, at first render, rather than in an effect — an effect would show
+// the login screen for a frame and then swap it, which reads as a glitch on
+// the very first page anyone sees. It stays a prefill and nothing more: the
+// code is still submitted to /password-reset/confirm and validated there, so
+// a URL is never itself proof of anything.
+function readCodeFromUrl() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("code")?.trim() || "";
+}
+
 export default function AuthPage() {
   const navigate = useNavigate();
   const { signIn } = useAuth();
-  const [mode, setMode] = useState("login"); // "login" | "signup" | "verify" | "verified" | "forgot" | "reset"
+  const [mode, setMode] = useState(() => (readCodeFromUrl() ? "reset" : "login")); // "login" | "signup" | "verify" | "verified" | "forgot" | "reset"
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [otpValues, setOtpValues] = useState(['', '', '', '', '', '']);
@@ -239,7 +253,11 @@ export default function AuthPage() {
   // or "not submitted".
   const [forgotForm, setForgotForm] = useState({ email: "" });
   const [forgotSent, setForgotSent] = useState(false);
-  const [resetForm, setResetForm] = useState({ token: "", newPassword: "", confirmPassword: "" });
+  const [resetForm, setResetForm] = useState(() => ({
+    token: readCodeFromUrl(),
+    newPassword: "",
+    confirmPassword: "",
+  }));
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [errors, setErrors] = useState({});

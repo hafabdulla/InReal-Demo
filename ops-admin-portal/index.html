@@ -610,6 +610,20 @@
                   </select>
                   <span class="helper">Pick a property to file this under it in the investor's portal, e.g. a transfer slip for a specific unit.</span>
                 </label>
+                <!-- No option is pre-selected, deliberately. The placeholder
+                     below is not a value: the form refuses to submit until a
+                     real choice is made, and the API rejects a missing one.
+                     Getting this wrong toward "visible" cannot be undone — see
+                     database/pg/10-add-document-visibility.sql. -->
+                <label>
+                  Who can see this
+                  <select class="field" id="docVisibility" name="visibility" required>
+                    <option value="" disabled selected>Choose…</option>
+                    <option value="investor_visible">Investor can see it — statements, their own KYC copies</option>
+                    <option value="operator_only">Internal only — screening records, compliance notes</option>
+                  </select>
+                  <span class="helper">Internal documents never appear in the investor's portal. Screening results, compliance notes and anything supporting a SAR must be internal.</span>
+                </label>
                 <div id="docUserResults" class="user-search-results"></div>
                 <div id="docUserSelected" class="user-search-selected" hidden></div>
                 <p id="uploadFormError" class="helper" style="color:#ff6b6b;"></p>
@@ -633,6 +647,7 @@
                       <th>Format</th>
                       <th>Category</th>
                       <th>Property</th>
+                      <th>Visible to</th>
                       <th>Assigned</th>
                       <th>Created</th>
                       <th></th>

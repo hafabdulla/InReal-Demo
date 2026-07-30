@@ -15,6 +15,7 @@ import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
+import { isMailConfigured, sendAccountSetupEmail, sendPasswordResetEmail } from './mailer.js';
 
 dotenv.config();
 
@@ -267,6 +268,37 @@ const passwordResetLimiter = rateLimit({
   keyGenerator: getClientIp,
   validate: { trustProxy: false, xForwardedForHeader: false },
   message: { success: false, error: 'Too many requests — please try again later.' },
+});
+
+// Password-CHANGE limiter (the logged-in "change my password" endpoint), which
+// is a different threat from both of the above and needs its own budget.
+//
+// The attacker this exists for: someone holding a stolen session token who
+// wants to make their access permanent by changing the password and locking
+// the real owner out. The only thing standing in their way is having to supply
+// the CURRENT password, so that field is guessable-in-principle and therefore
+// needs a ceiling.
+//
+// Keyed by authenticated user id rather than IP, for the same reason the login
+// lockout is per-account: two investors behind one office NAT should not be
+// able to exhaust each other's budget. Falls back to IP only for unauthenticated
+// callers, which this route rejects anyway.
+//
+// Deliberately NOT wired into the login lockout Map. Reusing it would mean a
+// legitimate investor who mistypes their current password in Settings ten times
+// gets locked out of logging in entirely — punishing a typo in one place by
+// closing a different door.
+const passwordChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const userId = getAuthenticatedUserId(req);
+    return userId ? `user:${userId}` : getClientIp(req);
+  },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+  message: { success: false, error: 'Too many password change attempts — please try again later.' },
 });
 
 // ── Account-based login lockout ───────────────────────────────────────────────
@@ -697,12 +729,19 @@ async function ensureUserDocumentsTable() {
       -- Declared here as well as in that migration so a FRESH database gets the
       -- column too — this CREATE TABLE only runs when the table doesn't exist,
       -- so a new install would otherwise never receive it.
-      property_id          BIGINT REFERENCES properties(property_id)
+      property_id          BIGINT REFERENCES properties(property_id),
+      -- Whether the investor can see this document at all. Deliberately has NO
+      -- default: see database/pg/10-add-document-visibility.sql for why a guess
+      -- is the wrong shape here (one direction of a wrong guess is an
+      -- irreversible disclosure, and in the SAR case an unlawful one).
+      visibility           VARCHAR(20) NOT NULL
+                             CHECK (visibility IN ('investor_visible', 'operator_only'))
     )
   `);
   await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_user_id ON user_documents(user_id)`);
   await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_created_at ON user_documents(created_at DESC)`);
   await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_user_property ON user_documents(user_id, property_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_user_documents_user_visibility ON user_documents(user_id, visibility)`);
 }
 
 async function bootstrapAdminUsers() {
@@ -893,8 +932,38 @@ app.post('/api/auth/login', async (req, res) => {
 //   - Short expiry (30 minutes) so an intercepted-but-unused token goes stale fast.
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
+// Account-setup codes live longer than reset codes, and the difference is
+// deliberate rather than an inconsistency. A reset is something you asked for
+// seconds ago and are sitting in front of, so 30 minutes is generous. A setup
+// code is now emailed unprompted (PO requirement #4) to someone who may be
+// asleep, in another timezone, or not checking that address daily — at 30
+// minutes most of them would expire unused and every one of those becomes a
+// support ticket. 72 hours matches the usual shape of an invitation link.
+//
+// This is the only security property of the setup flow that the emailing
+// change alters, so it is called out rather than buried: the token is still
+// single-use, still stored only as a SHA-256 hash, and still useless without
+// the mailbox it was sent to.
+const SETUP_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
+
 function hashResetToken(token) {
   return createHash('sha256').update(token).digest('hex');
+}
+
+// Where to point the "set my password" link in an email.
+//
+// FRONTEND_URL is deliberately not used directly: it is a comma-separated CORS
+// allowlist that contains BOTH portals, and its first entry happening to be
+// the investor site is a coincidence rather than a guarantee. Sending an
+// investor to the ops portal would be a confusing dead end at best. So there
+// is a dedicated variable, falling back to the first FRONTEND_URL entry only
+// so a missing variable degrades to "probably right" rather than "no link".
+function getInvestorPortalUrl() {
+  const explicit = (process.env.INVESTOR_PORTAL_URL || '').trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+
+  const firstAllowedOrigin = (process.env.FRONTEND_URL || '').split(',')[0].trim();
+  return firstAllowedOrigin ? firstAllowedOrigin.replace(/\/+$/, '') : null;
 }
 
 // ── Encryption for small, recoverable secrets ────────────────────────────────
@@ -959,7 +1028,59 @@ async function verifyFreshTotpCode(userId, code) {
 const GENERIC_RESET_REQUEST_MESSAGE =
   'If an account exists for that email, password reset instructions have been sent.';
 
+// ── Timing-based enumeration protection ──────────────────────────────────────
+// Enumeration protection has two halves, and this endpoint only ever had one.
+//
+// The identical response BODY was always here and was always deliberate. But
+// the account-exists branch makes two extra round trips to a remote Postgres
+// that the other branch does not — invalidate prior tokens, then insert the
+// new one — at roughly 250ms each. Measured on localhost: ~750ms when the
+// account exists against ~250ms when it does not, consistently. That gap is a
+// reliable oracle. An attacker times the response and learns whether an
+// address is registered, which is precisely what the identical body exists to
+// prevent. Having the body right made the endpoint *look* solved, which is
+// why this survived so long.
+//
+// The fix pads every response up to a floor, so the fast branch is slowed to
+// match the slow one rather than the slow one being hurried.
+//
+// WHY A FLOOR AND NOT NON-BLOCKING WRITES. Dispatching the two writes without
+// awaiting them would also close the gap, and it is what the email send on
+// this same endpoint already does. It is the wrong call here: a failed token
+// write would become invisible, and the investor would be told to check their
+// email for a code that was never stored. A silent failure on the email is
+// recoverable — the code is in the log and the admin can relay it. A silent
+// failure on the write leaves nothing anywhere. Slow and correct beats fast
+// and quietly broken on a security endpoint.
+//
+// HONEST LIMITS. This removes the systematic signal, not every possible one.
+// If Postgres is slow enough that the exists-branch overruns the floor, that
+// individual request still leaks. The floor is set well above the observed
+// warm worst case (~830ms) to make that rare, and the 5-per-15-minute rate
+// limit is what makes the residual impractical to attack statistically. This
+// is a large improvement, not a mathematical guarantee — anyone tempted to
+// call it constant-time should not.
+//
+// NOT A DOS CONCERN. Holding a request for ~1.2s is an await, not a blocked
+// thread, and this endpoint allows 5 requests per 15 minutes per IP.
+const RESET_REQUEST_MIN_RESPONSE_MS = 1200;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Waits until at least `floorMs` has passed since `startedAt`. Returns
+// immediately if that much time has already gone.
+async function padToFloor(startedAt, floorMs) {
+  const elapsed = Date.now() - startedAt;
+  if (elapsed < floorMs) {
+    await sleep(floorMs - elapsed);
+  }
+}
+
 app.post('/api/auth/password-reset/request', passwordResetLimiter, async (req, res) => {
+  // Taken at the very top so every branch is measured from the same instant.
+  const startedAt = Date.now();
   try {
     // Same normalization as login/signup — without this, a mismatched-case
     // email would silently fail to find the account and no token would ever
@@ -967,11 +1088,15 @@ app.post('/api/auth/password-reset/request', passwordResetLimiter, async (req, r
     // generic success message either way, making the failure invisible.
     const email = (req.body.email || '').trim().toLowerCase();
     if (!email) {
+      // Deliberately NOT padded, and that is not an oversight. This fires
+      // before any lookup happens, on a request that named no account, so a
+      // fast reply here reveals nothing about whether any address is
+      // registered. Padding it would only slow down a malformed request.
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
 
     const users = await q(
-      `SELECT user_id FROM users WHERE LOWER(email) = $1 AND is_active = true AND is_deleted = false`,
+      `SELECT user_id, first_name FROM users WHERE LOWER(email) = $1 AND is_active = true AND is_deleted = false`,
       [email]
     );
 
@@ -996,16 +1121,48 @@ app.post('/api/auth/password-reset/request', passwordResetLimiter, async (req, r
         [userId, tokenHash, expiresAt, getClientIp(req) || null]
       );
 
-      // Phase 1 has no first-party email delivery (PRD decision D-14): the raw
-      // token is logged server-side only, for the concierge/ops team to relay
-      // to the investor through the pilot's manual channel. It is never
-      // returned in the API response.
+      // Kept even now that email exists. It is the fallback when mail is
+      // unconfigured or the provider is down, and the only record of the code
+      // in either case. Never returned in the API response.
       console.log(`[password-reset] token issued for user_id=${userId} (deliver via concierge): ${rawToken}`);
+
+      // NOT awaited, and that is a security decision rather than a
+      // performance one.
+      //
+      // This endpoint's whole contract is that a caller cannot tell whether
+      // the email exists — both branches return a byte-identical 200. But an
+      // awaited network call to SendGrid only ever happens on the branch
+      // where the account DOES exist, and it costs a few hundred
+      // milliseconds. That turns an indistinguishable response into a
+      // reliably distinguishable one, and rebuilds by timing exactly the
+      // enumeration oracle the identical body was written to remove.
+      // Dispatching without awaiting keeps both branches doing the same
+      // negligible amount of work before responding.
+      //
+      // The .catch is load-bearing: an unhandled rejection on a floating
+      // promise takes the process down on Node. mailer.js is written not to
+      // reject, so this should never fire — it is here so that a future
+      // change inside the mailer cannot turn a failed email into a crashed
+      // server.
+      sendPasswordResetEmail({
+        to: email,
+        firstName: users[0].first_name,
+        code: rawToken,
+        portalUrl: getInvestorPortalUrl(),
+        expiryMinutes: Math.round(RESET_TOKEN_TTL_MS / 60000),
+      }).catch((error) => console.error('[mail] password-reset send threw unexpectedly:', error));
     }
 
+    // Both branches converge here, having taken visibly different amounts of
+    // time to arrive. This is what makes them indistinguishable from outside.
+    await padToFloor(startedAt, RESET_REQUEST_MIN_RESPONSE_MS);
     return res.json({ success: true, message: GENERIC_RESET_REQUEST_MESSAGE });
   } catch (error) {
     console.error('API error:', error);
+    // Padded too. A DB failure is overwhelmingly likelier on the exists-branch
+    // (it is the only one that writes), so an unpadded 500 would be its own
+    // weaker version of the same signal.
+    await padToFloor(startedAt, RESET_REQUEST_MIN_RESPONSE_MS);
     // Even on an unexpected error, don't leak internals or existence info.
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
@@ -2573,7 +2730,7 @@ app.post('/api/ops/users', async (req, res) => {
     await q(
       `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip)
        VALUES ($1, $2, $3, $4)`,
-      [newUserId, setupTokenHash, new Date(Date.now() + RESET_TOKEN_TTL_MS), getClientIp(req) || null]
+      [newUserId, setupTokenHash, new Date(Date.now() + SETUP_TOKEN_TTL_MS), getClientIp(req) || null]
     );
 
     // Logged the same way password-reset tokens are, for a consistent audit
@@ -2583,6 +2740,30 @@ app.post('/api/ops/users', async (req, res) => {
     // admin who is *supposed* to receive this code to relay it onward, not
     // an anonymous requester whose existence-knowledge needs hiding.
     console.log(`[account-setup] setup code issued for user_id=${newUserId} (deliver via concierge): ${setupToken}`);
+
+    // Awaited here, unlike the password-reset path. There is no enumeration
+    // concern to protect — the caller is an authenticated admin who already
+    // knows this account exists, because they just created it — and waiting
+    // buys something worth having: the admin is told truthfully whether the
+    // email actually went out, instead of the UI asserting it did.
+    //
+    // The result is never allowed to fail the request. The account exists and
+    // the token is valid regardless; a failed send means this falls back to
+    // the manual relay that was the only option before requirement #4, which
+    // is why the code is still returned below in both cases.
+    const mailResult = await sendAccountSetupEmail({
+      to: normalizedEmail,
+      firstName,
+      code: setupToken,
+      portalUrl: getInvestorPortalUrl(),
+      expiryHours: Math.round(SETUP_TOKEN_TTL_MS / 3600000),
+    });
+
+    if (!mailResult.delivered) {
+      console.warn(
+        `[account-setup] setup email NOT delivered for user_id=${newUserId} (${mailResult.reason}) — admin must relay the code manually`
+      );
+    }
 
     res.json({
       success: true,
@@ -2595,7 +2776,11 @@ app.post('/api/ops/users', async (req, res) => {
         AccreditationStatus: 'Verified',
       },
       setupToken,
-      message: 'Account created. Share the setup code with the investor so they can set their password from the "Forgot password" screen.',
+      emailed: mailResult.delivered,
+      emailFailureReason: mailResult.delivered ? undefined : mailResult.reason,
+      message: mailResult.delivered
+        ? 'Account created and a setup email has been sent. The code below is a backup if the investor does not receive it.'
+        : 'Account created, but the setup email could not be sent. Share the code below with the investor directly.',
     });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
@@ -2768,6 +2953,14 @@ app.get('/api/ops/users/search', async (req, res) => {
 
 const DOCUMENT_CATEGORIES = new Set(['KYC', 'Finance', 'Property']);
 
+// Whether the investor may see a document. Names taken from the PRD rather than
+// coined here: Section 4's document taxonomy marks every code it adds
+// (KYC-NUS, KYC-PEP, KYC-TAX, KYC-UBO, PRP-INSP, PRP-RNV, PRP-LSE) as
+// `operator_only`, and "investor-visible" is the term used throughout for the
+// counterpart. See database/pg/10-add-document-visibility.sql for the
+// compliance rules that make this column necessary rather than nice to have.
+const DOCUMENT_VISIBILITIES = new Set(['investor_visible', 'operator_only']);
+
 // POST /api/ops/documents — admin uploads a document and assigns it to a
 // specific user. userId is validated against the real users table before
 // anything is written to disk or the database — never trusted as-is.
@@ -2776,7 +2969,7 @@ app.post('/api/ops/documents', async (req, res) => {
     const adminUserId = await requireAdmin(req, res);
     if (!adminUserId) return;
 
-    const { userId, category, label, fileBase64, fileName, propertyId, mimeType = 'application/octet-stream' } = req.body;
+    const { userId, category, label, fileBase64, fileName, propertyId, visibility, mimeType = 'application/octet-stream' } = req.body;
 
     const targetUserId = Number(userId);
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
@@ -2800,6 +2993,20 @@ app.post('/api/ops/documents', async (req, res) => {
     }
     if (!DOCUMENT_CATEGORIES.has(category)) {
       return res.status(400).json({ success: false, error: "category must be 'KYC', 'Finance', or 'Property'" });
+    }
+
+    // Required, with no fallback. An upload that does not say who may see the
+    // document is rejected rather than assumed, because the two ways of being
+    // wrong here are not equally recoverable: a document wrongly hidden is
+    // re-filed once someone notices, while a document wrongly disclosed has
+    // already been read, and where it is screening or SAR-supporting material
+    // that disclosure is the tipping-off the Compliance Manual §8 forbids.
+    // Same reasoning migration 08 applied to the KYC decline reason.
+    if (!DOCUMENT_VISIBILITIES.has(visibility)) {
+      return res.status(400).json({
+        success: false,
+        error: "visibility must be 'investor_visible' or 'operator_only'",
+      });
     }
     if (!label || !String(label).trim()) {
       return res.status(400).json({ success: false, error: 'label is required' });
@@ -2862,10 +3069,10 @@ app.post('/api/ops/documents', async (req, res) => {
 
     const inserted = await q(
       `INSERT INTO user_documents (
-         user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id, property_id
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         user_id, category, label, file_name, original_file_name, mime_type, uploaded_by_admin_id, property_id, visibility
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING document_id AS "DocumentID", created_at AS "CreatedAt"`,
-      [targetUserId, category, String(label).trim(), storagePath, correctedFileName, mimeType, adminUserId, targetPropertyId]
+      [targetUserId, category, String(label).trim(), storagePath, correctedFileName, mimeType, adminUserId, targetPropertyId, visibility]
     );
 
     res.status(201).json({
@@ -2875,6 +3082,7 @@ app.post('/api/ops/documents', async (req, res) => {
         userId: targetUserId,
         propertyId: targetPropertyId,
         category,
+        visibility,
         label: String(label).trim(),
         originalFileName: correctedFileName,
         createdAt: inserted[0].CreatedAt,
@@ -2916,6 +3124,11 @@ app.get('/api/ops/documents', async (req, res) => {
          d.created_at           AS "CreatedAt",
          d.property_id          AS "PropertyID",
          p.property_name        AS "PropertyName",
+         -- Surfaced in the queue so an admin can see what a document was filed
+         -- as. Without it the setting is write-once and invisible, and there is
+         -- no edit path for documents, so a misfile would be undetectable
+         -- rather than merely uncorrectable.
+         d.visibility           AS "Visibility",
          a.email                AS "UploadedByEmail"
        FROM user_documents d
        JOIN users u ON u.user_id = d.user_id
@@ -2990,6 +3203,124 @@ app.get('/api/ops/documents/:id/file', async (req, res) => {
 // rejected outright with a 400, so a client bug (or an attempt to sneak in
 // e.g. countryCode) can never silently slip through unnoticed.
 const CONTACT_CHANNELS = ['phone', 'whatsapp', 'email'];
+
+// ── Investor changes their own password while logged in ──────────────────────
+// PRD F1 / REQ-AUTH-02 ("password reset" on both surfaces). Until now the
+// Settings > Security "Change Password" card was three unwired inputs and a
+// button with no onClick, sitting above no endpoint at all — the only code
+// path in this file that could write a password was the reset-token flow. The
+// practical effect was that a logged-in investor who simply wanted a new
+// password had to log out and pretend they had forgotten it.
+//
+// HOW THIS DIFFERS FROM /api/auth/password-reset/confirm, and why it is not the
+// same endpoint wearing a hat: the reset flow proves identity with a token sent
+// to the registered mailbox, and is used precisely when the old password is
+// unavailable. This one proves identity with the CURRENT password, because a
+// live session on its own is not proof of the account owner — a borrowed laptop
+// or a stolen token both produce one. Requiring the current password is what
+// stops a session-holder turning temporary access into permanent ownership.
+// That is the same reasoning REQ-AUTH-12 applies to bank details, at a lower
+// tier: a password change is sensitive, so it re-authenticates.
+app.put('/api/user/password', passwordChangeLimiter, async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    // Allow-list the body, same as the contact endpoint below: an unexpected
+    // field is a rejected request, never a silently ignored one, so a client
+    // bug can't quietly believe it changed something it didn't.
+    const allowedFields = ['currentPassword', 'newPassword'];
+    const unexpectedKeys = Object.keys(req.body || {}).filter((key) => !allowedFields.includes(key));
+    if (unexpectedKeys.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Unexpected field(s): ${unexpectedKeys.join(', ')}. Only ${allowedFields.join(', ')} can be sent here.`,
+      });
+    }
+
+    const currentPassword = req.body.currentPassword;
+    const newPassword = req.body.newPassword;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'Both currentPassword and newPassword are required',
+      });
+    }
+
+    const rows = await q(
+      'SELECT password_hash, password_salt FROM users WHERE user_id = $1',
+      [userId]
+    );
+    if (rows.length === 0 || !rows[0].password_hash || !rows[0].password_salt) {
+      // No usable password on file. Reachable by an admin-created account that
+      // has not yet been through its setup code — those hold a random password
+      // that was generated and discarded, so there is nothing the account owner
+      // could possibly supply as "current". Send them to the setup/reset path.
+      return res.status(400).json({
+        success: false,
+        error: 'This account has no password set yet. Please use the password reset flow instead.',
+      });
+    }
+
+    if (!verifyPassword(currentPassword, rows[0].password_salt, rows[0].password_hash)) {
+      // 403, not 401: the session is perfectly valid, it is the re-authentication
+      // that failed. A 401 would tell the frontend's interceptor the token had
+      // expired and bounce the investor to the login screen mid-edit.
+      return res.status(403).json({ success: false, error: 'Current password is incorrect' });
+    }
+
+    // Same policy the reset flow enforces — one definition of "acceptable
+    // password", not a second, looser one that happens to live on this route.
+    if (!isPasswordAcceptable(newPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters and not a commonly used password.`,
+      });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'New password must be different from your current password',
+      });
+    }
+
+    const { salt, hash } = hashPassword(newPassword);
+    await q(
+      'UPDATE users SET password_hash = $1, password_salt = $2, updated_at = NOW() WHERE user_id = $3',
+      [hash, salt, userId]
+    );
+
+    // Burn any outstanding reset tokens. This matters more than it looks: the
+    // commonest reason someone changes their password deliberately is that they
+    // think somebody else has it. If an attacker had already requested a reset,
+    // that token would otherwise still be sitting there valid for its 30
+    // minutes, handing back the account the investor just secured.
+    await q(
+      'UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+      [userId]
+    );
+
+    // Matches the lightweight console-log audit pattern used elsewhere in this
+    // file — there is still no persisted audit table (see the cross-cutting
+    // "Audit events: not started" row in the tracker). Never logs either
+    // password, only that the event happened.
+    console.log(`[password-change] user_id=${userId} changed their own password at ${new Date().toISOString()}`);
+
+    // KNOWN LIMITATION, stated rather than hidden: this does not invalidate
+    // JWTs already issued to this user. They are stateless and this project has
+    // no token denylist, so a session opened elsewhere keeps working until it
+    // expires (12h). The implementation spec anticipated exactly this and asked
+    // for "invalidate existing sessions if feasible, at minimum log the event"
+    // — this is the log. Real revocation arrives with ADR-01 (Supabase Auth),
+    // which owns sessions properly. Worth closing then, not worth hand-rolling
+    // a denylist now.
+    return res.json({ success: true, message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
 
 app.put('/api/user/profile/contact', async (req, res) => {
   try {
@@ -3514,6 +3845,7 @@ app.get('/api/user/documents', async (req, res) => {
        FROM user_documents d
        LEFT JOIN properties p ON p.property_id = d.property_id
        WHERE d.user_id = $1 AND d.is_superseded = false
+         AND d.visibility = 'investor_visible'
        ORDER BY d.created_at DESC`,
       [userId]
     );
@@ -3540,10 +3872,25 @@ app.get('/api/user/documents/:id/file', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid document id' });
     }
 
+    // The visibility filter belongs HERE as much as on the list query, and
+    // omitting it here would be the whole control failing while appearing to
+    // work. Hiding a row from the list only removes the link; document ids are
+    // small sequential integers, so anyone who can call this endpoint can walk
+    // them. A list-only filter is the classic broken-object-level-authorisation
+    // shape: the UI stops showing it, the API keeps serving it.
+    //
+    // An operator_only document deliberately returns the SAME 404 as one that
+    // does not exist and one belonging to somebody else. There is no separate
+    // 403, because a distinguishable response would confirm that a document
+    // exists on this investor's file that they are not allowed to see — and for
+    // SAR-supporting material, confirming its existence is itself the
+    // tipping-off that Compliance Manual §8 prohibits. Same no-enumeration-signal
+    // reasoning as the cross-user case D.2 established.
     const rows = await q(
       `SELECT file_name, original_file_name, mime_type
        FROM user_documents
-       WHERE document_id = $1 AND user_id = $2`,
+       WHERE document_id = $1 AND user_id = $2
+         AND visibility = 'investor_visible'`,
       [documentId, userId]
     );
     if (rows.length === 0) {
@@ -3725,7 +4072,17 @@ async function startServer() {
 
     const server = app.listen(PORT, () => {
       console.log(`\nInReal API Server running on http://localhost:${PORT}`);
-      console.log(`Health check: GET http://localhost:${PORT}/api/health\n`);
+      console.log(`Health check: GET http://localhost:${PORT}/api/health`);
+      // Stated at boot because the difference is invisible at runtime
+      // otherwise: unconfigured mail fails silently by design, and "the
+      // investor never got the email" is a much harder thing to diagnose
+      // after the fact than at startup.
+      console.log(
+        isMailConfigured()
+          ? `Email delivery: enabled (setup and reset codes will be emailed)`
+          : `Email delivery: DISABLED — set SENDGRID_API_KEY and MAIL_FROM to enable. Codes are logged here for manual relay.`
+      );
+      console.log('');
     });
 
     server.on('error', (error) => {
