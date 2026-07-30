@@ -138,4 +138,9 @@ CREATE INDEX IF NOT EXISTS idx_user_documents_user_visibility
 -- admin" gate, now carrying three financial controls). This is a stopgap with
 -- an expiry date of "next deploy". Do not let it become the third.
 --
--- ALTER TABLE user_documents ALTER COLUMN visibility DROP DEFAULT;
+-- APPLIED 30 July 2026, after commit 1f43f57 was confirmed live on Render.
+-- Verified immediately afterwards that an INSERT omitting visibility is now
+-- rejected by the database (SQLSTATE 23502), and that production uploads still
+-- succeed through the API for both values. Left uncommented as the record of
+-- what ran; it is idempotent — re-running is a no-op.
+ALTER TABLE user_documents ALTER COLUMN visibility DROP DEFAULT;
