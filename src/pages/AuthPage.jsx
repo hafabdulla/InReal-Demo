@@ -232,18 +232,29 @@ function readCodeFromUrl() {
 // wrong in that direction costs a confusing error message, while guessing
 // wrong in the other direction would strand someone holding a perfectly good
 // link behind a screen telling them it was dead.
+// How long the spinner is allowed to last before the form is shown regardless.
+// Comfortably above a normal round trip (production measures ~900ms, and the
+// backend sleeps on a free tier so a cold start is slower still) while staying
+// short enough that nobody sits watching it.
+const LINK_CHECK_TIMEOUT_MS = 6000;
+
 async function checkLinkIsLive(code) {
+  const controller = new AbortController();
+  const abort = setTimeout(() => controller.abort(), LINK_CHECK_TIMEOUT_MS);
   try {
     const response = await fetch(`${getApiBase()}/api/auth/password-reset/validate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: code }),
+      signal: controller.signal,
     });
     if (!response.ok) return true;
     const data = await response.json();
     return data?.valid !== false;
   } catch {
     return true;
+  } finally {
+    clearTimeout(abort);
   }
 }
 
@@ -296,20 +307,39 @@ export default function AuthPage() {
 
   const [errors, setErrors] = useState({});
 
-  // Runs once, and only for a code that arrived in the URL. Guarded against
-  // setting state after unmount so a slow response on a page the investor has
-  // already navigated away from cannot warn in the console.
+  // Runs once, and only for a code that arrived in the URL.
+  //
+  // There is deliberately NO "ignore the result if unmounted" guard here. The
+  // first version had one, and it was the bug: this page's parent settles its
+  // auth state shortly after first paint, which runs the effect's cleanup, and
+  // a guard flipped by that cleanup threw away the answer when it finally
+  // arrived — leaving the investor on the spinner forever. It passed every
+  // local test because a localhost API replies in single-digit milliseconds,
+  // beating the cleanup; production replies in ~900ms and loses. Reproduced by
+  // giving the local endpoint the same latency. React 18 does not warn about
+  // setting state after unmount, so the guard was buying nothing and costing
+  // correctness.
+  //
+  // The timeout is the belt to that braces: whatever happens to the request,
+  // this screen resolves. It falls through to the FORM rather than the error
+  // screen, the same fail-open direction as a network error, because the real
+  // gate is at submit — being stranded on a spinner is strictly worse than
+  // seeing a form that might reject you.
   useEffect(() => {
     const code = readCodeFromUrl();
     if (!code) return;
 
-    let active = true;
-    checkLinkIsLive(code).then((isLive) => {
-      if (!active) return;
+    let settled = false;
+    const settle = (isLive) => {
+      if (settled) return;
+      settled = true;
       setMode(isLive ? "reset" : "linkInvalid");
-    });
+    };
 
-    return () => { active = false; };
+    checkLinkIsLive(code).then(settle);
+    const bail = setTimeout(() => settle(true), LINK_CHECK_TIMEOUT_MS);
+
+    return () => clearTimeout(bail);
   }, []);
 
   // Handle terms scroll detection
@@ -917,6 +947,24 @@ export default function AuthPage() {
               Sign Up
             </button>
           </div>
+          )}
+
+          {/* Checking an emailed link before deciding which screen to show.
+              Deliberately rendered OUTSIDE the AnimatePresence below, and as a
+              plain div rather than a motion one. As a keyed child of an
+              AnimatePresence in mode="wait" it deadlocked: the spinner began
+              its exit, its exit never reported completion, and because "wait"
+              holds the entering child until that happens, the replacement
+              screen was never mounted at all. The state was correct and
+              invisible — setMode ran, the DOM just never changed. Keeping it
+              out of the presence group means that while mode is "validating"
+              the group simply has no matching child, so the real screen enters
+              cleanly with nothing to wait for. */}
+          {mode === "validating" && (
+            <div className="space-y-6 text-center py-8">
+              <Loader2 className="w-10 h-10 text-primary-accent animate-spin mx-auto" />
+              <p className="text-slate-grey">Checking your link…</p>
+            </div>
           )}
 
           {/* Form Content */}
@@ -1694,22 +1742,6 @@ export default function AuthPage() {
                   </button>
                 </p>
               </motion.form>
-            )}
-
-            {/* Checking an emailed link before showing the form. Usually too
-                brief to read — it exists so the form never renders and then
-                yanks itself away, which looks like a bug even when it isn't. */}
-            {mode === "validating" && (
-              <motion.div
-                key="validating"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-6 text-center py-8"
-              >
-                <Loader2 className="w-10 h-10 text-primary-accent animate-spin mx-auto" />
-                <p className="text-slate-grey">Checking your link…</p>
-              </motion.div>
             )}
 
             {/* A spent or expired link. Says both possibilities in one line
