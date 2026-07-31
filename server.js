@@ -4175,7 +4175,7 @@ async function startServer() {
       console.log(
         isMailConfigured()
           ? `Email delivery: enabled (setup and reset codes will be emailed)`
-          : `Email delivery: DISABLED — set SENDGRID_API_KEY and MAIL_FROM to enable. Codes are logged here for manual relay.`
+          : `Email delivery: DISABLED — set RESEND_API_KEY and MAIL_FROM to enable. Codes are logged here for manual relay.`
       );
       console.log('');
     });

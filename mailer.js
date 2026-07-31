@@ -17,11 +17,18 @@
  *
  * SWAPPABILITY
  *
- * SendGrid is reached through its plain v3 HTTP API rather than @sendgrid/mail.
+ * Resend is reached through its plain HTTP API rather than the `resend` SDK.
  * There is no vendor SDK in the dependency tree, and `deliver()` is the single
  * function that knows which provider is in use. When ADR-01 lands and Supabase
  * Auth takes over account setup and password reset, this whole file is deleted
  * rather than untangled.
+ *
+ * Provider was SendGrid until 31 July 2026 and is now Resend, which is what PRD
+ * decision D-14 named in the first place before D.13 superseded it. The swap
+ * touched `deliver()`, the two env var names, and nothing else — no caller, no
+ * message copy, and no security property changed. Note the blocker did NOT move:
+ * Resend also requires a domain the business owns and has verified for SPF/DKIM.
+ * Changing provider fixed an account-access problem, not the sending-domain one.
  *
  * FAILURE POSTURE — read this before changing anything here
  *
@@ -37,11 +44,11 @@
 // Both must be present for any mail to go out. Absent, this module stays
 // inert and the pilot keeps running the manual relay — which is the state it
 // ships in until the business owns a real sending domain (see below).
-const SENDGRID_API_KEY = () => process.env.SENDGRID_API_KEY;
+const RESEND_API_KEY = () => process.env.RESEND_API_KEY;
 const MAIL_FROM = () => process.env.MAIL_FROM;
 const MAIL_FROM_NAME = () => process.env.MAIL_FROM_NAME || 'InReal';
 
-const SENDGRID_ENDPOINT = 'https://api.sendgrid.com/v3/mail/send';
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 
 // A send that hangs would hold an admin's "create account" request open for as
 // long as the socket stayed alive. 10s is generous for a single API call and
@@ -49,7 +56,22 @@ const SENDGRID_ENDPOINT = 'https://api.sendgrid.com/v3/mail/send';
 const SEND_TIMEOUT_MS = 10_000;
 
 export function isMailConfigured() {
-  return Boolean(SENDGRID_API_KEY() && MAIL_FROM());
+  return Boolean(RESEND_API_KEY() && MAIL_FROM());
+}
+
+/**
+ * Resend takes the sender as one RFC 5322 string (`InReal <no-reply@…>`),
+ * where SendGrid took name and address as separate JSON fields that it
+ * assembled itself. So a character that would have been harmlessly quoted by
+ * SendGrid now sits raw in a header we are building by hand. MAIL_FROM_NAME is
+ * operator-set rather than attacker-supplied, so this is a malformed-header
+ * guard and not an injection defence — but a stray quote or angle bracket
+ * would otherwise fail every send with a provider error that points at the
+ * payload rather than at the env var actually causing it.
+ */
+function buildFromHeader() {
+  const name = MAIL_FROM_NAME().replace(/["<>\r\n,;]/g, '').trim();
+  return name ? `${name} <${MAIL_FROM()}>` : MAIL_FROM();
 }
 
 /**
@@ -77,6 +99,17 @@ function escapeHtml(value) {
  * success or failure. server.js already logs it once, at the point of issue,
  * as the deliberate concierge fallback; logging it a second time here would
  * put a live credential into the request path of every send.
+ *
+ * ALSO ABSENT, AND NOT AN OVERSIGHT — click/open tracking. The SendGrid version
+ * disabled it explicitly per-request, because link rewriting puts a stranger's
+ * domain in the URL of a message whose entire purpose is proving InReal sent
+ * it: it trains investors to trust redirects and makes the mail look like the
+ * phishing it could be mistaken for. Resend has no per-request switch — it is
+ * off by default and configured per-domain in the dashboard. **Leave Click
+ * Tracking and Open Tracking OFF there when the sending domain is verified.**
+ * That reasoning is recorded here because it is now a setting nobody will see
+ * in this file, and a decision that lives only in a dashboard is one that gets
+ * switched on later by someone who never knew it was a decision.
  */
 async function deliver({ to, subject, text, html }) {
   if (!isMailConfigured()) {
@@ -87,42 +120,41 @@ async function deliver({ to, subject, text, html }) {
   const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
 
   try {
-    const response = await fetch(SENDGRID_ENDPOINT, {
+    const response = await fetch(RESEND_ENDPOINT, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${SENDGRID_API_KEY()}`,
+        Authorization: `Bearer ${RESEND_API_KEY()}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: to }] }],
-        from: { email: MAIL_FROM(), name: MAIL_FROM_NAME() },
+        from: buildFromHeader(),
+        to: [to],
         subject,
-        // Order matters to SendGrid: text/plain must precede text/html.
-        content: [
-          { type: 'text/plain', value: text },
-          { type: 'text/html', value: html },
-        ],
-        // Click-tracking rewrites links through a SendGrid domain. On a
-        // message whose entire purpose is proving InReal sent it, a
-        // stranger's domain in the URL trains investors to trust redirects
-        // and makes the mail look like the phishing it could be mistaken for.
-        tracking_settings: {
-          click_tracking: { enable: false, enable_text: false },
-          open_tracking: { enable: false },
-        },
+        // Both parts are sent, same as before. Resend takes them as two
+        // top-level fields and orders the MIME parts itself, so the
+        // text-before-html ordering SendGrid required is no longer ours to get
+        // wrong. The plain-text part is not decorative — a code-bearing mail
+        // with no text/plain alternative scores worse with spam filters, which
+        // matters more than usual for a message this project already expects
+        // to fight for the inbox.
+        text,
+        html,
       }),
       signal: controller.signal,
     });
 
-    if (response.status === 202) {
+    // Resend answers 200 with the message id; SendGrid answered 202. Kept as an
+    // explicit equality rather than `response.ok` so a redirect or a 204 from
+    // some future proxy cannot read as a successful send.
+    if (response.status === 200) {
       return { delivered: true };
     }
 
-    // SendGrid puts the actual cause (unverified sender, bad key, malformed
-    // payload) in the body. Log it server-side — an admin seeing "couldn't
-    // email" needs someone to be able to find out why.
+    // Resend puts the actual cause (unverified domain, bad key, invalid
+    // recipient) in a JSON body. Log it server-side — an admin seeing
+    // "couldn't email" needs someone to be able to find out why.
     const detail = await response.text().catch(() => '');
-    console.error(`[mail] SendGrid rejected the send (HTTP ${response.status}): ${detail.slice(0, 500)}`);
+    console.error(`[mail] Resend rejected the send (HTTP ${response.status}): ${detail.slice(0, 500)}`);
     return { delivered: false, reason: `provider_error_${response.status}` };
   } catch (error) {
     const reason = error?.name === 'AbortError' ? 'timeout' : 'network_error';
