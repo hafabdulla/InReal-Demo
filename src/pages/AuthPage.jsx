@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -13,7 +13,9 @@ import {
   Check,
   Search,
   KeyRound,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
@@ -216,10 +218,42 @@ function readCodeFromUrl() {
   return new URLSearchParams(window.location.search).get("code")?.trim() || "";
 }
 
+// Arriving with a code in the URL now checks whether that link is still good
+// BEFORE rendering the form, rather than letting the investor fill in two
+// password fields and only then be told the link was spent. A link is
+// single-use, and the commonest way to meet a dead one is the most innocent:
+// clicking the same email twice.
+//
+// This is presentation only. It decides which screen renders and nothing else
+// — /password-reset/confirm re-checks the same token before changing any
+// password, so a tampered response here buys an attacker a form they still
+// cannot submit. That is also why a network failure falls through to the form
+// rather than to the error screen: the real gate is at submit, so guessing
+// wrong in that direction costs a confusing error message, while guessing
+// wrong in the other direction would strand someone holding a perfectly good
+// link behind a screen telling them it was dead.
+async function checkLinkIsLive(code) {
+  try {
+    const response = await fetch(`${getApiBase()}/api/auth/password-reset/validate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: code }),
+    });
+    if (!response.ok) return true;
+    const data = await response.json();
+    return data?.valid !== false;
+  } catch {
+    return true;
+  }
+}
+
 export default function AuthPage() {
   const navigate = useNavigate();
   const { signIn } = useAuth();
-  const [mode, setMode] = useState(() => (readCodeFromUrl() ? "reset" : "login")); // "login" | "signup" | "verify" | "verified" | "forgot" | "reset"
+  // "validating" only ever appears when the page was opened from an email link;
+  // typing a code in by hand goes straight to "reset" as it always did, because
+  // there is nothing to pre-check until something has been typed.
+  const [mode, setMode] = useState(() => (readCodeFromUrl() ? "validating" : "login")); // "login" | "signup" | "verify" | "verified" | "forgot" | "reset" | "validating" | "linkInvalid"
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [otpValues, setOtpValues] = useState(['', '', '', '', '', '']);
@@ -261,6 +295,22 @@ export default function AuthPage() {
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [errors, setErrors] = useState({});
+
+  // Runs once, and only for a code that arrived in the URL. Guarded against
+  // setting state after unmount so a slow response on a page the investor has
+  // already navigated away from cannot warn in the console.
+  useEffect(() => {
+    const code = readCodeFromUrl();
+    if (!code) return;
+
+    let active = true;
+    checkLinkIsLive(code).then((isLive) => {
+      if (!active) return;
+      setMode(isLive ? "reset" : "linkInvalid");
+    });
+
+    return () => { active = false; };
+  }, []);
 
   // Handle terms scroll detection
   const handleTermsScroll = (e) => {
@@ -1644,6 +1694,65 @@ export default function AuthPage() {
                   </button>
                 </p>
               </motion.form>
+            )}
+
+            {/* Checking an emailed link before showing the form. Usually too
+                brief to read — it exists so the form never renders and then
+                yanks itself away, which looks like a bug even when it isn't. */}
+            {mode === "validating" && (
+              <motion.div
+                key="validating"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-6 text-center py-8"
+              >
+                <Loader2 className="w-10 h-10 text-primary-accent animate-spin mx-auto" />
+                <p className="text-slate-grey">Checking your link…</p>
+              </motion.div>
+            )}
+
+            {/* A spent or expired link. Says both possibilities in one line
+                rather than naming which, because the server deliberately does
+                not tell us — not-found, expired and already-used all come back
+                identically, so that an attacker cannot learn which guess was
+                closest. The copy is written to be true of all three. */}
+            {mode === "linkInvalid" && (
+              <motion.div
+                key="linkInvalid"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <div className="text-center">
+                  <div className="w-20 h-20 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <AlertTriangle className="w-10 h-10 text-amber-500" />
+                  </div>
+                  <h2 className="text-3xl font-bold text-off-white mb-2">This link is no longer valid</h2>
+                  <p className="text-slate-grey">
+                    Password links can only be used once, and they expire after a while.
+                    This one has already been used or has expired.
+                  </p>
+                </div>
+
+                <Button
+                  onClick={() => { setMode("forgot"); setForgotSent(false); setErrors({}); }}
+                  className="w-full bg-primary-accent hover:bg-steel-blue text-charcoal-black font-bold py-4 text-lg rounded-xl"
+                >
+                  Email me a new link
+                </Button>
+
+                <p className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setErrors({}); setResetForm({ token: "", newPassword: "", confirmPassword: "" }); }}
+                    className="text-slate-grey hover:text-off-white text-sm transition-colors"
+                  >
+                    ← Back to login
+                  </button>
+                </p>
+              </motion.div>
             )}
           </AnimatePresence>
         </motion.div>

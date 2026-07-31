@@ -270,6 +270,29 @@ const passwordResetLimiter = rateLimit({
   message: { success: false, error: 'Too many requests — please try again later.' },
 });
 
+// Reset-LINK pre-flight limiter, for /password-reset/validate below.
+//
+// Deliberately a separate budget from passwordResetLimiter above. That one
+// rations how many reset EMAILS an IP can cause to be sent — a spam and
+// enumeration concern. This one rations reads of whether a link is still good,
+// where the only real abuse is grinding token guesses. Sharing the /request
+// budget would mean that opening your own reset link and reloading it a couple
+// of times could leave you unable to ask for a new one, which is precisely the
+// situation someone clicking a stale link is already in.
+//
+// 20 per 15 minutes sits far above any legitimate use (click, maybe reload,
+// maybe reopen the email) and far below anything useful against a 32-byte
+// random token.
+const passwordResetValidateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: getClientIp,
+  validate: { trustProxy: false, xForwardedForHeader: false },
+  message: { success: false, error: 'Too many requests — please try again later.' },
+});
+
 // Password-CHANGE limiter (the logged-in "change my password" endpoint), which
 // is a different threat from both of the above and needs its own budget.
 //
@@ -1179,6 +1202,56 @@ function isPasswordAcceptable(password) {
   if (COMMON_PASSWORD_BLOCKLIST.has(password.toLowerCase())) return false;
   return true;
 }
+
+// Advisory pre-flight for the /auth?code=… links in setup and reset emails.
+//
+// WHAT THIS IS NOT: an authorisation check. Nothing is granted on the strength
+// of it, and /password-reset/confirm below re-validates the same token against
+// the same rules before it will change any password, exactly as it did before
+// this endpoint existed. This only decides which SCREEN the investor lands on,
+// so a link that has already been used shows a "no longer valid" notice instead
+// of a form that looks usable and can only fail at submit. The standing rule
+// that a URL is never itself proof of anything is unchanged.
+//
+// It deliberately does NOT consume the token. Reading a link must never burn
+// it — a mail client that pre-fetches URLs, or an investor who reloads the
+// page, would otherwise destroy a code nobody had used yet.
+//
+// POST rather than GET for a read-only operation, on purpose: a GET would put
+// the token in the query string, and therefore in server access logs, Referer
+// headers and browser history. It is already in the address bar (inherent to
+// emailing a link at all) and that is enough surface without adding more.
+//
+// The response is one boolean. Not-found, expired and already-used all return
+// the same `valid: false`, matching the GENERIC_TOKEN_ERROR rule at confirm —
+// distinguishing them tells an attacker which guess landed closer to a real
+// token. No user id, email or expiry timestamp comes back: the caller supplied
+// a token, and a token is not proof of whose account it belongs to.
+app.post('/api/auth/password-reset/validate', passwordResetValidateLimiter, async (req, res) => {
+  try {
+    const token = req.body.token;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ success: false, error: 'Token is required' });
+    }
+
+    const rows = await q(
+      `SELECT expires_at, used_at FROM password_reset_tokens WHERE token_hash = $1`,
+      [hashResetToken(token)]
+    );
+
+    // Both outcomes cost exactly one lookup and the same comparisons, so there
+    // is no timing gap of the kind D.16 had to pad away on /request — that
+    // endpoint's branches did genuinely different amounts of work (two writes
+    // on one side, none on the other). These do not.
+    const row = rows[0];
+    const valid = Boolean(row) && !row.used_at && new Date(row.expires_at).getTime() > Date.now();
+
+    return res.json({ success: true, valid });
+  } catch (error) {
+    console.error('API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
 
 app.post('/api/auth/password-reset/confirm', async (req, res) => {
   try {
