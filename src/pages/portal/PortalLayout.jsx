@@ -91,7 +91,7 @@ export default function PortalLayout({ children }) {
           {/* Logo */}
           <div className="flex items-center justify-between px-6 py-5 border-b border-portal-border-subtle">
             <img 
-              src="https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/25979fe1840cf294bcca6defc52c98c7.png" 
+              src="/logo-dark.png" 
               alt="InReal" 
               className="h-6"
             />

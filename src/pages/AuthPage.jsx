@@ -859,7 +859,7 @@ export default function AuthPage() {
         <div className="relative z-10 flex flex-col justify-center items-center w-full p-12">
           <Link to="/">
             <img
-              src="https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/6a44e4eaa4f0d14816b5b75d29e50068.png"
+              src="/logo-dark.png"
               alt="InReal Logo"
               className="h-16 mb-8 hover:scale-105 transition-transform"
             />
@@ -870,25 +870,28 @@ export default function AuthPage() {
             <span className="text-primary-accent">Worldwide</span>
           </h1>
 
+          {/* Per the PO, 03 Aug 2026. The previous line read "Join thousands of
+              investors building wealth through premium real estate, starting
+              from just $250" and had two problems beyond being wordy: "join
+              thousands of investors" was the same unevidenced traction claim as
+              the stat tiles removed below, and $250 contradicted the $500
+              minimum stated in the PRD and in the public FAQ. */}
           <p className="text-slate-grey text-center max-w-md text-lg">
-            Join thousands of investors building wealth through premium real estate, starting from just $250.
+            Build your wealth through real estate.
           </p>
 
-          {/* Stats */}
-          <div className="flex gap-8 mt-12">
-            <div className="text-center">
-              <p className="text-3xl font-bold text-primary-accent">$2.5M+</p>
-              <p className="text-slate-grey text-sm">Total Invested</p>
-            </div>
-            <div className="text-center">
-              <p className="text-3xl font-bold text-primary-accent">750+</p>
-              <p className="text-slate-grey text-sm">Active Investors</p>
-            </div>
-            <div className="text-center">
-              <p className="text-3xl font-bold text-primary-accent">15%</p>
-              <p className="text-slate-grey text-sm">Avg. Returns</p>
-            </div>
-          </div>
+          {/* The three stat tiles that used to sit here ($2.5M+ Total Invested,
+              750+ Active Investors, 15% Avg. Returns) were removed on the PO's
+              instruction ahead of the pilots.
+
+              DO NOT restore these values. They were placeholder figures, and
+              "15% Avg. Returns" in particular is a bare performance claim with
+              no risk disclosure attached, on a public page of a financial
+              platform — which is exactly what the project's own content rules
+              prohibit and what Properties.jsx gets right (it labels its numbers
+              "target", and carries "not guaranteed / capital at risk" beneath
+              them). If traction numbers come back after the pilots, they need
+              to be real, sourced, and carry the same disclosure. */}
         </div>
       </div>
 
@@ -903,7 +906,7 @@ export default function AuthPage() {
           <div className="lg:hidden flex justify-center mb-8">
             <Link to="/">
               <img
-                src="https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/6a44e4eaa4f0d14816b5b75d29e50068.png"
+                src="/logo-dark.png"
                 alt="InReal Logo"
                 className="h-10"
               />

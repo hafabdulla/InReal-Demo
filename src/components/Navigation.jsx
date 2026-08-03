@@ -59,7 +59,7 @@ export function Navigation() {
           >
             <a href="#" className="cursor-pointer group">
               <img 
-                src="https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/6a44e4eaa4f0d14816b5b75d29e50068.png" 
+                src="/logo-dark.png" 
                 alt="InReal Logo" 
                 className="h-10 w-auto transition-transform duration-200 group-hover:scale-110"
               />

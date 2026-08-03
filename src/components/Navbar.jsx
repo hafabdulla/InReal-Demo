@@ -18,8 +18,12 @@ export default function Navbar() {
   const [lastY, setLastY] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Logo path updated to Hostinger CDN
-  const logoPath = 'https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/25979fe1840cf294bcca6defc52c98c7.png';
+  // Self-hosted from public/. Was a Hostinger CDN URL until 03 Aug 2026, when
+  // every logo asset on that CDN started returning 404 — the mark vanished from
+  // both portals at once, including the favicon. Serving our own brand mark from
+  // a third party we don't control was the whole failure mode, so don't move it
+  // back. Dark variant because this nav sits on bg-ir-dark.
+  const logoPath = '/logo-dark.png';
 
   useEffect(() => {
     const h = () => { const y = window.scrollY; setHidden(y > 400 && y > lastY); setLastY(y) }
