@@ -7,10 +7,11 @@ import {
   TrendingUp, 
   FileText,
   Settings, 
-  Menu, 
-  X, 
+  Menu,
+  X,
   LogOut,
-  User
+  User,
+  Home
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
 import AccountDeclinedNotice from '@/pages/portal/AccountDeclinedNotice';
@@ -88,13 +89,19 @@ export default function PortalLayout({ children }) {
         className="fixed top-0 left-0 h-screen w-64 bg-portal-secondary border-r border-portal-border-subtle z-50"
       >
           <div className="flex flex-col h-full">
-          {/* Logo */}
+          {/* Logo — links home, the convention everywhere else on the web.
+              On its own it is not enough (see the "Back to Website" item at the
+              bottom): a clickable logo is only discoverable to someone who
+              already expects it to be clickable, and the PO's report was
+              literally "why can't I go back to the home page?" */}
           <div className="flex items-center justify-between px-6 py-5 border-b border-portal-border-subtle">
-            <img 
-              src="/logo-dark.png" 
-              alt="InReal" 
-              className="h-6"
-            />
+            <Link to="/" onClick={() => setSidebarOpen(false)} aria-label="InReal home">
+              <img
+                src="/logo-dark.png"
+                alt="InReal"
+                className="h-6 hover:opacity-80 transition-opacity"
+              />
+            </Link>
             <button
               onClick={() => setSidebarOpen(false)}
               className="lg:hidden text-portal-secondary hover:text-portal-primary transition-colors"
@@ -138,9 +145,25 @@ export default function PortalLayout({ children }) {
                 <p className="text-xs text-portal-tertiary truncate">{user?.Email || ''}</p>
               </div>
             </div>
+            {/* Leaving the portal is not the same as leaving the account, and
+                until now the only exit from here was Logout — so "I want to look
+                at the website" and "I want to end my session" were the same
+                button. Grouped with Logout rather than with the portal sections
+                above because it leaves the portal rather than navigating inside
+                it, and an active-state check against a portal route would never
+                match it anyway. The session is untouched: coming back through
+                Dashboard lands straight here, no second sign-in. */}
+            <Link
+              to="/"
+              onClick={() => setSidebarOpen(false)}
+              className="w-full mt-3 portal-sidebar-link text-portal-tertiary hover:text-portal-primary"
+            >
+              <Home className="w-5 h-5" />
+              <span>Back to Website</span>
+            </Link>
             <button
               onClick={handleLogout}
-              className="w-full mt-3 portal-sidebar-link text-portal-tertiary hover:text-red-400"
+              className="w-full mt-1 portal-sidebar-link text-portal-tertiary hover:text-red-400"
             >
               <LogOut className="w-5 h-5" />
               <span>Logout</span>
