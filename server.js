@@ -557,17 +557,34 @@ const PG_UNDEFINED_TABLE = '42P01';
  */
 async function getOperatorRole(userId) {
   try {
+    // NOTE the absence of `AND a.is_active = true` here, which is the whole
+    // point of this query and was a real bug when it was present.
+    //
+    // Filtering revoked rows out at the SQL level makes a revoked operator
+    // indistinguishable from someone who was never granted access — and the
+    // legacy fallback below then answers "never granted" with `super_admin`,
+    // because their users.role is still 'admin'. Revoking an operator through
+    // the portal would have appeared to succeed while changing nothing at all.
+    //
+    // So: the presence of a row is authoritative, regardless of its state. If
+    // admin_users has an opinion about this user, the legacy column does not
+    // get a vote.
     const rows = await q(
-      `SELECT a.role
+      `SELECT a.role, a.is_active AS grant_active
        FROM admin_users a
        JOIN users u ON u.user_id = a.user_id
        WHERE a.user_id = $1
-         AND a.is_active = true
          AND u.is_active = true
          AND u.is_deleted = false`,
       [userId]
     );
-    if (rows.length > 0) return rows[0].role;
+    if (rows.length > 0) {
+      if (!rows[0].grant_active) {
+        console.log(`[f8.revoked] user_id=${userId} attempted an operator action`);
+        return null;
+      }
+      return rows[0].role;
+    }
   } catch (error) {
     if (error?.code !== PG_UNDEFINED_TABLE) throw error;
     console.warn(
