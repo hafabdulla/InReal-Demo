@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   Mail,
   Lock,
@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { Toaster } from "@/components/ui/toaster";
 import { useAuth } from "@/contexts/SQLServerAuthContext";
-import { getApiBase } from '@/lib/utils';
+import { getApiBase, safeInternalPath } from '@/lib/utils';
 
 // Comprehensive country codes list (sorted alphabetically by country name)
 const countryCodes = [
@@ -260,6 +260,21 @@ async function checkLinkIsLive(code) {
 
 export default function AuthPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Where to go once authentication succeeds.
+  //
+  // Per the PO (03 Aug 2026), logging in no longer forces anyone into the
+  // portal: the public site stays reachable regardless of session state, and
+  // the only gated thing is the portal route itself. So the default is home,
+  // exactly as if they had never signed in.
+  //
+  // The exception is someone who was *already* heading somewhere gated and got
+  // bounced here by ProtectedRoute — sending them home would silently discard
+  // the thing they actually asked for. That path arrives in router state and is
+  // validated before use; anything that is not a plain internal path is
+  // discarded in favour of home rather than repaired.
+  const postAuthTarget = safeInternalPath(location.state?.from, '/');
   const { signIn } = useAuth();
   // "validating" only ever appears when the page was opened from an email link;
   // typing a code in by hand goes straight to "reset" as it always did, because
@@ -384,8 +399,8 @@ export default function AuthPage() {
       setIsLoading(false);
 
       if (!error) {
-        // Redirect to portal on successful login
-        navigate("/portal", { replace: true });
+        // Home by default, or back to whatever gated route sent them here.
+        navigate(postAuthTarget, { replace: true });
       }
     }
   };
@@ -794,7 +809,8 @@ export default function AuthPage() {
         });
 
         setIsLoading(false);
-        navigate('/portal', { replace: true });
+        // Same rule as login above — home unless a gated route sent them here.
+        navigate(postAuthTarget, { replace: true });
       } catch (error) {
         console.error('Signup error:', error);
         setErrors({ submit: 'Failed to create account. Please try again.' });

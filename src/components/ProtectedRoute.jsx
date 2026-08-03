@@ -1,13 +1,22 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
 
 /**
  * ProtectedRoute Component
- * Redirects to /auth if user is not authenticated
+ *
+ * Gates a route on an authenticated session, and — since login no longer
+ * auto-redirects anywhere — remembers which route was being attempted so the
+ * login screen can return the investor to it afterwards.
+ *
+ * The attempted path travels in router state rather than a query parameter.
+ * That keeps it out of the address bar, out of access logs and out of Referer
+ * headers, and it means the value cannot be set by someone sending a crafted
+ * link. AuthPage still validates it before navigating (see safeInternalPath).
  */
 export const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -23,7 +32,13 @@ export const ProtectedRoute = ({ children }) => {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/auth" replace />;
+    return (
+      <Navigate
+        to="/auth"
+        replace
+        state={{ from: `${location.pathname}${location.search}` }}
+      />
+    );
   }
 
   return children;

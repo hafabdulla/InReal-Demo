@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import App from './App';
 import AuthPage from '@/pages/AuthPage';
 import PortalLayout from '@/pages/portal/PortalLayout';
@@ -26,6 +26,14 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/login" element={<AuthPage />} />
         <Route path="/signup" element={<AuthPage />} />
+
+        {/* The investor dashboard has always lived at /portal, but it is called
+            "Dashboard" in the nav and in the PO's spec, so /dashboard is the
+            path people actually type. Renaming the real route would break every
+            existing link and all of PortalLayout's navigation for no gain; an
+            alias costs one line. Note there is still no catch-all route, so any
+            other unmatched path renders a blank page — worth fixing separately. */}
+        <Route path="/dashboard" element={<Navigate to="/portal" replace />} />
 
         {/* Protected Portal Routes */}
         <Route

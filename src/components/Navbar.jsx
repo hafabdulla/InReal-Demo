@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EASE_PREMIUM } from '../animations';
+import { useAuth } from '@/contexts/SQLServerAuthContext';
 
 const NAV_LINKS = [
   { label: 'HOW IT WORKS', href: '#how-it-works' },
@@ -14,6 +15,11 @@ const NAV_LINKS = [
 
 export default function Navbar() {
   const location = useLocation();
+  // Login no longer redirects into the portal, so an authenticated investor now
+  // spends time on this page — which they previously never saw while signed in.
+  // A nav that still said "SIGN IN" to someone already signed in was invisible
+  // before that change and would be obviously wrong after it.
+  const { isAuthenticated, signOut } = useAuth();
   const [hidden, setHidden] = useState(false);
   const [lastY, setLastY] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -53,9 +59,23 @@ export default function Navbar() {
               </a>
             ))}
           </div>
+          {/* "Dashboard" is shown to everyone, signed in or not. It is not a
+              gate — /portal is, via ProtectedRoute, which is the point: the
+              check happens when someone actually tries to enter, not by hiding
+              the door. A visitor who clicks it is sent to sign in and then
+              lands on the dashboard they asked for. */}
           <div className="hidden md:flex items-center gap-4 ml-auto">
-            <Link to="/auth" className="text-caption tracking-[0.08em] font-medium text-ir-white/70 hover:text-white transition-colors duration-300">SIGN IN</Link>
-            <Link to="/portal" className="ir-btn-primary text-body-sm !py-2 !px-4">Portal</Link>
+            {isAuthenticated ? (
+              <button
+                onClick={signOut}
+                className="text-caption tracking-[0.08em] font-medium text-ir-white/70 hover:text-white transition-colors duration-300"
+              >
+                SIGN OUT
+              </button>
+            ) : (
+              <Link to="/auth" className="text-caption tracking-[0.08em] font-medium text-ir-white/70 hover:text-white transition-colors duration-300">SIGN IN</Link>
+            )}
+            <Link to="/portal" className="ir-btn-primary text-body-sm !py-2 !px-4">Dashboard</Link>
           </div>
           <button onClick={() => setMobileOpen(!mobileOpen)} className="md:hidden relative z-10 w-9 h-9 flex flex-col items-center justify-center gap-1" aria-label={mobileOpen ? 'Close menu' : 'Open menu'}>
             <motion.span animate={mobileOpen ? { rotate: 45, y: 5 } : { rotate: 0, y: 0 }} className="block w-5 h-[1.5px] origin-center bg-white" />
@@ -70,8 +90,17 @@ export default function Navbar() {
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} transition={{ duration: 0.4, ease: EASE_PREMIUM, delay: 0.1 }} className="flex flex-col items-center gap-7">
               {NAV_LINKS.map((l, i) => (<motion.a key={l.href} href={l.href} onClick={() => setMobileOpen(false)} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 + i * 0.08, duration: 0.4, ease: EASE_PREMIUM }} className="text-h2 text-white hover:text-ir-teal transition-colors font-bold tracking-[0.05em]">{l.label}</motion.a>))}
               <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="mt-6 flex flex-col items-center gap-4">
-                <Link to="/portal" className="ir-btn-primary text-h4 !px-10 !py-4" onClick={() => setMobileOpen(false)}>Portal</Link>
-                <Link to="/auth" className="text-caption tracking-[0.08em] font-medium text-ir-text-secondary hover:text-white transition-colors" onClick={() => setMobileOpen(false)}>SIGN IN</Link>
+                <Link to="/portal" className="ir-btn-primary text-h4 !px-10 !py-4" onClick={() => setMobileOpen(false)}>Dashboard</Link>
+                {isAuthenticated ? (
+                  <button
+                    onClick={() => { setMobileOpen(false); signOut(); }}
+                    className="text-caption tracking-[0.08em] font-medium text-ir-text-secondary hover:text-white transition-colors"
+                  >
+                    SIGN OUT
+                  </button>
+                ) : (
+                  <Link to="/auth" className="text-caption tracking-[0.08em] font-medium text-ir-text-secondary hover:text-white transition-colors" onClick={() => setMobileOpen(false)}>SIGN IN</Link>
+                )}
               </motion.div>
             </motion.div>
           </motion.div>
