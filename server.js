@@ -1706,6 +1706,13 @@ app.get('/api/admin/auth/me', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
+    // The "Role" column above is the LEGACY users.role flag, which only ever
+    // says 'admin'. The ops portal needs the real operator role to decide what
+    // to show — chiefly whether to offer the Operators tab at all. Added
+    // alongside rather than replacing, because the old field is still read
+    // elsewhere and phase 4 removes both together.
+    rows[0].OperatorRole = await getOperatorRole(userId);
+
     const summary = await getUserFinancialSummary(userId);
 
     res.json({

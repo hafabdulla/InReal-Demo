@@ -75,6 +75,15 @@
             <i data-lucide="list-checks"></i>
             <span>Queues</span>
           </button>
+          <!-- Hidden by default and revealed only for super_admin (see
+               applyOperatorRoleVisibility in app.js). The server rejects these
+               endpoints for everyone else regardless — hiding the tab is so a
+               finance/operations admin isn't shown a door that only ever 403s,
+               not a security control. -->
+          <button class="nav-item hidden" id="navOperators" data-tab="operators" data-title="Operators">
+            <i data-lucide="shield-check"></i>
+            <span>Operators</span>
+          </button>
           <button class="nav-item" data-tab="audit" data-title="Audit log">
             <i data-lucide="scroll-text"></i>
             <span>Audit log</span>
@@ -741,6 +750,90 @@
               <button class="ghost-btn" id="addQueueItemBtn">Add entry</button>
             </div>
             <div class="grid-3" id="queueCards"></div>
+          </section>
+
+          <section class="panel" data-panel="operators">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">F8 / REQ-AUTH-09 — super admin only</p>
+                <h3>Operator access</h3>
+              </div>
+              <button class="ghost-btn" id="refreshOperatorsBtn">
+                <i data-lucide="refresh-cw" style="width:16px;height:16px"></i>
+                Refresh
+              </button>
+            </div>
+
+            <div class="compliance-note">
+              <i data-lucide="info" style="width:14px;height:14px;flex-shrink:0"></i>
+              <span>
+                Every change here is recorded permanently against the person it affects, with your name on it.
+                Revoking needs a reason. You can't change your own access — ask another super admin.
+                <strong>Finance</strong> can adjust portfolio values, verify bank details and review intents.
+                <strong>Operations</strong> can decide KYC, create accounts and upload documents.
+                <strong>Super</strong> can do both, plus manage this page.
+              </span>
+            </div>
+
+            <div class="card">
+              <div class="card-title"><div><h4>Grant or change access</h4></div></div>
+              <div class="form-row">
+                <label class="field">
+                  <span>User ID</span>
+                  <input type="number" id="operatorGrantUserId" placeholder="e.g. 42" min="1" />
+                </label>
+                <label class="field">
+                  <span>Role</span>
+                  <select id="operatorGrantRole">
+                    <option value="operations_admin">Operations admin</option>
+                    <option value="finance_admin">Finance admin</option>
+                    <option value="super_admin">Super admin</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Note (optional)</span>
+                  <input type="text" id="operatorGrantNote" placeholder="Why this access is being given" />
+                </label>
+              </div>
+              <button class="primary-btn" id="operatorGrantBtn">Grant access</button>
+              <p class="helper" id="operatorGrantStatus"></p>
+            </div>
+
+            <div class="card table-card">
+              <div class="card-title">
+                <div><h4>Current operators</h4></div>
+                <span class="helper" id="operatorCountLabel"></span>
+              </div>
+              <!-- min-width:0 — CSS grid/flex children don't shrink below their
+                   content by default, and a wide table blows out the page width
+                   instead of scrolling inside its own container. Already fixed
+                   once elsewhere in this portal; see CLAUDE.md. -->
+              <div class="table-scroll" style="min-width:0;overflow-x:auto">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Operator</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                      <th>Granted</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="operatorTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel-head mt-16">
+              <div>
+                <p class="eyebrow">Append-only</p>
+                <h3>Access history</h3>
+              </div>
+            </div>
+            <div class="card">
+              <p class="helper" id="operatorHistoryLabel">Select an operator to see every grant, change and revocation.</p>
+              <div class="audit-list" id="operatorHistoryList"></div>
+            </div>
           </section>
 
           <section class="panel" data-panel="audit">

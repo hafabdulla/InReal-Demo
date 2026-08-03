@@ -596,6 +596,7 @@ async function establishSession(session) {
   saveAuthSession(authSession);
 
   updateAdminHeader();
+  applyOperatorRoleVisibility();
   showAuthScreen('app');
   refreshIcons();
   await refreshLiveData();
@@ -660,6 +661,10 @@ async function bootstrapAuth() {
     authSession = { ...stored, user: me.data };
     saveAuthSession(authSession);
     updateAdminHeader();
+    // Needed on this path too, not just after a fresh login — this is the
+    // branch every page refresh takes, and without it a super admin who
+    // reloaded lost the Operators tab until they logged out and back in.
+    applyOperatorRoleVisibility();
     showAuthScreen('app');
     refreshIcons();
     await refreshLiveData();
@@ -676,6 +681,81 @@ function bindWorkspaceEvents() {
     const button = event.target.closest('[data-tab]');
     if (!button) return;
     setActiveTab(button.dataset.tab);
+    // Loaded on open rather than with the rest of the dashboard: only super
+    // admins can read it, so fetching it up front would 403 for everyone else
+    // on every login and fill their console with errors about a tab they
+    // cannot see.
+    if (button.dataset.tab === 'operators') reloadOperators();
+  });
+
+  // ── Operator access (F8) ──────────────────────────────────────────────────
+  document.getElementById('refreshOperatorsBtn')?.addEventListener('click', reloadOperators);
+
+  document.getElementById('operatorGrantBtn')?.addEventListener('click', async () => {
+    const status = document.getElementById('operatorGrantStatus');
+    const userId = document.getElementById('operatorGrantUserId').value.trim();
+    const role = document.getElementById('operatorGrantRole').value;
+    const note = document.getElementById('operatorGrantNote').value.trim();
+
+    if (!userId) {
+      if (status) status.textContent = 'Enter the user ID of the person to grant access to.';
+      return;
+    }
+    if (status) status.textContent = 'Saving...';
+    try {
+      await submitOperatorGrant(userId, role, note);
+      if (status) status.textContent = 'Access updated.';
+      document.getElementById('operatorGrantUserId').value = '';
+      document.getElementById('operatorGrantNote').value = '';
+    } catch (error) {
+      if (status) status.textContent = error.message;
+    }
+  });
+
+  // Delegated, because the rows are re-rendered on every reload — listeners
+  // bound directly to buttons would be discarded with the old markup.
+  document.getElementById('operatorTableBody')?.addEventListener('click', async (event) => {
+    const applyBtn = event.target.closest('.operator-apply-btn');
+    const revokeBtn = event.target.closest('.operator-revoke-btn');
+    const historyBtn = event.target.closest('.operator-history-btn');
+
+    if (historyBtn) {
+      await renderOperatorHistory(historyBtn.dataset.userid);
+      return;
+    }
+
+    if (applyBtn) {
+      const userId = applyBtn.dataset.userid;
+      const select = document.querySelector(`.operator-role-select[data-userid="${CSS.escape(userId)}"]`);
+      if (!select) return;
+      try {
+        await submitOperatorGrant(userId, select.value, 'Role changed from the Operators tab');
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (revokeBtn) {
+      const userId = revokeBtn.dataset.userid;
+      // The server requires a reason and rejects an empty one; asking here
+      // means the operator finds that out before the request, not after.
+      const note = window.prompt('Why is this access being revoked? (required, and recorded permanently)');
+      if (note === null) return;
+      if (!note.trim()) {
+        window.alert('A reason is required to revoke operator access.');
+        return;
+      }
+      try {
+        await apiFetch(`/api/ops/operators/${encodeURIComponent(userId)}/revoke`, {
+          method: 'POST',
+          body: JSON.stringify({ note: note.trim() }),
+        });
+        await reloadOperators();
+      } catch (error) {
+        window.alert(error.message);
+      }
+    }
   });
 
   els.userSearch.addEventListener('input', renderUsers);
@@ -1358,6 +1438,164 @@ function escapeHtml(value) {
 // for the specific case of interpolating into an attribute.
 function escapeAttr(value) {
   return escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Operator access management (F8 / REQ-AUTH-09) ────────────────────────────
+// super_admin only. Every render here escapes, without exception: this file has
+// produced two real stored-XSS bugs (D.1, D.11) and every value below —
+// operator names, emails, and free-text revocation notes — is attacker- or
+// colleague-supplied text arriving from the server. Run `node test-escaping.mjs`
+// after touching this section; it scans the source, not just the helpers.
+
+let operatorList = [];
+let selectedOperatorId = null;
+
+const OPERATOR_ROLE_LABELS = {
+  super_admin: 'Super admin',
+  finance_admin: 'Finance admin',
+  operations_admin: 'Operations admin',
+};
+
+// Reveals the Operators tab for super admins only. This is presentation, not
+// authorisation — requireOperator(SUPER_ONLY) on the server is what actually
+// stops anyone else, and it does so whether or not this ever runs.
+function applyOperatorRoleVisibility() {
+  const nav = document.getElementById('navOperators');
+  if (!nav) return;
+  const isSuper = authSession?.user?.OperatorRole === 'super_admin';
+  nav.classList.toggle('hidden', !isSuper);
+}
+
+async function loadOperators() {
+  const response = await apiFetch('/api/ops/operators');
+  operatorList = Array.isArray(response.data) ? response.data : [];
+}
+
+function renderOperators() {
+  const tbody = document.getElementById('operatorTableBody');
+  const countLabel = document.getElementById('operatorCountLabel');
+  if (!tbody) return;
+
+  const active = operatorList.filter((o) => o.IsActive).length;
+  if (countLabel) {
+    countLabel.textContent = `${active} active, ${operatorList.length - active} revoked`;
+  }
+
+  if (operatorList.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="helper" style="text-align:center;padding:24px">No operators found.</td></tr>`;
+    return;
+  }
+
+  const selfId = authSession?.user?.UserID;
+
+  tbody.innerHTML = operatorList.map((o) => {
+    const isSelf = String(o.UserID) === String(selfId);
+    const roleLabel = OPERATOR_ROLE_LABELS[o.Role] || o.Role;
+
+    // Self gets no controls at all rather than controls that always fail: the
+    // server rejects self-modification with a 409, and offering a button whose
+    // only outcome is an error is the "convincing placeholder" pattern this
+    // project has already been bitten by three times.
+    const actions = isSelf
+      ? `<span class="helper">You</span>`
+      : `<select class="operator-role-select" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem">
+           ${Object.entries(OPERATOR_ROLE_LABELS).map(([value, label]) => `
+             <option value="${escapeAttr(value)}"${value === o.Role ? ' selected' : ''}>${escapeHtml(label)}</option>
+           `).join('')}
+         </select>
+         <button class="ghost-btn operator-apply-btn" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem;padding:4px 10px">Apply</button>
+         ${o.IsActive ? `<button class="ghost-btn operator-revoke-btn" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem;padding:4px 10px">Revoke</button>` : ''}`;
+
+    return `
+      <tr data-userid="${escapeAttr(o.UserID)}">
+        <td>
+          <strong>${escapeHtml(o.FirstName)} ${escapeHtml(o.LastName)}</strong><br>
+          <span class="helper">${escapeHtml(o.Email)}</span>
+        </td>
+        <td>${escapeHtml(roleLabel)}</td>
+        <td>${o.IsActive ? 'Active' : 'Revoked'}</td>
+        <td>${formatDate(o.GrantedAt)}</td>
+        <td style="white-space:nowrap">
+          ${actions}
+          <button class="ghost-btn operator-history-btn" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem;padding:4px 10px">History</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  refreshIcons();
+}
+
+async function renderOperatorHistory(userId) {
+  selectedOperatorId = userId;
+  const label = document.getElementById('operatorHistoryLabel');
+  const list = document.getElementById('operatorHistoryList');
+  if (!list) return;
+
+  const operator = operatorList.find((o) => String(o.UserID) === String(userId));
+  if (label) {
+    label.textContent = operator
+      ? `Access history for ${operator.FirstName} ${operator.LastName} (${operator.Email})`
+      : 'Access history';
+  }
+
+  try {
+    const response = await apiFetch(`/api/ops/operators/${encodeURIComponent(userId)}/history`);
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length === 0) {
+      list.innerHTML = `<p class="helper">No history recorded.</p>`;
+      return;
+    }
+    list.innerHTML = rows.map((r) => {
+      const what = r.Action === 'revoke'
+        ? `Revoked (was ${escapeHtml(OPERATOR_ROLE_LABELS[r.PreviousRole] || r.PreviousRole || '—')})`
+        : r.Action === 'role_change'
+          ? `${escapeHtml(OPERATOR_ROLE_LABELS[r.PreviousRole] || r.PreviousRole || '—')} → ${escapeHtml(OPERATOR_ROLE_LABELS[r.Role] || r.Role || '—')}`
+          : `Granted ${escapeHtml(OPERATOR_ROLE_LABELS[r.Role] || r.Role || '—')}`;
+      // PerformedByEmail is null for system actions (the migration backfill and
+      // the ADMIN_EMAILS bootstrap). Saying so beats rendering a blank.
+      const who = r.PerformedByEmail ? escapeHtml(r.PerformedByEmail) : 'system';
+      // Built here rather than as a ternary inside the template below. The
+      // value is escaped either way, but test-escaping.mjs tokenises template
+      // literals with a regex that cannot see through a nested backtick, so an
+      // inline `${r.Note ? \`...\` : ''}` reaches the guard as the fragment
+      // "r.Note ? `" — a tainted root with no visible escaper — and fails the
+      // build. Keeping the guard able to read this file is worth more than the
+      // one saved line, and a scanner that cannot parse a construct should not
+      // be argued with by using that construct.
+      const noteHtml = r.Note ? `<div class="helper">${escapeHtml(r.Note)}</div>` : '';
+      return `
+        <div class="audit-item">
+          <div><strong>${what}</strong></div>
+          <div class="helper">${formatDate(r.PerformedAt)} — by ${who}</div>
+          ${noteHtml}
+        </div>
+      `;
+    }).join('');
+  } catch (error) {
+    list.innerHTML = `<p class="helper">Could not load history: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function reloadOperators() {
+  try {
+    await loadOperators();
+    renderOperators();
+    if (selectedOperatorId) await renderOperatorHistory(selectedOperatorId);
+  } catch (error) {
+    const tbody = document.getElementById('operatorTableBody');
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="5" class="helper" style="text-align:center;padding:24px">${escapeHtml(error.message)}</td></tr>`;
+    }
+  }
+}
+
+async function submitOperatorGrant(userId, role, note) {
+  await apiFetch('/api/ops/operators', {
+    method: 'POST',
+    body: JSON.stringify({ userId: Number(userId), role, note: note || undefined }),
+  });
+  await reloadOperators();
 }
 
 function closeKycDrawer() {
