@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="icon-logo.png" />
     <title>InReal Operations</title>
     <meta name="description" content="Internal operations workspace for InReal staff." />
     <link rel="stylesheet" href="./styles.css" />
@@ -43,10 +44,12 @@
     <div class="shell hidden" id="appShell">
       <aside class="sidebar">
         <div class="sidebar-brand">
-          <img
-            src="https://horizons-cdn.hostinger.com/9e1f4551-bf70-48a3-a592-c6f31edcad6a/25979fe1840cf294bcca6defc52c98c7.png"
-            alt="InReal"
-          />
+          <!-- Its own copy, not ../public/logo-dark.png. This portal deploys as
+               a separate Vercel project rooted at ops-admin-portal/, so nothing
+               outside this folder exists at runtime — a path up to the investor
+               app's public/ works locally and 404s in production, which is the
+               worst of both. Dark variant because this sidebar is dark. -->
+          <img src="logo-dark.png" alt="InReal" />
           <span class="ops-badge-sm">Ops</span>
         </div>
 
