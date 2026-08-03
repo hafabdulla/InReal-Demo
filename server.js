@@ -512,6 +512,120 @@ async function getUserRole(userId) {
   return rows[0]?.role || null;
 }
 
+// ── Operator roles (F8 / REQ-AUTH-04, REQ-AUTH-05) ───────────────────────────
+// Replaces the binary users.role = 'admin' check that gated all 17 ops
+// endpoints identically. See database/pg/11-add-operator-roles.sql for the
+// phase plan; this is the phase 2 read path.
+
+const OPERATOR_ROLES = ['super_admin', 'finance_admin', 'operations_admin'];
+
+// Every operator role, for endpoints any operator may reach (reads, search).
+// Named rather than spelled out at each call site so "which endpoints are open
+// to everyone?" is one grep, not a reading of seventeen argument lists.
+const ANY_OPERATOR = OPERATOR_ROLES;
+// Money-adjacent actions. D-17 names finance/super for reconciliation edits and
+// F8 names them for portfolio-value edits; bank-detail verification is the same
+// category of power (it decides where an investor's money is sent).
+const FINANCE_ROLES = ['finance_admin', 'super_admin'];
+// Investor lifecycle: KYC decisions, documents, account creation. Deliberately
+// excludes finance_admin — approving a person and moving a number are separate
+// jobs, which is the entire point of splitting the roles.
+const OPERATIONS_ROLES = ['operations_admin', 'super_admin'];
+// Granting and revoking operator access (REQ-AUTH-09).
+const SUPER_ONLY = ['super_admin'];
+
+// Postgres "relation does not exist". Migrations here are applied by hand
+// against a shared database (CLAUDE.md), so code can legitimately reach
+// production before its migration does. Rather than 500 every ops endpoint in
+// that window, this falls back to the legacy flag — see getOperatorRole.
+const PG_UNDEFINED_TABLE = '42P01';
+
+/**
+ * The operator role for a user, or null if they are not an operator.
+ *
+ * Reads admin_users first, falling back to the legacy users.role = 'admin'
+ * flag. The fallback is not permanent and is not decoration: it covers two real
+ * states — the deploy window before migration 11 is applied, and any admin the
+ * backfill missed (someone granted admin between the backfill running and the
+ * code shipping). A missed operator degrades to super_admin, which is exactly
+ * what they had before F8, so the failure mode is "no change" rather than
+ * "locked out of production mid-KYC-review".
+ *
+ * Phase 4 deletes both the fallback and users.role. Until then, treat a
+ * fallback hit as a signal that the migration has not been applied everywhere,
+ * which is why it logs.
+ */
+async function getOperatorRole(userId) {
+  try {
+    const rows = await q(
+      `SELECT a.role
+       FROM admin_users a
+       JOIN users u ON u.user_id = a.user_id
+       WHERE a.user_id = $1
+         AND a.is_active = true
+         AND u.is_active = true
+         AND u.is_deleted = false`,
+      [userId]
+    );
+    if (rows.length > 0) return rows[0].role;
+  } catch (error) {
+    if (error?.code !== PG_UNDEFINED_TABLE) throw error;
+    console.warn(
+      '[f8] admin_users does not exist — falling back to users.role. ' +
+      'Apply database/pg/11-add-operator-roles.sql.'
+    );
+  }
+
+  const legacyRole = await getUserRole(userId);
+  if (legacyRole === 'admin') {
+    console.warn(`[f8] user_id=${userId} authorised via legacy users.role fallback`);
+    return 'super_admin';
+  }
+  return null;
+}
+
+/**
+ * Gate an endpoint on an operator role. Returns the user id, or null after
+ * having already sent the response.
+ *
+ * Deliberately takes the allowed roles explicitly at every call site rather
+ * than defaulting to "any operator". A new ops endpoint should not be able to
+ * become world-readable-to-all-operators by someone forgetting an argument —
+ * omitting it is a TypeError at the first request, which is noisy and
+ * immediate, rather than a silent over-grant nobody notices.
+ *
+ * Returns 401 (not 403) for a non-operator, matching what requireAdmin did
+ * before: the ops portal's fetch layer treats 401 as "bounce to login", and an
+ * investor who somehow reaches an ops URL should be told nothing about whether
+ * that endpoint exists. A wrong-role operator gets 403, because they ARE
+ * authenticated and the distinction is genuinely useful to them.
+ */
+async function requireOperator(req, res, allowedRoles) {
+  if (!Array.isArray(allowedRoles) || allowedRoles.length === 0) {
+    throw new TypeError('requireOperator needs an explicit non-empty allowedRoles array');
+  }
+
+  const userId = requireAuthenticatedUserId(req, res);
+  if (!userId) return null;
+
+  const role = await getOperatorRole(userId);
+  if (!role) {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
+    return null;
+  }
+
+  if (!allowedRoles.includes(role)) {
+    console.log(`[f8.denied] user_id=${userId} role=${role} path=${req.path}`);
+    res.status(403).json({
+      success: false,
+      error: 'Your operator role does not permit this action.',
+    });
+    return null;
+  }
+
+  return userId;
+}
+
 const GENERIC_LOGIN_ERROR = 'Invalid email or password';
 
 async function verifyLoginCredentials(email, password) {
@@ -594,16 +708,20 @@ async function buildLoginResponse(user) {
   };
 }
 
+/**
+ * "Is this request from any operator at all?"
+ *
+ * Kept as a named wrapper rather than deleted, because a handful of endpoints
+ * genuinely are open to every operator (reads, search, the ops portal's own
+ * /auth/me) and spelling ANY_OPERATOR at those call sites says the same thing
+ * with more words. Everything money- or decision-shaped calls requireOperator
+ * directly with a narrower list.
+ *
+ * The behaviour change from the old version is only in where the role comes
+ * from — admin_users instead of users.role — not in who passes.
+ */
 async function requireAdmin(req, res) {
-  const userId = requireAuthenticatedUserId(req, res);
-  if (!userId) return null;
-
-  const role = await getUserRole(userId);
-  if (!role || role !== 'admin') {
-    res.status(401).json({ success: false, error: 'Unauthorized' });
-    return null;
-  }
-  return userId;
+  return requireOperator(req, res, ANY_OPERATOR);
 }
 
 function sanitizeUserRecord(user) {
@@ -2345,7 +2463,7 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
 
 app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
     if (!adminUserId) return;
 
     const targetUserId = Number(req.params.userId);
@@ -2557,7 +2675,7 @@ app.get('/api/ops/kyc-reviews/:userId/history', async (req, res) => {
 // the investor who submitted it never sees this endpoint at all.
 app.get('/api/ops/bank-detail-requests', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
     if (!adminUserId) return;
 
     const rows = await q(
@@ -2607,7 +2725,7 @@ app.get('/api/ops/bank-detail-requests', async (req, res) => {
 // same request at once.
 app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
     if (!adminUserId) return;
 
     const requestId = req.params.id;
@@ -2677,7 +2795,7 @@ app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
 // for why a bank-detail change didn't go through.
 app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
     if (!adminUserId) return;
 
     const requestId = req.params.id;
@@ -2744,7 +2862,7 @@ app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
 // does.
 app.post('/api/ops/users', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
     if (!adminUserId) return;
 
     const { firstName, lastName, email, phoneCode, phone, countryCode } = req.body;
@@ -2879,7 +2997,7 @@ app.post('/api/ops/users', async (req, res) => {
 // entry. Never updates an existing row.
 app.post('/api/ops/users/:userId/portfolio-adjustment', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
     if (!adminUserId) return;
 
     const targetUserId = Number(req.params.userId);
@@ -2937,7 +3055,7 @@ app.post('/api/ops/users/:userId/portfolio-adjustment', async (req, res) => {
 // Without this, "audited" would just mean rows nobody ever looks at.
 app.get('/api/ops/users/:userId/portfolio-adjustments', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
     if (!adminUserId) return;
 
     const targetUserId = Number(req.params.userId);
@@ -3039,7 +3157,7 @@ const DOCUMENT_VISIBILITIES = new Set(['investor_visible', 'operator_only']);
 // anything is written to disk or the database — never trusted as-is.
 app.post('/api/ops/documents', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
     if (!adminUserId) return;
 
     const { userId, category, label, fileBase64, fileName, propertyId, visibility, mimeType = 'application/octet-stream' } = req.body;
@@ -4141,7 +4259,7 @@ app.get('/api/ops/investment-intents', async (req, res) => {
 
 app.post('/api/ops/investment-intents/:reference/review', async (req, res) => {
   try {
-    const adminUserId = await requireAdmin(req, res);
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
     if (!adminUserId) return;
 
     const { reference } = req.params;
