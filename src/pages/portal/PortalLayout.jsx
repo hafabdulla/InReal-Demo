@@ -130,9 +130,36 @@ export default function PortalLayout({ children }) {
             })}
           </nav>
 
-          {/* User section */}
+          {/* User section — actions first, then the profile card.
+              The two actions sit directly under the nav they belong with, and
+              the profile card anchors the bottom of the sidebar as a passive
+              identity label rather than sitting between the navigation and the
+              things you can do with it. */}
           <div className="p-4 border-t border-portal-border-subtle">
-            <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-portal-tertiary">
+            {/* Leaving the portal is not the same as leaving the account, and
+                until now the only exit from here was Logout — so "I want to look
+                at the website" and "I want to end my session" were the same
+                button. Grouped with Logout rather than with the portal sections
+                above because it leaves the portal rather than navigating inside
+                it, and an active-state check against a portal route would never
+                match it anyway. The session is untouched: coming back through
+                Dashboard lands straight here, no second sign-in. */}
+            <Link
+              to="/"
+              onClick={() => setSidebarOpen(false)}
+              className="w-full portal-sidebar-link text-portal-tertiary hover:text-portal-primary"
+            >
+              <Home className="w-5 h-5" />
+              <span>Back to Website</span>
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="w-full mt-1 portal-sidebar-link text-portal-tertiary hover:text-red-400"
+            >
+              <LogOut className="w-5 h-5" />
+              <span>Logout</span>
+            </button>
+            <div className="flex items-center gap-3 px-4 py-3 mt-3 rounded-lg bg-portal-tertiary">
               <div className="w-10 h-10 rounded-full bg-[#01CED1] flex items-center justify-center">
                 <User className="w-5 h-5 text-[#0F0F0F]" />
               </div>
@@ -145,29 +172,6 @@ export default function PortalLayout({ children }) {
                 <p className="text-xs text-portal-tertiary truncate">{user?.Email || ''}</p>
               </div>
             </div>
-            {/* Leaving the portal is not the same as leaving the account, and
-                until now the only exit from here was Logout — so "I want to look
-                at the website" and "I want to end my session" were the same
-                button. Grouped with Logout rather than with the portal sections
-                above because it leaves the portal rather than navigating inside
-                it, and an active-state check against a portal route would never
-                match it anyway. The session is untouched: coming back through
-                Dashboard lands straight here, no second sign-in. */}
-            <Link
-              to="/"
-              onClick={() => setSidebarOpen(false)}
-              className="w-full mt-3 portal-sidebar-link text-portal-tertiary hover:text-portal-primary"
-            >
-              <Home className="w-5 h-5" />
-              <span>Back to Website</span>
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="w-full mt-1 portal-sidebar-link text-portal-tertiary hover:text-red-400"
-            >
-              <LogOut className="w-5 h-5" />
-              <span>Logout</span>
-            </button>
           </div>
         </div>
       </motion.aside>
