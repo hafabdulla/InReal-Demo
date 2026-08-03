@@ -911,15 +911,51 @@ async function bootstrapAdminUsers() {
   if (emails.length === 0) return;
 
   for (const email of emails) {
-    const updated = await q(
-      `UPDATE users
-       SET role = 'admin', updated_at = NOW()
-       WHERE LOWER(email) = $1 AND is_deleted = false
-       RETURNING user_id`,
+    const found = await q(
+      `SELECT user_id FROM users WHERE LOWER(email) = $1 AND is_deleted = false`,
       [email]
     );
-    if (updated.length > 0) {
-      console.log(`Admin role granted to ${email}`);
+    if (found.length === 0) continue;
+    const userId = found[0].user_id;
+
+    // Writes admin_users, not users.role. Before F8 this set the legacy flag,
+    // which after phase 4 (when that column is dropped) would have silently
+    // stopped granting anything — an env var that looks like it works and
+    // doesn't is worse than one that errors.
+    //
+    // Deliberately does NOT resurrect a revoked operator. Someone removed
+    // through the portal, with a stated reason and an audit row, must not be
+    // handed their access back by a server restart because their address was
+    // left in an env var — that would make revocation temporary in a way
+    // nobody would notice. DO NOTHING on conflict, not DO UPDATE.
+    try {
+      const inserted = await q(
+        `INSERT INTO admin_users (user_id, role, is_active, granted_by, granted_at)
+         VALUES ($1, 'super_admin', true, NULL, NOW())
+         ON CONFLICT (user_id) DO NOTHING
+         RETURNING user_id`,
+        [userId]
+      );
+      if (inserted.length > 0) {
+        await q(
+          `INSERT INTO admin_role_grants (user_id, action, role, previous_role, performed_by, note)
+           VALUES ($1, 'grant', 'super_admin', NULL, NULL, $2)`,
+          [userId, `Bootstrapped at server start from ADMIN_EMAILS (${email}). No human grantor.`]
+        );
+        console.log(`Operator access bootstrapped for ${email} (super_admin)`);
+      }
+    } catch (error) {
+      if (error?.code !== PG_UNDEFINED_TABLE) throw error;
+      // Pre-migration-11 environment. Fall back to the legacy flag so a fresh
+      // deploy still has a way in; getOperatorRole reads it for exactly this
+      // window. Phase 4 deletes this branch along with the column.
+      console.warn('[f8] admin_users missing — bootstrapping via legacy users.role. Apply migration 11.');
+      await q(
+        `UPDATE users SET role = 'admin', updated_at = NOW()
+         WHERE user_id = $1 AND is_deleted = false`,
+        [userId]
+      );
+      console.log(`Admin role granted to ${email} (legacy)`);
     }
   }
 }
@@ -3119,6 +3155,232 @@ app.get('/api/ops/users/:userId/portfolio-adjustments', async (req, res) => {
 // checked against the real `users` table server-side — the client only ever
 // supplies a userId to search/select against, never something we trust blindly
 // into a query or a file path.
+
+// ── Operator access management (F8 / REQ-AUTH-09) ────────────────────────────
+// Granting, changing and revoking operator access. super_admin only, and every
+// write lands an append-only row in admin_role_grants.
+//
+// This replaces promoting people by hand in the SQL editor, which is what
+// REQ-AUTH-09's "raw SQL promotion retired" refers to. A raw UPDATE leaves no
+// record of who granted what or why — and operator access is precisely the
+// thing an auditor asks about first, because it is the answer to "who could
+// have done this?"
+
+// Two invariants protect against the ways this endpoint could brick the portal,
+// checked in one place so the three write routes can't drift apart.
+//
+// SELF: a super_admin cannot change or revoke their own access. Not paternalism
+// — it removes the single likeliest way to end up with nobody able to grant
+// anything, and it means every change has a second person's name against it.
+//
+// LAST SUPER_ADMIN: the final active super_admin cannot be demoted or revoked.
+// Losing them is unrecoverable through the product, since super_admin is the
+// only role that can write this table — it would mean going back to the SQL
+// editor these endpoints exist to retire.
+//
+// BE HONEST ABOUT THIS ONE: as the code currently stands it is unreachable, and
+// it is kept deliberately rather than by accident. Every caller is an active
+// super_admin, and the SELF check above guarantees actor !== target, so the
+// count of *other* active super_admins is always at least one (the caller).
+// It is retained because it is the actual invariant — the SELF rule enforces it
+// only as a side effect, and if SELF is ever relaxed (a "step down" feature is
+// the obvious request) this becomes the only thing standing between a tired
+// admin and an unadministrable platform. Do not delete it as dead code without
+// re-checking that SELF still makes it redundant.
+async function assertOperatorChangeAllowed({ actorUserId, targetUserId, newRole }) {
+  if (actorUserId === targetUserId) {
+    return 'You cannot change your own operator access. Ask another super admin.';
+  }
+
+  const isDemotion = newRole !== 'super_admin';
+  if (!isDemotion) return null;
+
+  const target = await q('SELECT role, is_active FROM admin_users WHERE user_id = $1', [targetUserId]);
+  const targetIsActiveSuper = target.length > 0 && target[0].role === 'super_admin' && target[0].is_active;
+  if (!targetIsActiveSuper) return null;
+
+  const remaining = await q(
+    `SELECT COUNT(*)::int AS n FROM admin_users
+     WHERE role = 'super_admin' AND is_active = true AND user_id <> $1`,
+    [targetUserId]
+  );
+  if (remaining[0].n === 0) {
+    return 'This is the last active super admin. Grant super admin to someone else first, or nobody will be able to manage operator access.';
+  }
+  return null;
+}
+
+// GET /api/ops/operators — who has access, and as what.
+// super_admin only: this is a map of the platform's privilege topology, which
+// is not something every operator needs in order to do their job.
+app.get('/api/ops/operators', async (req, res) => {
+  try {
+    const actorUserId = await requireOperator(req, res, SUPER_ONLY);
+    if (!actorUserId) return;
+
+    const rows = await q(
+      `SELECT a.user_id AS "UserID", u.email AS "Email",
+              u.first_name AS "FirstName", u.last_name AS "LastName",
+              a.role AS "Role", a.is_active AS "IsActive",
+              a.granted_by AS "GrantedBy", a.granted_at AS "GrantedAt",
+              a.revoked_by AS "RevokedBy", a.revoked_at AS "RevokedAt"
+       FROM admin_users a
+       JOIN users u ON u.user_id = a.user_id
+       WHERE u.is_deleted = false
+       ORDER BY a.is_active DESC, a.role, u.email`
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/operators — grant access, or change an existing role.
+// One route for both because the audit distinction ('grant' vs 'role_change')
+// is derived from the current state rather than trusted from the caller: a
+// client that guessed wrong would otherwise write a misleading audit row, and a
+// misleading audit row is worse than none.
+app.post('/api/ops/operators', async (req, res) => {
+  try {
+    const actorUserId = await requireOperator(req, res, SUPER_ONLY);
+    if (!actorUserId) return;
+
+    const { userId, role, note } = req.body || {};
+    const targetUserId = Number(userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid userId is required' });
+    }
+    if (!OPERATOR_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        error: `role must be one of: ${OPERATOR_ROLES.join(', ')}`,
+      });
+    }
+
+    // The target must be a real, live account. Checked against the users table
+    // rather than trusted from the request, same rule as every other ops route.
+    const target = await q(
+      'SELECT user_id, email FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false',
+      [targetUserId]
+    );
+    if (target.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const blocked = await assertOperatorChangeAllowed({ actorUserId, targetUserId, newRole: role });
+    if (blocked) return res.status(409).json({ success: false, error: blocked });
+
+    const existing = await q('SELECT role, is_active FROM admin_users WHERE user_id = $1', [targetUserId]);
+    const previousRole = existing.length > 0 && existing[0].is_active ? existing[0].role : null;
+    const action = previousRole ? 'role_change' : 'grant';
+    if (previousRole === role) {
+      return res.status(409).json({ success: false, error: 'That operator already has this role.' });
+    }
+
+    await q(
+      `INSERT INTO admin_users (user_id, role, is_active, granted_by, granted_at)
+       VALUES ($1, $2, true, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         role = EXCLUDED.role,
+         is_active = true,
+         granted_by = EXCLUDED.granted_by,
+         granted_at = NOW(),
+         revoked_at = NULL,
+         revoked_by = NULL,
+         updated_at = NOW()`,
+      [targetUserId, role, actorUserId]
+    );
+
+    await q(
+      `INSERT INTO admin_role_grants (user_id, action, role, previous_role, performed_by, note)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [targetUserId, action, role, previousRole, actorUserId, note ? String(note).trim() : null]
+    );
+
+    console.log(`[f8.${action}] target=${targetUserId} role=${role} by=${actorUserId}`);
+    res.json({ success: true, message: `Operator access updated to ${role}.` });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/operators/:userId/revoke — remove access.
+// Soft: is_active = false, never DELETE. The row is the answer to "was this
+// person authorised when they approved that bank-detail change?", and that
+// question outlives their access by the KYC manual's 7-year retention.
+app.post('/api/ops/operators/:userId/revoke', async (req, res) => {
+  try {
+    const actorUserId = await requireOperator(req, res, SUPER_ONLY);
+    if (!actorUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid userId is required' });
+    }
+
+    // Mandatory, same rule as portfolio adjustments: a removal of privilege
+    // with no stated reason is exactly the row someone will need explained
+    // years later, and "it was obvious at the time" never survives the gap.
+    const note = String(req.body?.note || '').trim();
+    if (!note) {
+      return res.status(400).json({ success: false, error: 'A reason is required to revoke operator access.' });
+    }
+
+    const existing = await q('SELECT role, is_active FROM admin_users WHERE user_id = $1', [targetUserId]);
+    if (existing.length === 0 || !existing[0].is_active) {
+      return res.status(404).json({ success: false, error: 'That user is not an active operator.' });
+    }
+
+    const blocked = await assertOperatorChangeAllowed({ actorUserId, targetUserId, newRole: null });
+    if (blocked) return res.status(409).json({ success: false, error: blocked });
+
+    await q(
+      `UPDATE admin_users
+       SET is_active = false, revoked_at = NOW(), revoked_by = $1, updated_at = NOW()
+       WHERE user_id = $2`,
+      [actorUserId, targetUserId]
+    );
+
+    await q(
+      `INSERT INTO admin_role_grants (user_id, action, role, previous_role, performed_by, note)
+       VALUES ($1, 'revoke', NULL, $2, $3, $4)`,
+      [targetUserId, existing[0].role, actorUserId, note]
+    );
+
+    console.log(`[f8.revoke] target=${targetUserId} by=${actorUserId}`);
+    res.json({ success: true, message: 'Operator access revoked.' });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/operators/:userId/history — the append-only grant trail.
+app.get('/api/ops/operators/:userId/history', async (req, res) => {
+  try {
+    const actorUserId = await requireOperator(req, res, SUPER_ONLY);
+    if (!actorUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid userId is required' });
+    }
+
+    const rows = await q(
+      `SELECT g.grant_id AS "GrantID", g.action AS "Action", g.role AS "Role",
+              g.previous_role AS "PreviousRole", g.performed_at AS "PerformedAt",
+              g.note AS "Note",
+              p.email AS "PerformedByEmail"
+       FROM admin_role_grants g
+       LEFT JOIN users p ON p.user_id = g.performed_by
+       WHERE g.user_id = $1
+       ORDER BY g.performed_at DESC, g.grant_id DESC`,
+      [targetUserId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
 
 // GET /api/ops/users/search?q=... — used by the admin document-upload form's
 // user picker. Deliberately returns only the minimal safe fields needed to
