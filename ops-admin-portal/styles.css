@@ -745,6 +745,20 @@ tbody tr:hover td {
   margin-top: 24px;
 }
 
+/* The Operators panel is the first to stack several full-width cards directly
+   on top of each other. .panel is a plain block and .card carries padding but
+   no margin, so its cards sat flush against one another with no seam.
+   Only the missing seams are added, deliberately NOT a flex gap on the panel:
+   .panel-head and .compliance-note already carry their own margin-bottom
+   (24px and 20px), and a gap stacks on top of those — which double-spaced the
+   top of this panel to 48px while every other panel in the portal uses 24px.
+   Fixing the gap by making the panel look different from its neighbours is not
+   fixing it. Scoped to this panel so no other layout shifts. */
+.panel[data-panel="operators"] > .card + .card,
+.panel[data-panel="operators"] > .card + .panel-head {
+  margin-top: 24px;
+}
+
 /* Hidden by default (desktop); only shown inside the max-width:900px rule
    below. This MUST come before that media query in the file — CSS resolves
    equal-specificity rules by source order, not by which one is inside a

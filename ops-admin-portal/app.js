@@ -61,6 +61,10 @@ const els = {
   docUserId: document.getElementById('docUserId'),
   docUserResults: document.getElementById('docUserResults'),
   docUserSelected: document.getElementById('docUserSelected'),
+  operatorUserSearch: document.getElementById('operatorUserSearch'),
+  operatorGrantUserId: document.getElementById('operatorGrantUserId'),
+  operatorUserResults: document.getElementById('operatorUserResults'),
+  operatorUserSelected: document.getElementById('operatorUserSelected'),
   uploadFormError: document.getElementById('uploadFormError'),
   uploadSubmitBtn: document.getElementById('uploadSubmitBtn'),
   userSearch: document.getElementById('userSearch'),
@@ -739,14 +743,17 @@ function bindWorkspaceEvents() {
     const note = document.getElementById('operatorGrantNote').value.trim();
 
     if (!userId) {
-      if (status) status.textContent = 'Enter the user ID of the person to grant access to.';
+      if (status) status.textContent = 'Search for a person by name or email, then pick them from the list.';
       return;
     }
     if (status) status.textContent = 'Saving...';
     try {
       await submitOperatorGrant(userId, role, note);
       if (status) status.textContent = 'Access updated.';
-      document.getElementById('operatorGrantUserId').value = '';
+      // Reset the whole picker, not just the hidden id — otherwise the chip
+      // keeps showing the person just actioned, which reads as "still
+      // selected" and invites a second accidental grant.
+      operatorUserPicker?.clear();
       document.getElementById('operatorGrantNote').value = '';
     } catch (error) {
       if (status) status.textContent = error.message;
@@ -1664,6 +1671,113 @@ async function reloadOperators() {
     }
   }
 }
+
+/**
+ * Wires a name/email search picker onto a hidden user-id field.
+ *
+ * Extracted rather than copy-pasted from the document-upload picker, because
+ * the two fiddly parts — the debounce and the out-of-order response guard —
+ * are exactly the bits that rot when duplicated: a fix applied to one copy and
+ * not the other is invisible until someone types fast on a slow connection.
+ *
+ * The document picker still has its own inline copy; migrating it onto this is
+ * a safe follow-up, deliberately not bundled into a UI fix so a working feature
+ * isn't put at risk for tidiness.
+ */
+function attachUserSearch({ searchInput, hiddenInput, resultsEl, selectedEl }) {
+  if (!searchInput || !hiddenInput || !resultsEl || !selectedEl) return null;
+
+  let debounceTimer = null;
+  let latestQuery = '';
+  let selectedUser = null;
+
+  function renderSelected() {
+    if (!selectedUser) {
+      selectedEl.hidden = true;
+      selectedEl.innerHTML = '';
+      searchInput.hidden = false;
+      return;
+    }
+    const name = [selectedUser.FirstName, selectedUser.LastName].filter(Boolean).join(' ');
+    selectedEl.hidden = false;
+    // Shows the id alongside the name: the admin picked a person, but the
+    // audit trail records a number, and seeing both here is what lets someone
+    // reconcile the two later without a database query.
+    selectedEl.innerHTML = `
+      <span><strong>${escapeHtml(name)}</strong> — ${escapeHtml(selectedUser.Email)} <span class="helper">(ID ${escapeHtml(selectedUser.UserID)})</span></span>
+      <button type="button" data-role="clear-user">Change</button>
+    `;
+    selectedEl.querySelector('[data-role="clear-user"]').addEventListener('click', () => api.clear(true));
+    searchInput.hidden = true;
+  }
+
+  const api = {
+    clear(focus = false) {
+      selectedUser = null;
+      hiddenInput.value = '';
+      searchInput.value = '';
+      resultsEl.innerHTML = '';
+      renderSelected();
+      if (focus) searchInput.focus();
+    },
+  };
+
+  searchInput.addEventListener('input', () => {
+    const query = searchInput.value.trim();
+    latestQuery = query;
+    clearTimeout(debounceTimer);
+    if (query.length < 1) {
+      resultsEl.innerHTML = '';
+      return;
+    }
+
+    debounceTimer = setTimeout(async () => {
+      try {
+        const result = await apiFetch(`/api/ops/users/search?q=${encodeURIComponent(query)}`);
+        // A slower earlier request can resolve after a newer one. If the box no
+        // longer holds what we searched for, drop this response rather than
+        // show results for a query the admin has already moved past.
+        if (latestQuery !== query) return;
+
+        const matches = result.data || [];
+        resultsEl.innerHTML = matches.length
+          ? matches
+              .map(
+                (u) =>
+                  `<button type="button" data-user-id="${escapeAttr(u.UserID)}">${escapeHtml([u.FirstName, u.LastName].filter(Boolean).join(' '))} — ${escapeHtml(u.Email)}</button>`,
+              )
+              .join('')
+          : `<span class="helper">No matching users.</span>`;
+
+        resultsEl.querySelectorAll('button[data-user-id]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const match = matches.find((u) => String(u.UserID) === btn.dataset.userId);
+            if (!match) return;
+            selectedUser = match;
+            hiddenInput.value = match.UserID;
+            resultsEl.innerHTML = '';
+            renderSelected();
+          });
+        });
+      } catch (error) {
+        if (latestQuery !== query) return;
+        resultsEl.innerHTML = `<span class="helper">Search failed: ${escapeHtml(error.message)}</span>`;
+      }
+    }, 120);
+  });
+
+  return api;
+}
+
+// Created once at load; the grant handler calls .clear() after a successful
+// grant so the form is ready for the next person rather than still showing
+// the one just actioned.
+const operatorUserPicker = attachUserSearch({
+  searchInput: els.operatorUserSearch,
+  hiddenInput: els.operatorGrantUserId,
+  resultsEl: els.operatorUserResults,
+  selectedEl: els.operatorUserSelected,
+});
 
 async function submitOperatorGrant(userId, role, note) {
   await apiFetch('/api/ops/operators', {

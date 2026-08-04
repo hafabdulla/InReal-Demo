@@ -793,10 +793,19 @@
                    label — a bare <label> is already a grid with a 6px gap (see
                    styles.css). Getting this backwards is what made these inputs
                    render as unstyled browser defaults against the dark panel. -->
+              <!-- Search by name/email rather than asking for a raw user ID.
+                   Nobody remembers that a colleague is user 42, and a mistyped
+                   digit here silently grants operator access to the wrong
+                   person — the one mistake on this screen with no cheap undo.
+                   Same widget as the document-assignment picker: the admin only
+                   ever holds an ID they clicked on, never one they typed. -->
               <label>
-                User ID
-                <input class="field" type="number" id="operatorGrantUserId" placeholder="e.g. 42" min="1" />
+                Operator
+                <input class="field" id="operatorUserSearch" autocomplete="off" placeholder="Search by name or email…" />
+                <input type="hidden" id="operatorGrantUserId" />
               </label>
+              <div id="operatorUserResults" class="user-search-results"></div>
+              <div id="operatorUserSelected" class="user-search-selected" hidden></div>
               <label>
                 Role
                 <select class="field" id="operatorGrantRole">
@@ -838,7 +847,9 @@
               </div>
             </div>
 
-            <div class="panel-head mt-16">
+            <!-- No .mt-16 here: the panel's own 24px flex gap already spaces
+                 this, and keeping both would stack to 48px. -->
+            <div class="panel-head">
               <div>
                 <p class="eyebrow">Append-only</p>
                 <h3>Access history</h3>
