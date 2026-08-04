@@ -2058,9 +2058,29 @@ const MEDIUM_COUNTRY_CODES = new Set([
 
 // Highest-risk-wins assessment across every jurisdiction an investor is
 // connected to — their declared nationalities (which may be several, per
-// Appendix A.16) plus their country of residence plus the country recorded at
-// signup. Appendix A.16 is explicit that where multiple nationalities are held,
-// the HIGHEST risk tier among them applies; this is what implements that.
+// Appendix A.16) plus their country of residence. Appendix A.16 is explicit
+// that where multiple nationalities are held, the HIGHEST risk tier among them
+// applies; this is what implements that.
+//
+// THE SIGNUP COUNTRY IS NOT A RISK INPUT once anything has been declared, and
+// that is a deliberate correction (05 Aug 2026). It used to be unioned in with
+// equal weight, and because `users.country_code` is written once at signup and
+// never updated again, someone who picked "United States" from the signup
+// dropdown and then correctly declared Italian nationality, Italian residence
+// and non-US-person status was assessed as ['US','IT'] — Prohibited, forever,
+// with no route to correct it from either side of the portal.
+//
+// That inverted the product owner's own instruction. Signup was changed on
+// 28 July to stop rejecting excluded jurisdictions precisely so the decision
+// would be made later by a human; instead the value it recorded became a
+// permanent, invisible block at review. A superseded dropdown answer is not
+// evidence of a connection to a jurisdiction — the declaration is.
+//
+// It is NOT discarded, though. Where the signup country contradicts what was
+// later declared, that discrepancy is surfaced to the reviewer as
+// `signupCountryConflict`, because "said US at signup, now says Italy" is
+// exactly the kind of thing a human should look at. It informs the review; it
+// no longer silently decides it.
 //
 // Tiers, worst first:
 //   Prohibited — an excluded jurisdiction. Cannot be approved. Hard stop.
@@ -2070,20 +2090,35 @@ const MEDIUM_COUNTRY_CODES = new Set([
 //                is exactly what used to happen.
 //   Standard   — normal due diligence.
 function assessJurisdiction({ countryCode, countryOfResidence, nationalities }) {
-  const codes = [
-    countryCode,
+  const normalize = (list) =>
+    list
+      .filter(Boolean)
+      .map((c) => String(c).trim().toUpperCase())
+      .filter((c) => /^[A-Z]{2}$/.test(c));
+
+  const declared = normalize([
     countryOfResidence,
     ...(Array.isArray(nationalities) ? nationalities : []),
-  ]
-    .filter(Boolean)
-    .map((c) => String(c).trim().toUpperCase())
-    .filter((c) => /^[A-Z]{2}$/.test(c));
+  ]);
+  const [signupCountry = null] = normalize([countryCode]);
 
-  const uniqueCodes = [...new Set(codes)];
+  // The declaration supersedes the signup dropdown — but only once there IS
+  // one. Falling back to the signup value when nothing has been declared keeps
+  // the pre-migration-07 accounts (which have a country_code and nothing else)
+  // assessed on the only jurisdiction anyone ever recorded for them, rather
+  // than dropping them to "nothing declared" and losing the signal entirely.
+  const uniqueCodes = [...new Set(declared.length > 0 ? declared : signupCountry ? [signupCountry] : [])];
+
+  // Only meaningful once a declaration exists to contradict.
+  const signupCountryConflict =
+    signupCountry && declared.length > 0 && !declared.includes(signupCountry) ? signupCountry : null;
+
+  const context = { signupCountry, signupCountryConflict };
 
   const prohibited = uniqueCodes.filter((c) => EXCLUDED_COUNTRY_CODES.has(c));
   if (prohibited.length > 0) {
     return {
+      ...context,
       tier: 'Prohibited',
       canApprove: false,
       countries: uniqueCodes,
@@ -2095,6 +2130,7 @@ function assessJurisdiction({ countryCode, countryOfResidence, nationalities }) 
   const edd = uniqueCodes.filter((c) => EDD_COUNTRY_CODES.has(c));
   if (edd.length > 0) {
     return {
+      ...context,
       tier: 'EDD',
       canApprove: true,
       countries: uniqueCodes,
@@ -2106,6 +2142,7 @@ function assessJurisdiction({ countryCode, countryOfResidence, nationalities }) 
   const medium = uniqueCodes.filter((c) => MEDIUM_COUNTRY_CODES.has(c));
   if (medium.length > 0) {
     return {
+      ...context,
       tier: 'Medium',
       canApprove: true,
       countries: uniqueCodes,
@@ -2116,6 +2153,7 @@ function assessJurisdiction({ countryCode, countryOfResidence, nationalities }) 
 
   if (uniqueCodes.length === 0) {
     return {
+      ...context,
       tier: 'Unlisted',
       canApprove: true,
       countries: [],
@@ -2126,18 +2164,22 @@ function assessJurisdiction({ countryCode, countryOfResidence, nationalities }) 
 
   // KNOWN GAP — Appendix A.15 (catch-all for unlisted jurisdictions).
   // The manual requires that a country appearing on NO tier of the risk matrix
-  // routes to manual compliance review rather than passing as low-risk. That is
-  // not implemented here, because doing it properly needs an authoritative list
-  // of which countries ARE explicitly assessed as standard-risk, and no such
-  // list exists in the repo or the manual excerpt this code was written against.
-  // Inventing one would mean fabricating compliance data.
+  // routes to manual compliance review rather than passing as low-risk. A
+  // country on none of the three lists still falls through to 'Standard' below.
   //
-  // Consequence today: a country on none of the three lists falls through to
-  // 'Standard' below. That is the pre-existing behaviour, not a regression
-  // introduced by moving the check to review time — but it IS still the A.15
-  // gap already recorded in the tracker (C.3), and it needs the compliance
-  // owner to supply the standard-risk list before it can be closed.
+  // CORRECTION, 05 Aug 2026: this comment used to say the gap could not be
+  // closed because no authoritative standard-risk country list existed. That
+  // was wrong, and it kept the item parked as "blocked" for weeks. Appendices
+  // A.4–A.14 of the compliance manual ARE that list — 114 countries with an
+  // explicit tier each (54 Low, 20 Medium, 16 EDD, 23 Excluded), and the
+  // excluded set above already matches A.14 exactly. What is actually missing
+  // is permission to treat the manual's matrix as authoritative in code, and a
+  // named owner for the quarterly review A.16 requires. That is a decision, not
+  // a missing artefact. Tracked as its own queue item — do not close it here
+  // by inventing the list, which is what the original comment rightly refused
+  // to do.
   return {
+    ...context,
     tier: 'Standard',
     canApprove: true,
     countries: uniqueCodes,

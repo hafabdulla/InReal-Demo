@@ -1333,6 +1333,13 @@ function getJurisdiction(user) {
     canApprove: j.canApprove !== false,
     reason: j.reason || '',
     triggeredBy: Array.isArray(j.triggeredBy) ? j.triggeredBy : [],
+    // The country picked at signup, when it contradicts what was later
+    // declared. It no longer counts toward the risk tier (a superseded dropdown
+    // answer is not a connection to a jurisdiction), but the reviewer is still
+    // told about it — "said United States at signup, now declares Italy" is
+    // exactly what a human should look at, and losing it silently would trade
+    // one bug for another.
+    signupCountryConflict: j.signupCountryConflict || null,
   };
 }
 
@@ -1418,6 +1425,20 @@ function openKycDrawer(userId) {
 
   const eddWarning = document.getElementById('eddWarning');
   eddWarning.classList.toggle('hidden', !risk.isEDD);
+
+  // Rendered as its own line rather than folded into the tier, because it is
+  // not a risk verdict — it is a discrepancy for the reviewer to resolve
+  // against the applicant's documents.
+  const mismatchEl = document.getElementById('kycDrawerSignupMismatch');
+  if (mismatchEl) {
+    const conflict = risk.signupCountryConflict;
+    mismatchEl.classList.toggle('hidden', !conflict);
+    if (conflict) {
+      mismatchEl.textContent =
+        `Selected ${conflict} at signup, but has since declared a different nationality and residence. ` +
+        `The declaration is what the tier above is based on — confirm it against their identity documents before deciding.`;
+    }
+  }
 
   // Prohibited (or an unavailable assessment) blocks approval. Declining stays
   // available on purpose — the account still needs resolving, it just can never
