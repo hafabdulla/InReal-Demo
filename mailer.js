@@ -174,8 +174,20 @@ async function deliver({ to, subject, text, html }) {
  * nothing about money, which is also what keeps them out of the territory
  * where a transactional email starts reading as a financial promotion.
  */
-function buildEmail({ heading, greetingName, bodyLines, code, actionUrl, actionLabel, footerNote }) {
+function buildEmail({ heading, greetingName, bodyLines, code, actionUrl, actionLabel, footerNote, logoUrl }) {
   const safeName = greetingName ? `Hi ${greetingName},` : 'Hi,';
+
+  // `logo-light.png` is the black wordmark — the naming is logo-{background},
+  // so "light" means for light backgrounds, which is what this shell is. Most
+  // clients block remote images by default, so the alt text is what a good
+  // share of recipients actually see; "InReal" reads correctly on its own.
+  // Omitted entirely rather than rendered broken when there is no portal origin
+  // to hang it off, since a broken image in an account email is worse than none.
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;margin:0 0 24px;">
+        <img src="${escapeHtml(logoUrl)}" alt="InReal" width="140" style="display:block;margin:0 auto;width:140px;height:auto;border:0;outline:none;text-decoration:none;">
+      </div>`
+    : '';
 
   const text = [
     safeName,
@@ -196,6 +208,7 @@ function buildEmail({ heading, greetingName, bodyLines, code, actionUrl, actionL
 <html>
   <body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#18181b;">
     <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+      ${logoBlock}
       <h1 style="margin:0 0 20px;font-size:20px;font-weight:600;">${escapeHtml(heading)}</h1>
       <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">${escapeHtml(safeName)}</p>
       ${bodyLines
@@ -222,6 +235,17 @@ function buildEmail({ heading, greetingName, bodyLines, code, actionUrl, actionL
 }
 
 /**
+ * The mark is served from the investor site's own `public/` directory, so the
+ * portal origin is also the asset origin — no second variable to set, and no
+ * third-party host to expire. That last part is not hypothetical: every logo on
+ * this platform was loading from a CDN nobody at InReal controlled, and when it
+ * went away it de-branded the whole product with no error anywhere.
+ */
+function buildLogoUrl(portalUrl) {
+  return portalUrl ? `${portalUrl}/logo-light.png` : null;
+}
+
+/**
  * Sent when an admin creates an account on an investor's behalf.
  * Pairs with POST /api/ops/users.
  */
@@ -229,6 +253,7 @@ export async function sendAccountSetupEmail({ to, firstName, code, portalUrl, ex
   const actionUrl = portalUrl ? `${portalUrl}/auth?code=${encodeURIComponent(code)}` : null;
 
   const { text, html } = buildEmail({
+    logoUrl: buildLogoUrl(portalUrl),
     heading: 'Set your InReal password',
     greetingName: firstName,
     bodyLines: [
@@ -257,6 +282,7 @@ export async function sendPasswordResetEmail({ to, firstName, code, portalUrl, e
   const actionUrl = portalUrl ? `${portalUrl}/auth?code=${encodeURIComponent(code)}` : null;
 
   const { text, html } = buildEmail({
+    logoUrl: buildLogoUrl(portalUrl),
     heading: 'Reset your InReal password',
     greetingName: firstName,
     bodyLines: [

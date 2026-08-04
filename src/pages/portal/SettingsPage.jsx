@@ -265,6 +265,12 @@ export default function SettingsPage() {
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [showDisablePrompt, setShowDisablePrompt] = useState(false);
   const [disableCode, setDisableCode] = useState('');
+  // The lost-phone path. Someone who cannot open their authenticator cannot
+  // produce a code from it, so the disable prompt has to offer the other
+  // factor rather than only the one they just lost.
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+  const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
+  const [recoveryCodesRemaining, setRecoveryCodesRemaining] = useState(0);
 
   useEffect(() => {
     const fetchTotpStatus = async () => {
@@ -274,7 +280,10 @@ export default function SettingsPage() {
           headers: { Authorization: `Bearer ${session.token}` },
         });
         const data = await res.json();
-        if (data.success) setTotpEnabled(data.data.enabled);
+        if (data.success) {
+          setTotpEnabled(data.data.enabled);
+          setRecoveryCodesRemaining(data.data.recoveryCodesRemaining ?? 0);
+        }
       } catch (error) {
         console.error('Failed to fetch 2FA status:', error);
       }
@@ -356,12 +365,31 @@ export default function SettingsPage() {
     setTotpSecret('');
   };
 
+  const closeDisablePrompt = () => {
+    setShowDisablePrompt(false);
+    setDisableCode('');
+    setRecoveryCodeInput('');
+    setUseRecoveryCode(false);
+    setTotpError('');
+  };
+
   const handleDisable = async () => {
     setTotpError('');
-    if (!/^\d{6}$/.test(disableCode.trim())) {
+
+    // Recovery codes are 10 hex characters as issued. Spaces and dashes are
+    // stripped rather than rejected — they are read off paper, and punctuation
+    // someone added themselves is not a reason to refuse a correct code.
+    const recovery = recoveryCodeInput.trim().toLowerCase().replace(/[\s-]/g, '');
+    if (useRecoveryCode) {
+      if (!/^[0-9a-f]{10}$/.test(recovery)) {
+        setTotpError('Enter one of the 10-character recovery codes you saved when you set up two-factor authentication.');
+        return;
+      }
+    } else if (!/^\d{6}$/.test(disableCode.trim())) {
       setTotpError('Enter your current 6-digit authenticator code.');
       return;
     }
+
     setTotpLoading(true);
     try {
       const res = await fetch(`${getApiBase()}/api/auth/totp/disable`, {
@@ -370,7 +398,9 @@ export default function SettingsPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session?.token || ''}`,
         },
-        body: JSON.stringify({ code: disableCode.trim() }),
+        body: JSON.stringify(
+          useRecoveryCode ? { recoveryCode: recovery } : { code: disableCode.trim() }
+        ),
       });
       const data = await res.json();
       if (!data.success) {
@@ -379,11 +409,13 @@ export default function SettingsPage() {
         return;
       }
       setTotpEnabled(false);
-      setShowDisablePrompt(false);
-      setDisableCode('');
+      setRecoveryCodesRemaining(0);
+      closeDisablePrompt();
       toast({
         title: 'Two-factor authentication disabled',
-        description: 'You can also delete the "InReal" entry from your authenticator app now — it no longer works.',
+        description: useRecoveryCode
+          ? 'That recovery code has now been used up. Set two-factor authentication up again on your new device to protect your account.'
+          : 'You can also delete the "InReal" entry from your authenticator app now — it no longer works.',
       });
     } catch (error) {
       console.error('Failed to disable 2FA:', error);
@@ -918,6 +950,16 @@ export default function SettingsPage() {
                       <p className="text-sm text-portal-secondary">
                         {totpEnabled ? 'Enabled — using an authenticator app' : 'Add an extra layer of security'}
                       </p>
+                      {/* Worth saying while they can still act on it. Running
+                          out is only discovered at the moment the codes are
+                          needed, which is the moment they cannot be replaced. */}
+                      {totpEnabled && recoveryCodesRemaining <= 2 && (
+                        <p className="text-sm text-amber-400 mt-1">
+                          {recoveryCodesRemaining === 0
+                            ? 'No recovery codes left. If you lose your authenticator app, contact support to regain access.'
+                            : `${recoveryCodesRemaining} recovery code${recoveryCodesRemaining === 1 ? '' : 's'} left.`}
+                        </p>
+                      )}
                     </div>
                   </div>
                   {totpStep === 'idle' && !totpEnabled && (
@@ -995,22 +1037,57 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                {/* Disable — always requires a fresh code, never a plain toggle */}
+                {/* Disable — always requires a second factor, never a plain
+                    toggle. Either a live authenticator code, or a recovery code
+                    for whoever no longer has the authenticator at all. */}
                 {showDisablePrompt && (
                   <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-3">
-                    <p className="text-sm text-portal-secondary">Enter your current authenticator code to disable two-factor authentication.</p>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={6}
-                      value={disableCode}
-                      onChange={(e) => { setDisableCode(e.target.value.replace(/\D/g, '')); setTotpError(''); }}
-                      placeholder="123456"
-                      className="portal-input font-mono tracking-widest text-center"
-                    />
+                    {useRecoveryCode ? (
+                      <>
+                        <p className="text-sm text-portal-secondary">
+                          Enter one of the recovery codes you saved when you set up two-factor authentication. Each code works once.
+                        </p>
+                        <input
+                          type="text"
+                          autoComplete="one-time-code"
+                          spellCheck={false}
+                          maxLength={13}
+                          value={recoveryCodeInput}
+                          onChange={(e) => { setRecoveryCodeInput(e.target.value); setTotpError(''); }}
+                          placeholder="a1b2c3d4e5"
+                          className="portal-input font-mono tracking-widest text-center"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-portal-secondary">Enter your current authenticator code to disable two-factor authentication.</p>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          value={disableCode}
+                          onChange={(e) => { setDisableCode(e.target.value.replace(/\D/g, '')); setTotpError(''); }}
+                          placeholder="123456"
+                          className="portal-input font-mono tracking-widest text-center"
+                        />
+                      </>
+                    )}
+
                     {totpError && <p className="text-sm text-red-400">{totpError}</p>}
+
+                    <button
+                      type="button"
+                      onClick={() => { setUseRecoveryCode((v) => !v); setTotpError(''); setDisableCode(''); setRecoveryCodeInput(''); }}
+                      className="text-sm text-portal-secondary underline underline-offset-2 hover:text-portal-primary"
+                    >
+                      {useRecoveryCode
+                        ? 'I have my authenticator app'
+                        : "I've lost access to my authenticator app"}
+                    </button>
+
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => { setShowDisablePrompt(false); setDisableCode(''); setTotpError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                      <button onClick={closeDisablePrompt} className="portal-btn-secondary text-sm py-2 px-4">
                         Cancel
                       </button>
                       <button onClick={handleDisable} disabled={totpLoading} className="portal-btn-primary text-sm py-2 px-4 disabled:opacity-60">

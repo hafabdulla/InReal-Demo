@@ -1152,12 +1152,26 @@ function hashResetToken(token) {
 // investor to the ops portal would be a confusing dead end at best. So there
 // is a dedicated variable, falling back to the first FRONTEND_URL entry only
 // so a missing variable degrades to "probably right" rather than "no link".
-function getInvestorPortalUrl() {
-  const explicit = (process.env.INVESTOR_PORTAL_URL || '').trim();
-  if (explicit) return explicit.replace(/\/+$/, '');
+// Both sources are typed by hand into a dashboard field, and a bare domain
+// ("in-real-demo.vercel.app") is the natural thing to type. It is also silently
+// wrong: with no scheme, `${portalUrl}/auth?code=…` is a RELATIVE path, so the
+// href in a setup email resolves against whatever webmail host is rendering it
+// and the investor never reaches the portal. FRONTEND_URL entries carry a
+// scheme because CORS origins must, so this only ever bites the dedicated
+// variable — which is exactly the one nobody gets to test before it ships.
+// Anything that already names a scheme is left as typed, so http://localhost
+// still works in dev.
+function normalizeLinkOrigin(value) {
+  const trimmed = String(value || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
 
-  const firstAllowedOrigin = (process.env.FRONTEND_URL || '').split(',')[0].trim();
-  return firstAllowedOrigin ? firstAllowedOrigin.replace(/\/+$/, '') : null;
+function getInvestorPortalUrl() {
+  const explicit = normalizeLinkOrigin(process.env.INVESTOR_PORTAL_URL);
+  if (explicit) return explicit;
+
+  return normalizeLinkOrigin((process.env.FRONTEND_URL || '').split(',')[0]);
 }
 
 // ── Encryption for small, recoverable secrets ────────────────────────────────
@@ -1217,6 +1231,67 @@ async function verifyFreshTotpCode(userId, code) {
   if (rows.length === 0 || !rows[0].is_active) return false;
   const secret = decryptValue(rows[0].secret_encrypted);
   return authenticator.check(String(code).trim(), secret);
+}
+
+// Redeems one of the eight recovery codes issued at enrolment, for the exact
+// situation they exist for: the authenticator is gone.
+//
+// Until this existed, enrolment displayed eight codes, told the investor to
+// keep them safe, and no endpoint anywhere accepted one — so a lost phone had
+// no self-service route back at all. That is also why this has to land before
+// TOTP can gate login: without redemption, a lost phone would stop being an
+// inconvenience and start being a permanently dead account.
+//
+// SCOPE IS DELIBERATELY NARROW. A recovery code is written on paper and bound
+// to no device, so it is accepted only for recovering *access to the second
+// factor* — never as a substitute for one on a money-moving action. Bank-detail
+// changes keep requiring a live authenticator code, which is the one control
+// this project says may not be shortcut at any timeline pressure.
+//
+// Single-use is enforced by the database rather than by read-then-write: the
+// UPDATE only matches while the hash is still in the array, so two requests
+// racing the same code produce one winner and one empty RETURNING.
+async function redeemRecoveryCode(userId, submittedCode) {
+  // Codes are displayed as lowercase hex. Accept them back regardless of case
+  // or the spaces/dashes someone naturally types when copying off paper.
+  const normalized = String(submittedCode || '').trim().toLowerCase().replace(/[\s-]/g, '');
+  if (!normalized) return { redeemed: false };
+
+  const rows = await q(
+    'SELECT recovery_codes_hash FROM user_totp WHERE user_id = $1 AND is_active = true',
+    [userId]
+  );
+  if (rows.length === 0) return { redeemed: false };
+
+  const stored = rows[0].recovery_codes_hash || [];
+  const submittedHash = Buffer.from(hashResetToken(normalized), 'hex');
+
+  // Every stored hash is compared, with no early exit, so neither which
+  // position matched nor how many codes remain is readable from response time.
+  let matchedHash = null;
+  for (const candidate of stored) {
+    const candidateHash = Buffer.from(candidate, 'hex');
+    if (candidateHash.length === submittedHash.length && timingSafeEqual(candidateHash, submittedHash)) {
+      matchedHash = candidate;
+    }
+  }
+  if (!matchedHash) return { redeemed: false };
+
+  const consumed = await q(
+    `UPDATE user_totp
+        SET recovery_codes_hash = array_remove(recovery_codes_hash, $1),
+            updated_at = NOW()
+      WHERE user_id = $2
+        AND $1 = ANY(recovery_codes_hash)
+      RETURNING COALESCE(array_length(recovery_codes_hash, 1), 0) AS remaining`,
+    [matchedHash, userId]
+  );
+
+  // Empty means another request consumed this same code first. Losing that
+  // race is a failed redemption, not a successful one.
+  if (consumed.length === 0) return { redeemed: false };
+
+  return { redeemed: true, remaining: Number(consumed[0].remaining) || 0 };
 }
 
 const GENERIC_RESET_REQUEST_MESSAGE =
@@ -1618,19 +1693,47 @@ app.post('/api/auth/totp/disable', async (req, res) => {
     const userId = requireAuthenticatedUserId(req, res);
     if (!userId) return;
 
-    const { code } = req.body;
-    const isValid = await verifyFreshTotpCode(userId, code);
-    if (!isValid) {
+    // Either factor is accepted here, and only here: a live code from the
+    // authenticator, or one of the recovery codes issued at enrolment. The
+    // recovery path exists because the alternative — "prove you hold the phone
+    // you just told us you lost" — is not a recovery flow at all.
+    const { code, recoveryCode } = req.body;
+
+    let authorised = false;
+    let viaRecoveryCode = false;
+    let remainingRecoveryCodes = null;
+
+    if (recoveryCode) {
+      const result = await redeemRecoveryCode(userId, recoveryCode);
+      authorised = result.redeemed;
+      viaRecoveryCode = true;
+      remainingRecoveryCodes = result.remaining ?? null;
+    } else {
+      authorised = await verifyFreshTotpCode(userId, code);
+    }
+
+    if (!authorised) {
       return res.status(400).json({
         success: false,
-        error: 'A valid current authenticator code is required to disable two-factor authentication.',
+        error: viaRecoveryCode
+          // Same generic wording whether the code was wrong, already spent, or
+          // the account has none left — telling them apart would confirm a
+          // guessed code had once been real.
+          ? 'That recovery code is not valid. Each code can only be used once.'
+          : 'A valid current authenticator code is required to disable two-factor authentication.',
       });
     }
 
     await q('DELETE FROM user_totp WHERE user_id = $1', [userId]);
-    console.log(`[totp.disabled] user_id=${userId}`);
+    console.log(`[totp.disabled] user_id=${userId} via=${viaRecoveryCode ? 'recovery_code' : 'totp'}`);
 
-    res.json({ success: true, message: 'Two-factor authentication disabled.' });
+    res.json({
+      success: true,
+      message: viaRecoveryCode
+        ? 'Two-factor authentication has been turned off using a recovery code. Set it up again to protect your account.'
+        : 'Two-factor authentication disabled.',
+      data: viaRecoveryCode ? { remainingRecoveryCodes } : undefined,
+    });
   } catch (error) {
     sendTotpErrorResponse(error, res);
   }
@@ -1643,8 +1746,23 @@ app.get('/api/auth/totp/status', async (req, res) => {
     const userId = requireAuthenticatedUserId(req, res);
     if (!userId) return;
 
-    const rows = await q('SELECT is_active FROM user_totp WHERE user_id = $1', [userId]);
-    res.json({ success: true, data: { enabled: rows.length > 0 && rows[0].is_active === true } });
+    // The remaining count, never the codes themselves — those exist in
+    // readable form exactly once, on the enrolment screen. Surfaced so the UI
+    // can warn someone who is down to their last one or two, which is the
+    // moment to regenerate rather than after they are all spent.
+    const rows = await q(
+      `SELECT is_active, COALESCE(array_length(recovery_codes_hash, 1), 0) AS recovery_codes_remaining
+         FROM user_totp WHERE user_id = $1`,
+      [userId]
+    );
+    const enabled = rows.length > 0 && rows[0].is_active === true;
+    res.json({
+      success: true,
+      data: {
+        enabled,
+        recoveryCodesRemaining: enabled ? Number(rows[0].recovery_codes_remaining) || 0 : 0,
+      },
+    });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
