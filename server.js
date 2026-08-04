@@ -2726,6 +2726,10 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
          country_code         AS "CountryCode",
          country_of_residence AS "CountryOfResidence",
          nationalities        AS "Nationalities",
+         -- The applicant's own answer to the US-person question. A reviewer
+         -- deciding eligibility needs to see the declaration they are meant to
+         -- be checking against documents, not just the tier derived from it.
+         us_person            AS "UsPerson",
          phone_number         AS "PhoneNumber",
          kyc_status           AS "KYCStatus",
          accreditation_status AS "AccreditationStatus",

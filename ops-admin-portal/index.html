@@ -201,11 +201,36 @@
               </div>
 
               <div class="kyc-drawer-body">
+                <!-- WHAT THE APPLICANT DECLARED.
+                     Kept visually first, and separate from the derived verdict
+                     below, because these are the facts the reviewer is supposed
+                     to be checking against identity documents. Appendix A.16
+                     requires citizenship and residency to be screened
+                     INDEPENDENTLY — which cannot be done from a risk tier
+                     alone, and this drawer previously showed nothing else. -->
                 <div class="kyc-detail-grid">
                   <div class="kyc-detail-item">
-                    <span class="kyc-detail-label">Country code</span>
+                    <span class="kyc-detail-label">Nationalities declared</span>
+                    <span class="kyc-detail-value" id="kycDrawerNationalities">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Country of residence</span>
+                    <span class="kyc-detail-value" id="kycDrawerResidence">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">US person?</span>
+                    <span class="kyc-detail-value" id="kycDrawerUsPerson">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Selected at signup</span>
                     <span class="kyc-detail-value" id="kycDrawerCountry">—</span>
                   </div>
+                </div>
+
+                <!-- THE DERIVED VERDICT. Everything above is the applicant's
+                     claim; everything here is what the server computed from it
+                     and will enforce at approval. -->
+                <div class="kyc-detail-grid">
                   <div class="kyc-detail-item">
                     <span class="kyc-detail-label">Risk tier</span>
                     <span class="kyc-detail-value" id="kycDrawerTier">—</span>
@@ -213,6 +238,10 @@
                   <div class="kyc-detail-item">
                     <span class="kyc-detail-label">Due diligence</span>
                     <span class="kyc-detail-value" id="kycDrawerDD">—</span>
+                  </div>
+                  <div class="kyc-detail-item">
+                    <span class="kyc-detail-label">Assessed on</span>
+                    <span class="kyc-detail-value" id="kycDrawerAssessedOn">—</span>
                   </div>
                   <div class="kyc-detail-item">
                     <span class="kyc-detail-label">Phone</span>

@@ -1333,6 +1333,7 @@ function getJurisdiction(user) {
     canApprove: j.canApprove !== false,
     reason: j.reason || '',
     triggeredBy: Array.isArray(j.triggeredBy) ? j.triggeredBy : [],
+    countries: Array.isArray(j.countries) ? j.countries : [],
     // The country picked at signup, when it contradicts what was later
     // declared. It no longer counts toward the risk tier (a superseded dropdown
     // answer is not a connection to a jurisdiction), but the reviewer is still
@@ -1359,6 +1360,20 @@ async function loadKycQueue() {
   addAudit('KYC queue loaded', `${authSession?.user?.Email || 'Ops'} • just now`, `${kycQueue.length} participant(s) awaiting review.`);
 }
 
+// The countries the risk tier was ACTUALLY computed from — the declared
+// nationalities and residence — rather than `CountryCode`, which is the
+// dropdown answer from signup and no longer feeds the assessment at all.
+//
+// This column used to show CountryCode, which meant a reviewer scanning the
+// queue saw "US" next to a Standard tier for someone who had declared Hong
+// Kong, Italy and Israel. The number was right and the country beside it was
+// not the one it came from, which is the most misleading possible combination.
+function assessedCountries(user) {
+  const codes = user?.Jurisdiction?.countries;
+  if (Array.isArray(codes) && codes.length > 0) return codes.join(', ');
+  return user?.CountryCode || '—';
+}
+
 function renderKycQueue() {
   const countLabel = document.getElementById('kycCountLabel');
   const tbody = document.getElementById('kycTableBody');
@@ -1379,7 +1394,7 @@ function renderKycQueue() {
           <strong>${escapeHtml(user.FirstName)} ${escapeHtml(user.LastName)}</strong><br>
           <span class="helper">${escapeHtml(user.Email)}</span>
         </td>
-        <td>${escapeHtml(user.CountryCode || '—')}</td>
+        <td>${escapeHtml(assessedCountries(user))}</td>
         <td><span class="${tierClass(risk.tier)}">${escapeHtml(risk.tier)}</span></td>
         <td><span class="helper">${escapeHtml(risk.dd)}</span></td>
         <td>${formatDate(user.CreatedAt)}</td>
@@ -1413,10 +1428,38 @@ function openKycDrawer(userId) {
 
   document.getElementById('kycDrawerName').textContent = `${user.FirstName} ${user.LastName}`;
   document.getElementById('kycDrawerEmail').textContent = user.Email;
-  document.getElementById('kycDrawerCountry').textContent = user.CountryCode || '—';
   document.getElementById('kycDrawerUserId').textContent = `#${user.UserID}`;
   document.getElementById('kycDrawerPhone').textContent = user.PhoneNumber || '—';
   document.getElementById('kycDrawerJoined').textContent = formatDate(user.CreatedAt);
+
+  // What the applicant declared. Every one of these is a claim to be checked
+  // against their documents, which is why they are shown verbatim rather than
+  // summarised into the tier.
+  const nationalities = Array.isArray(user.Nationalities) ? user.Nationalities : [];
+  document.getElementById('kycDrawerNationalities').textContent =
+    nationalities.length > 0 ? nationalities.join(', ') : 'Not declared';
+  document.getElementById('kycDrawerResidence').textContent = user.CountryOfResidence || 'Not declared';
+
+  // Rendered as words, not a raw boolean. "false" in a compliance drawer is
+  // ambiguous between "answered no" and "never asked", and those are very
+  // different things to approve on.
+  const usPersonEl = document.getElementById('kycDrawerUsPerson');
+  if (user.UsPerson === true) {
+    usPersonEl.textContent = 'YES — ineligible';
+  } else if (user.UsPerson === false) {
+    usPersonEl.textContent = 'No (self-declared)';
+  } else {
+    usPersonEl.textContent = 'Not answered';
+  }
+
+  document.getElementById('kycDrawerCountry').textContent = user.CountryCode || '—';
+
+  // Spelled out so the tier is auditable at a glance: a reviewer can see which
+  // countries produced it rather than having to trust the label.
+  const assessedOn = Array.isArray(risk.countries) && risk.countries.length > 0
+    ? risk.countries.join(', ')
+    : 'Nothing declared';
+  document.getElementById('kycDrawerAssessedOn').textContent = assessedOn;
 
   const tierEl = document.getElementById('kycDrawerTier');
   tierEl.innerHTML = `<span class="${tierClass(risk.tier)}">${risk.tier}</span>`;
