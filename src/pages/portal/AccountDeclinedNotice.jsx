@@ -1,13 +1,26 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { ShieldOff, LogOut, Mail } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { ShieldOff, LogOut, Mail, Home } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/SQLServerAuthContext';
 
 // Shown INSTEAD of the whole portal when an application has been declined.
 // Product owner decision, 28 July 2026: a declined account is locked rather
 // than left dormant — it authenticates only far enough to show this notice,
 // with no further navigation.
+//
+// REFINED 05 August 2026, on the PO's request: there is now also a way back to
+// the public site. That is not a relaxation of the rule above, because the rule
+// is about navigation WITHIN the portal — not seeing properties, not reaching
+// documents, and above all not reopening the identity form to self-edit
+// nationality or address (D.23). A link to the marketing homepage grants
+// nothing a logged-out visitor does not already have.
+//
+// It also removes a genuinely bad dead end: previously the only control on this
+// screen was "Sign out", so "I would like to look at the website" and "end my
+// session" were the same button — the exact complaint that produced the portal's
+// own Back to Website link. Returning via Dashboard lands the user straight back
+// on this notice, which is correct and was checked rather than assumed.
 //
 // This screen is presentation only. The actual lockout is enforced by the
 // server, which refuses a declined user's token on every endpoint except the
@@ -87,10 +100,21 @@ export default function AccountDeclinedNotice() {
             </a>
           </div>
 
-          <div className="pt-1">
+          {/* Back to Website sits first and carries the primary treatment: it
+              is the only thing left on this screen that a declined applicant
+              can usefully do. Signing out is the terminal action, so it reads
+              as the quieter of the two. */}
+          <div className="pt-1 flex flex-col sm:flex-row gap-2 justify-center">
+            <Link
+              to="/"
+              className="portal-btn-primary text-sm py-2.5 px-5 inline-flex items-center justify-center gap-2"
+            >
+              <Home className="w-4 h-4" aria-hidden="true" />
+              Back to Website
+            </Link>
             <button
               onClick={handleSignOut}
-              className="portal-btn-secondary text-sm py-2.5 inline-flex items-center gap-2"
+              className="portal-btn-secondary text-sm py-2.5 px-5 inline-flex items-center justify-center gap-2"
             >
               <LogOut className="w-4 h-4" aria-hidden="true" />
               Sign out
