@@ -615,17 +615,38 @@ async function handleLogin(event) {
 
   if (apiBase) setApiBase(apiBase);
 
+  // The credential check happens ONLY in this call, and only its failure may
+  // ever produce "Invalid email or password". Everything after a successful
+  // login — establishSession's /me call, refreshLiveData's panel loads — is
+  // deliberately its own try/catch below, so a failure there can never be
+  // misreported as a wrong password. See the incident note on
+  // refreshLiveData(): that conflation is exactly what locked an
+  // operations_admin out of a session whose credentials were never wrong.
+  let loginResult;
   try {
-    const result = await apiFetch('/api/admin/auth/login', {
+    loginResult = await apiFetch('/api/admin/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-
-    await establishSession({ user: result.data, token: result.token });
-    addAudit('Admin signed in', `${result.data.Email} • just now`, 'Operations workspace unlocked.');
-    renderAudit();
   } catch {
     rejectFailedAdminLogin();
+    authEls.loginSubmitBtn.disabled = false;
+    return;
+  }
+
+  try {
+    await establishSession({ user: loginResult.data, token: loginResult.token });
+    addAudit('Admin signed in', `${loginResult.data.Email} • just now`, 'Operations workspace unlocked.');
+    renderAudit();
+  } catch (error) {
+    // The password was correct — apiFetch already proved that above. Getting
+    // here means /api/admin/auth/me itself failed, which in practice means a
+    // token that was rejected the instant it was issued (a boot-time
+    // JWT_SECRET mismatch is the realistic cause, not a wrong password) — a
+    // genuine "we cannot trust this session" case, so logging out is correct.
+    // It must never again be able to mean "a data panel 403'd."
+    console.error('Session could not be established after a successful login:', error);
+    rejectFailedAdminLogin('Signed in, but your session could not be loaded. Please try again.');
   } finally {
     authEls.loginSubmitBtn.disabled = false;
   }
@@ -656,20 +677,40 @@ async function bootstrapAuth() {
 
   authSession = stored;
 
+  // Same split as handleLogin, for the same reason: /api/admin/auth/me is
+  // what proves the stored token is still valid, and its failure is the only
+  // thing on this path allowed to bounce back to login. refreshLiveData()
+  // no longer throws for a role-based 403 (see the incident note on it), but
+  // this stays split defensively — a future addition to the dashboard that
+  // eagerly fetches something role-gated must not be able to silently start
+  // logging people out again the way this one did on 03 Aug 2026.
+  let me;
   try {
-    const me = await apiFetch('/api/admin/auth/me');
-    authSession = { ...stored, user: me.data };
-    saveAuthSession(authSession);
-    updateAdminHeader();
-    // Needed on this path too, not just after a fresh login — this is the
-    // branch every page refresh takes, and without it a super admin who
-    // reloaded lost the Operators tab until they logged out and back in.
-    applyOperatorRoleVisibility();
-    showAuthScreen('app');
-    refreshIcons();
-    await refreshLiveData();
+    me = await apiFetch('/api/admin/auth/me');
   } catch {
     returnToLogin();
+    return;
+  }
+
+  authSession = { ...stored, user: me.data };
+  saveAuthSession(authSession);
+  updateAdminHeader();
+  // Needed on this path too, not just after a fresh login — this is the
+  // branch every page refresh takes, and without it a super admin who
+  // reloaded lost the Operators tab until they logged out and back in.
+  applyOperatorRoleVisibility();
+  showAuthScreen('app');
+  refreshIcons();
+
+  try {
+    await refreshLiveData();
+  } catch (error) {
+    // Should be unreachable now that refreshLiveData uses Promise.allSettled
+    // internally — kept as a last line of defense so a genuinely unexpected
+    // throw renders as a console error on an otherwise-working dashboard,
+    // never as an unexplained bounce back to the login screen. A session that
+    // /me already vouched for must not be discarded over a rendering problem.
+    console.error('Dashboard data failed to load after session restore:', error);
   }
 }
 
@@ -1459,11 +1500,33 @@ const OPERATOR_ROLE_LABELS = {
 // Reveals the Operators tab for super admins only. This is presentation, not
 // authorisation — requireOperator(SUPER_ONLY) on the server is what actually
 // stops anyone else, and it does so whether or not this ever runs.
+// Also decides which dashboard panels refreshLiveData() is allowed to even
+// attempt — see the comment there. The two must agree: showing a tab whose
+// data-load is skipped renders an empty panel forever, and loading data for a
+// hidden tab wastes a request that will 403 anyway.
+function canOperatorSeeFinanceData() {
+  const role = authSession?.user?.OperatorRole;
+  return role === 'finance_admin' || role === 'super_admin';
+}
+
 function applyOperatorRoleVisibility() {
-  const nav = document.getElementById('navOperators');
-  if (!nav) return;
-  const isSuper = authSession?.user?.OperatorRole === 'super_admin';
-  nav.classList.toggle('hidden', !isSuper);
+  const operatorsNav = document.getElementById('navOperators');
+  if (operatorsNav) {
+    const isSuper = authSession?.user?.OperatorRole === 'super_admin';
+    operatorsNav.classList.toggle('hidden', !isSuper);
+  }
+
+  // Bank Requests holds the same data class as portfolio adjustments — where
+  // an investor's money goes — and is finance_admin/super_admin only on the
+  // server (D.23/F8). Hiding it for operations_admin isn't a security control
+  // (the server already refuses the data); it stops that role from landing on
+  // a tab that can only ever show "0 pending" or an error, and — before this
+  // fix — from being logged out by it. See the incident note on
+  // refreshLiveData for what "before this fix" actually did.
+  const bankRequestsNav = document.getElementById('navBankRequests');
+  if (bankRequestsNav) {
+    bankRequestsNav.classList.toggle('hidden', !canOperatorSeeFinanceData());
+  }
 }
 
 async function loadOperators() {
@@ -1976,8 +2039,68 @@ function bindPortfolioEvents() {
   document.getElementById('portfolioSubmitBtn').addEventListener('click', submitPortfolioAdjustment);
 }
 
+/**
+ * INCIDENT, 03 Aug 2026 — read this before changing what gets loaded here.
+ *
+ * F8 correctly gated GET /api/ops/bank-detail-requests to finance_admin /
+ * super_admin. This function fetched it unconditionally for every operator
+ * regardless of role, in the same Promise.all as everything else, with no
+ * per-loader error handling. The result: the moment an operator was anything
+ * other than finance/super, this function threw on login and on every page
+ * load. Because establishSession() awaits this function with no try/catch of
+ * its own, the throw reached handleLogin's catch block, which treats ANY
+ * error — a wrong password or a permissions problem, no distinction — as
+ * "Invalid email or password" and clears the session it had just created. An
+ * operations_admin operator (Hafiz, demoted from super_admin as part of
+ * routine role assignment) saw the dashboard render for an instant and was
+ * then bounced straight back to a login screen telling him his password was
+ * wrong. It was not. The role model was working exactly as designed; the
+ * dashboard just couldn't survive being told no.
+ *
+ * Two independent fixes, both required:
+ *
+ * 1. Don't request data a role can't have. applyOperatorRoleVisibility()
+ *    already hides the Bank Requests tab for non-finance roles — this
+ *    function has to agree with that decision, or it fetches data behind a
+ *    hidden tab that will only ever 403 and log noise server-side for no
+ *    reason.
+ * 2. Never let one panel's failure be fatal. Promise.allSettled, not
+ *    Promise.all: a real network blip on the KYC queue must not prevent the
+ *    Documents panel from rendering, and — the actual incident — must never
+ *    propagate up to code that interprets "a dashboard fetch failed" as "this
+ *    session is invalid, log out." Session validity is decided once, by the
+ *    /api/admin/auth/me call in establishSession/bootstrapAuth. It is not
+ *    re-decided by whatever the least-privileged panel on the page happens to
+ *    return.
+ */
 async function refreshLiveData() {
-  await Promise.all([loadApiUsers(), loadInvestmentIntents(), loadKycQueue(), loadDocuments(), loadBankRequestQueue(), loadPropertyOptions()]);
+  const loaders = [
+    loadApiUsers(),
+    loadInvestmentIntents(),
+    loadKycQueue(),
+    loadDocuments(),
+    loadPropertyOptions(),
+  ];
+  if (canOperatorSeeFinanceData()) {
+    loaders.push(loadBankRequestQueue());
+  } else {
+    // Empties the panel's data rather than leaving whatever the previous
+    // session (possibly a different, higher-privileged one on a shared
+    // machine) left behind in memory.
+    bankRequestQueue = [];
+  }
+
+  const results = await Promise.allSettled(loaders);
+  results.forEach((result) => {
+    if (result.status === 'rejected') {
+      // Deliberately not surfaced to the operator as an error banner — a
+      // failed panel renders as that panel being empty, which is honest
+      // without being alarming. It IS logged, because "why is this panel
+      // always empty" needs to be debuggable from the console.
+      console.error('Failed to load a dashboard section:', result.reason);
+    }
+  });
+
   render();
 }
 

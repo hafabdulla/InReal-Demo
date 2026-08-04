@@ -62,7 +62,11 @@
             <i data-lucide="shield-check"></i>
             <span>KYC Review</span>
           </button>
-          <button class="nav-item" data-tab="bank-requests" data-title="Bank Requests">
+          <!-- Hidden for non-finance roles by applyOperatorRoleVisibility, same
+               pattern as navOperators. The server already refuses this data to
+               anyone but finance_admin/super_admin; hiding the tab stops an
+               operations_admin from being shown a panel that only ever 403s. -->
+          <button class="nav-item" id="navBankRequests" data-tab="bank-requests" data-title="Bank Requests">
             <i data-lucide="landmark"></i>
             <span>Bank Requests</span>
           </button>
