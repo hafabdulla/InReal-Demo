@@ -1,6 +1,11 @@
 const AUTH_STORAGE_KEY = 'inreal_admin_session';
 const WORKSPACE_STORAGE_KEY = 'inreal_ops_admin_workspace_v1';
 const API_BASE_STORAGE_KEY = 'inreal_ops_api_base';
+
+// Where the workspace lands on first load and after every sign-out. Matches the
+// panel marked `active` in index.html, so a reset looks identical to a fresh
+// visit rather than merely similar to one.
+const DEFAULT_TAB = 'overview';
 const ADMIN_LOGIN_ERROR = 'Invalid email or password';
 
 const defaultState = {
@@ -150,6 +155,11 @@ function saveAuthSession(session) {
 function clearAuthSession() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
   authSession = null;
+  // Dropping the token is not the same as ending the session. Everything the
+  // outgoing operator loaded — cached queues, the panel they had open, the
+  // workspace state in localStorage — outlives the token unless it is cleared
+  // here, and the next person to sign in on this browser inherits all of it.
+  resetWorkspaceForSignOut();
 }
 
 function showAuthScreen(screen) {
@@ -571,8 +581,16 @@ function closeMobileSidebar() {
 }
 
 function setActiveTab(tab) {
+  // A role that cannot see a tab cannot land on it, whoever asked. The click
+  // handler can't reach a hidden nav item, so the case this actually catches is
+  // a panel left active by a PREVIOUS session on the same browser: sign out of
+  // a super admin with Operators open, sign in as anyone else, and without this
+  // the super-admin-only panel is still the one on screen. Falling back to the
+  // default tab rather than rendering nothing keeps the workspace usable.
+  const target = canOperatorSeeTab(tab) ? tab : DEFAULT_TAB;
+
   document.querySelectorAll('.nav-item').forEach((button) => {
-    const isActive = button.dataset.tab === tab;
+    const isActive = button.dataset.tab === target;
     button.classList.toggle('active', isActive);
     if (isActive && button.dataset.title) {
       const pageTitle = document.getElementById('pageTitle');
@@ -580,7 +598,7 @@ function setActiveTab(tab) {
     }
   });
   document.querySelectorAll('.panel').forEach((panel) => {
-    panel.classList.toggle('active', panel.dataset.panel === tab);
+    panel.classList.toggle('active', panel.dataset.panel === target);
   });
   // On mobile the sidebar is an overlay, not a permanent column — close it
   // once a destination is picked, same as most mobile nav drawers behave.
@@ -1516,11 +1534,28 @@ function canOperatorSeeFinanceData() {
   return role === 'finance_admin' || role === 'super_admin';
 }
 
+function canOperatorManageOperators() {
+  return authSession?.user?.OperatorRole === 'super_admin';
+}
+
+// Which tabs the current role may have open. A tab absent from this map is
+// readable by any operator. setActiveTab() consults this, so a forbidden panel
+// cannot be shown even if something asks for it by name — which is what a
+// stale panel left over from a previous session amounts to.
+const TAB_VISIBILITY_GUARDS = {
+  operators: canOperatorManageOperators,
+  'bank-requests': canOperatorSeeFinanceData,
+};
+
+function canOperatorSeeTab(tab) {
+  const guard = TAB_VISIBILITY_GUARDS[tab];
+  return guard ? guard() : true;
+}
+
 function applyOperatorRoleVisibility() {
   const operatorsNav = document.getElementById('navOperators');
   if (operatorsNav) {
-    const isSuper = authSession?.user?.OperatorRole === 'super_admin';
-    operatorsNav.classList.toggle('hidden', !isSuper);
+    operatorsNav.classList.toggle('hidden', !canOperatorManageOperators());
   }
 
   // Bank Requests holds the same data class as portfolio adjustments — where
@@ -1533,6 +1568,16 @@ function applyOperatorRoleVisibility() {
   const bankRequestsNav = document.getElementById('navBankRequests');
   if (bankRequestsNav) {
     bankRequestsNav.classList.toggle('hidden', !canOperatorSeeFinanceData());
+  }
+
+  // Hiding the nav item does not move anyone off the panel it points at. Both
+  // paths that establish a session call this function, so re-asserting the
+  // visible panel here means a role change can never leave a forbidden one on
+  // screen — whichever way the role changed, and without each caller having to
+  // remember to check.
+  const activePanel = document.querySelector('.panel.active')?.dataset.panel;
+  if (activePanel && !canOperatorSeeTab(activePanel)) {
+    setActiveTab(DEFAULT_TAB);
   }
 }
 
@@ -2216,6 +2261,17 @@ async function refreshLiveData() {
     bankRequestQueue = [];
   }
 
+  // Same reasoning for the operator roster, which is super-admin-only and is
+  // never loaded here (it fetches on tab-open). clearAuthSession() already
+  // empties it on sign-out; this covers the other way a role can change under a
+  // populated page — /api/admin/auth/me returning a narrower role than the one
+  // in effect when the roster was fetched.
+  if (!canOperatorManageOperators()) {
+    operatorList = [];
+    selectedOperatorId = null;
+    renderOperators();
+  }
+
   const results = await Promise.allSettled(loaders);
   results.forEach((result) => {
     if (result.status === 'rejected') {
@@ -2242,6 +2298,45 @@ function render() {
   renderAudit();
   saveWorkspaceState();
   refreshIcons();
+}
+
+// Returns the workspace to the state a first-time visitor sees. Called from
+// clearAuthSession(), so every sign-out path goes through it — the logout
+// button, an expired token on page load, and a session that could not be
+// established after a correct password.
+//
+// The reason this is a security fix and not tidiness: every one of these caches
+// was filled by the OUTGOING operator's privileges, and the ops portal is a
+// shared-machine tool. `state` is the worst of them — it is written to
+// localStorage on every render, so a super admin's user list and audit trail
+// survived not just a sign-out but closing the browser entirely. The server was
+// never wrong here; it simply never got asked again, because nothing re-fetches
+// data that is already on the page.
+function resetWorkspaceForSignOut() {
+  kycQueue = [];
+  selectedKycUser = null;
+  operatorList = [];
+  selectedOperatorId = null;
+  bankRequestQueue = [];
+  selectedBankRequest = null;
+  selectedPortfolioUserId = null;
+
+  state = structuredClone(defaultState);
+
+  // Repaint from the now-empty state before dropping the storage key, so the
+  // DOM is cleared rather than just the variables behind it. renderOperators()
+  // is called explicitly because render() does not cover it — that panel loads
+  // on tab-open rather than with the rest of the dashboard.
+  render();
+  renderOperators();
+  closeKycDrawer();
+  closeBankRequestDrawer();
+  closePortfolioDrawer();
+  setActiveTab(DEFAULT_TAB);
+
+  // Last, because render() -> saveWorkspaceState() writes the key back. Absent
+  // and default are equivalent on the next load; absent leaves less behind.
+  localStorage.removeItem(WORKSPACE_STORAGE_KEY);
 }
 
 authEls.loginForm.addEventListener('submit', handleLogin);
