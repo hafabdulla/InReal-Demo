@@ -1559,15 +1559,25 @@ function renderOperators() {
     // server rejects self-modification with a 409, and offering a button whose
     // only outcome is an error is the "convincing placeholder" pattern this
     // project has already been bitten by three times.
+    // Reuses the portal's existing .tag pills rather than plain text, so this
+    // table reads like the Users tab next to it. Super admin borrows the
+    // "verified" (teal/green) treatment as the highest privilege, finance the
+    // neutral grey, and a revoked grant the "suspended" red — the same visual
+    // language those states already carry elsewhere in this portal.
+    const roleTagClass = o.Role === 'super_admin' ? 'verified' : '';
+    const revokeBtn = o.IsActive
+      ? `<button class="ghost-btn btn-sm operator-revoke-btn" data-userid="${escapeAttr(o.UserID)}">Revoke</button>`
+      : '';
+
     const actions = isSelf
-      ? `<span class="helper">You</span>`
-      : `<select class="operator-role-select" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem">
+      ? `<span class="tag">You</span>`
+      : `<select class="field field-sm operator-role-select" data-userid="${escapeAttr(o.UserID)}">
            ${Object.entries(OPERATOR_ROLE_LABELS).map(([value, label]) => `
              <option value="${escapeAttr(value)}"${value === o.Role ? ' selected' : ''}>${escapeHtml(label)}</option>
            `).join('')}
          </select>
-         <button class="ghost-btn operator-apply-btn" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem;padding:4px 10px">Apply</button>
-         ${o.IsActive ? `<button class="ghost-btn operator-revoke-btn" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem;padding:4px 10px">Revoke</button>` : ''}`;
+         <button class="ghost-btn btn-sm operator-apply-btn" data-userid="${escapeAttr(o.UserID)}">Apply</button>
+         ${revokeBtn}`;
 
     return `
       <tr data-userid="${escapeAttr(o.UserID)}">
@@ -1575,12 +1585,14 @@ function renderOperators() {
           <strong>${escapeHtml(o.FirstName)} ${escapeHtml(o.LastName)}</strong><br>
           <span class="helper">${escapeHtml(o.Email)}</span>
         </td>
-        <td>${escapeHtml(roleLabel)}</td>
-        <td>${o.IsActive ? 'Active' : 'Revoked'}</td>
+        <td><span class="tag ${roleTagClass}">${escapeHtml(roleLabel)}</span></td>
+        <td><span class="tag ${o.IsActive ? 'verified' : 'suspended'}">${o.IsActive ? 'Active' : 'Revoked'}</span></td>
         <td>${formatDate(o.GrantedAt)}</td>
-        <td style="white-space:nowrap">
-          ${actions}
-          <button class="ghost-btn operator-history-btn" data-userid="${escapeAttr(o.UserID)}" style="font-size:0.8rem;padding:4px 10px">History</button>
+        <td>
+          <div class="row-actions">
+            ${actions}
+            <button class="ghost-btn btn-sm operator-history-btn" data-userid="${escapeAttr(o.UserID)}">History</button>
+          </div>
         </td>
       </tr>
     `;

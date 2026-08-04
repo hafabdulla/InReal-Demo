@@ -599,6 +599,30 @@ select.field option {
   background: var(--portal-teal-muted);
 }
 
+/* Compact variants for controls sitting inside a table row, where the default
+   12px/24px padding would make every row twice as tall as its content needs.
+   Modifiers on the existing .ghost-btn / .field rather than new standalone
+   styles, so hover, focus and disabled states stay in exactly one place. */
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+.field-sm {
+  width: auto;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+}
+
+/* Keeps a row's controls on one line and vertically centred, and lets them
+   wrap as a group on narrow screens instead of stretching the column. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .logout-btn {
   width: 100%;
   margin-top: 12px;

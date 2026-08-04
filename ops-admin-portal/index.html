@@ -782,26 +782,33 @@
               </span>
             </div>
 
-            <div class="card">
-              <div class="card-title"><div><h4>Grant or change access</h4></div></div>
-              <div class="form-row">
-                <label class="field">
-                  <span>User ID</span>
-                  <input type="number" id="operatorGrantUserId" placeholder="e.g. 42" min="1" />
-                </label>
-                <label class="field">
-                  <span>Role</span>
-                  <select id="operatorGrantRole">
-                    <option value="operations_admin">Operations admin</option>
-                    <option value="finance_admin">Finance admin</option>
-                    <option value="super_admin">Super admin</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Note (optional)</span>
-                  <input type="text" id="operatorGrantNote" placeholder="Why this access is being given" />
-                </label>
+            <div class="card form">
+              <div class="card-title">
+                <div>
+                  <h4>Grant or change access</h4>
+                  <p>Find the user's ID on the Users tab</p>
+                </div>
               </div>
+              <!-- `class="field"` belongs on the control, not the wrapping
+                   label — a bare <label> is already a grid with a 6px gap (see
+                   styles.css). Getting this backwards is what made these inputs
+                   render as unstyled browser defaults against the dark panel. -->
+              <label>
+                User ID
+                <input class="field" type="number" id="operatorGrantUserId" placeholder="e.g. 42" min="1" />
+              </label>
+              <label>
+                Role
+                <select class="field" id="operatorGrantRole">
+                  <option value="operations_admin">Operations admin</option>
+                  <option value="finance_admin">Finance admin</option>
+                  <option value="super_admin">Super admin</option>
+                </select>
+              </label>
+              <label>
+                Note (optional)
+                <input class="field" type="text" id="operatorGrantNote" placeholder="Why this access is being given" />
+              </label>
               <button class="primary-btn" id="operatorGrantBtn">Grant access</button>
               <p class="helper" id="operatorGrantStatus"></p>
             </div>
@@ -811,12 +818,12 @@
                 <div><h4>Current operators</h4></div>
                 <span class="helper" id="operatorCountLabel"></span>
               </div>
-              <!-- min-width:0 — CSS grid/flex children don't shrink below their
-                   content by default, and a wide table blows out the page width
-                   instead of scrolling inside its own container. Already fixed
-                   once elsewhere in this portal; see CLAUDE.md. -->
-              <div class="table-scroll" style="min-width:0;overflow-x:auto">
-                <table class="data-table">
+              <!-- .table-wrap is the portal's existing scroll container (it
+                   carries the overflow + min-width:0 that stops a wide table
+                   widening the whole page — see the .split note in styles.css).
+                   Reused rather than reinvented with inline styles. -->
+              <div class="table-wrap">
+                <table>
                   <thead>
                     <tr>
                       <th>Operator</th>
