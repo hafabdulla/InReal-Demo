@@ -1251,6 +1251,39 @@ async function verifyFreshTotpCode(userId, code) {
 // Single-use is enforced by the database rather than by read-then-write: the
 // UPDATE only matches while the hash is still in the array, so two requests
 // racing the same code produce one winner and one empty RETURNING.
+// Eight codes, shown once, stored only as SHA-256 hashes — the same
+// non-reversible pattern as password-reset tokens. Shared by enrolment and
+// regeneration so the two can never drift into issuing different formats.
+function generateRecoveryCodes() {
+  const codes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));
+  return { codes, hashes: codes.map((c) => hashResetToken(c)) };
+}
+
+// Outcomes of a step-up check. Deliberately four values rather than a boolean,
+// because "this account has no second factor" is a different fact from "the
+// code was wrong", and different actions answer it differently: a password
+// change proceeds without one, a bank-detail change refuses. Returning a
+// boolean would force every caller to re-query to tell those apart, and the
+// first one to skip that step would silently pick the wrong policy.
+const STEP_UP = {
+  PASSED: 'passed',
+  NOT_ENROLLED: 'not_enrolled',
+  MISSING: 'missing',
+  INVALID: 'invalid',
+};
+
+// Recovery codes are NOT accepted here, on purpose. They are a route back to a
+// lost second factor, not a substitute for holding one — a code written on
+// paper should not be able to authorise a password change. Redemption stays
+// confined to /api/auth/totp/disable.
+async function checkStepUp(userId, code) {
+  const rows = await q('SELECT is_active FROM user_totp WHERE user_id = $1', [userId]);
+  const enrolled = rows.length > 0 && rows[0].is_active === true;
+  if (!enrolled) return STEP_UP.NOT_ENROLLED;
+  if (!code) return STEP_UP.MISSING;
+  return (await verifyFreshTotpCode(userId, code)) ? STEP_UP.PASSED : STEP_UP.INVALID;
+}
+
 async function redeemRecoveryCode(userId, submittedCode) {
   // Codes are displayed as lowercase hex. Accept them back regardless of case
   // or the spaces/dashes someone naturally types when copying off paper.
@@ -1660,12 +1693,7 @@ app.post('/api/auth/totp/verify', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid code. Please try again.' });
     }
 
-    // 8 recovery codes, shown once, stored only as SHA-256 hashes — same
-    // non-reversible pattern as password-reset tokens. Redemption (using a
-    // recovery code in place of a live TOTP code) isn't wired into
-    // login/step-up yet; tracked as a known follow-up, not silently skipped.
-    const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));
-    const hashedRecoveryCodes = recoveryCodes.map((c) => hashResetToken(c));
+    const { codes: recoveryCodes, hashes: hashedRecoveryCodes } = generateRecoveryCodes();
 
     await q(
       `UPDATE user_totp SET is_active = true, enrolled_at = NOW(), recovery_codes_hash = $1, updated_at = NOW() WHERE user_id = $2`,
@@ -1678,6 +1706,57 @@ app.post('/api/auth/totp/verify', async (req, res) => {
       success: true,
       data: { recoveryCodes },
       message: 'Two-factor authentication enabled.',
+    });
+  } catch (error) {
+    sendTotpErrorResponse(error, res);
+  }
+});
+
+// POST /api/auth/totp/recovery-codes — issues a fresh set of eight, replacing
+// whatever is left of the old ones.
+//
+// Exists because without it the only route to new codes was to disable 2FA and
+// enrol again, which leaves the account with NO second factor for the duration
+// — a worse state than the low-codes problem it was solving. Running out is
+// also discovered at exactly the moment the codes are needed, which is the one
+// moment they cannot be replaced.
+//
+// Requires a live authenticator code, not a recovery code: this mints eight new
+// bypass credentials, so it is at least as sensitive as the thing it bypasses.
+// The secret is untouched — the authenticator app keeps working, and this is
+// not a re-enrolment.
+app.post('/api/auth/totp/recovery-codes', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const outcome = await checkStepUp(userId, req.body?.code);
+    if (outcome === STEP_UP.NOT_ENROLLED) {
+      return res.status(409).json({
+        success: false,
+        error: 'Two-factor authentication is not enabled on this account.',
+      });
+    }
+    if (outcome !== STEP_UP.PASSED) {
+      return res.status(403).json({
+        success: false,
+        code: 'STEP_UP_REQUIRED',
+        error: 'Enter your current 6-digit authenticator code to generate new recovery codes.',
+      });
+    }
+
+    const { codes, hashes } = generateRecoveryCodes();
+    await q(
+      'UPDATE user_totp SET recovery_codes_hash = $1, updated_at = NOW() WHERE user_id = $2 AND is_active = true',
+      [hashes, userId]
+    );
+
+    console.log(`[totp.recovery_codes_regenerated] user_id=${userId}`);
+
+    res.json({
+      success: true,
+      data: { recoveryCodes: codes },
+      message: 'New recovery codes generated. Your previous codes no longer work.',
     });
   } catch (error) {
     sendTotpErrorResponse(error, res);
@@ -3919,7 +3998,7 @@ app.put('/api/user/password', passwordChangeLimiter, async (req, res) => {
     // Allow-list the body, same as the contact endpoint below: an unexpected
     // field is a rejected request, never a silently ignored one, so a client
     // bug can't quietly believe it changed something it didn't.
-    const allowedFields = ['currentPassword', 'newPassword'];
+    const allowedFields = ['currentPassword', 'newPassword', 'totpCode'];
     const unexpectedKeys = Object.keys(req.body || {}).filter((key) => !allowedFields.includes(key));
     if (unexpectedKeys.length > 0) {
       return res.status(400).json({
@@ -3957,6 +4036,31 @@ app.put('/api/user/password', passwordChangeLimiter, async (req, res) => {
       // that failed. A 401 would tell the frontend's interceptor the token had
       // expired and bounce the investor to the login screen mid-edit.
       return res.status(403).json({ success: false, error: 'Current password is incorrect' });
+    }
+
+    // Second factor, for accounts that have one. Checked AFTER the current
+    // password so a wrong guess cannot be used to discover whether an account
+    // has 2FA enabled.
+    //
+    // Conditional by design: most investors have not enrolled, and demanding a
+    // code they cannot produce would mean they could never change their
+    // password again. This is the same shape as GitHub's sudo mode — it
+    // protects the people who opted in without penalising anyone else. That
+    // makes it deliberately WEAKER than the bank-detail rule, which refuses
+    // outright without 2FA; a password change already requires the current
+    // password, where a payout redirection would otherwise require nothing.
+    const stepUp = await checkStepUp(userId, req.body.totpCode);
+    if (stepUp === STEP_UP.MISSING || stepUp === STEP_UP.INVALID) {
+      return res.status(403).json({
+        success: false,
+        // A distinct code, so the frontend can tell "ask for the 6-digit code"
+        // apart from "the password was wrong" and prompt instead of failing.
+        code: 'STEP_UP_REQUIRED',
+        error:
+          stepUp === STEP_UP.MISSING
+            ? 'Enter your current 6-digit authenticator code to change your password.'
+            : 'That authenticator code is not valid. Please try again.',
+      });
     }
 
     // Same policy the reset flow enforces — one definition of "acceptable

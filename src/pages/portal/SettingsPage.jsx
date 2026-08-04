@@ -185,6 +185,10 @@ export default function SettingsPage() {
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
+    // Only sent, and only asked for, when the account has 2FA enabled. The
+    // server treats it the same way — an account without a second factor is
+    // not asked to produce one.
+    totpCode: '',
   });
   const [passwordErrors, setPasswordErrors] = useState({});
   const [savingPassword, setSavingPassword] = useState(false);
@@ -206,6 +210,9 @@ export default function SettingsPage() {
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
       errors.confirmPassword = 'Passwords do not match';
     }
+    if (totpEnabled && !/^\d{6}$/.test(passwordForm.totpCode.trim())) {
+      errors.totpCode = 'Enter the 6-digit code from your authenticator app';
+    }
 
     setPasswordErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -221,23 +228,26 @@ export default function SettingsPage() {
         body: JSON.stringify({
           currentPassword: passwordForm.currentPassword,
           newPassword: passwordForm.newPassword,
+          ...(totpEnabled ? { totpCode: passwordForm.totpCode.trim() } : {}),
         }),
       });
       const data = await res.json();
 
       if (!data.success) {
-        // The server distinguishes "wrong current password" (403) from every
-        // other rejection, so put that one under the field it refers to and
-        // leave the rest on the new-password field where the policy lives.
+        // Two different 403s now reach here — a wrong current password, and a
+        // failed second factor. They have to land under different fields, or
+        // someone whose code was wrong gets told their password was.
         setPasswordErrors(
-          res.status === 403
-            ? { currentPassword: data.error || 'Current password is incorrect' }
-            : { newPassword: data.error || 'Could not update your password.' }
+          data.code === 'STEP_UP_REQUIRED'
+            ? { totpCode: data.error || 'That authenticator code is not valid.' }
+            : res.status === 403
+              ? { currentPassword: data.error || 'Current password is incorrect' }
+              : { newPassword: data.error || 'Could not update your password.' }
         );
         return;
       }
 
-      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '', totpCode: '' });
       setPasswordErrors({});
       toast({
         title: 'Password updated',
@@ -363,6 +373,52 @@ export default function SettingsPage() {
     setRecoveryCodes([]);
     setQrCodeDataUrl('');
     setTotpSecret('');
+    setCodesWereRegenerated(false);
+  };
+
+  // Replaces the remaining codes without touching the secret, so the
+  // authenticator app keeps working. Needs a live code — this hands out eight
+  // new ways to bypass 2FA, so it is at least as sensitive as 2FA itself.
+  const [showRegeneratePrompt, setShowRegeneratePrompt] = useState(false);
+  const [regenerateCode, setRegenerateCode] = useState('');
+  // Which route reached the codes screen. Tracked explicitly rather than
+  // inferred from totpEnabled, which is true in both cases by that point.
+  const [codesWereRegenerated, setCodesWereRegenerated] = useState(false);
+
+  const handleRegenerateRecoveryCodes = async () => {
+    setTotpError('');
+    if (!/^\d{6}$/.test(regenerateCode.trim())) {
+      setTotpError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+    setTotpLoading(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/auth/totp/recovery-codes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.token || ''}`,
+        },
+        body: JSON.stringify({ code: regenerateCode.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTotpError(data.error || 'Could not generate new recovery codes.');
+        setTotpLoading(false);
+        return;
+      }
+      setRecoveryCodes(data.data.recoveryCodes);
+      setRecoveryCodesRemaining(data.data.recoveryCodes.length);
+      setShowRegeneratePrompt(false);
+      setRegenerateCode('');
+      setCodesWereRegenerated(true);
+      setTotpStep('recoveryCodes');
+    } catch (error) {
+      console.error('Failed to regenerate recovery codes:', error);
+      setTotpError("We couldn't reach the server. Please try again.");
+    } finally {
+      setTotpLoading(false);
+    }
   };
 
   const closeDisablePrompt = () => {
@@ -928,6 +984,31 @@ export default function SettingsPage() {
                     <p className="text-sm text-red-400 mt-1.5">{passwordErrors.confirmPassword}</p>
                   )}
                 </div>
+                {/* Second factor, shown only to accounts that have one. The
+                    server enforces the same condition — this is the prompt,
+                    not the control. */}
+                {totpEnabled && (
+                  <div>
+                    <label className="block text-sm font-medium text-portal-secondary mb-1.5">Authenticator Code</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      className="portal-input font-mono tracking-widest"
+                      value={passwordForm.totpCode}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, totpCode: e.target.value.replace(/\D/g, '') })}
+                      placeholder="123456"
+                    />
+                    {passwordErrors.totpCode ? (
+                      <p className="text-sm text-red-400 mt-1.5">{passwordErrors.totpCode}</p>
+                    ) : (
+                      <p className="text-xs text-portal-secondary mt-1.5">
+                        Two-factor authentication is on, so changing your password needs a code from your authenticator app.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="flex justify-end pt-2">
                   <button
                     type="submit"
@@ -956,8 +1037,8 @@ export default function SettingsPage() {
                       {totpEnabled && recoveryCodesRemaining <= 2 && (
                         <p className="text-sm text-amber-400 mt-1">
                           {recoveryCodesRemaining === 0
-                            ? 'No recovery codes left. If you lose your authenticator app, contact support to regain access.'
-                            : `${recoveryCodesRemaining} recovery code${recoveryCodesRemaining === 1 ? '' : 's'} left.`}
+                            ? 'No recovery codes left — generate new ones, or you will need support to get back in if you lose your phone.'
+                            : `${recoveryCodesRemaining} recovery code${recoveryCodesRemaining === 1 ? '' : 's'} left — generate new ones while you still can.`}
                         </p>
                       )}
                     </div>
@@ -967,10 +1048,15 @@ export default function SettingsPage() {
                       {totpLoading ? 'Loading...' : 'Enable'}
                     </button>
                   )}
-                  {totpStep === 'idle' && totpEnabled && !showDisablePrompt && (
-                    <button onClick={() => { setShowDisablePrompt(true); setTotpError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
-                      Disable
-                    </button>
+                  {totpStep === 'idle' && totpEnabled && !showDisablePrompt && !showRegeneratePrompt && (
+                    <div className="flex gap-2">
+                      <button onClick={() => { setShowRegeneratePrompt(true); setTotpError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                        New Recovery Codes
+                      </button>
+                      <button onClick={() => { setShowDisablePrompt(true); setTotpError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                        Disable
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -1016,10 +1102,26 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                {/* Step 2: recovery codes, shown exactly once */}
+                {/* Step 2: recovery codes, shown exactly once. Reached from two
+                    places now — finishing enrolment, and regenerating — so the
+                    copy has to say which happened. */}
                 {totpStep === 'recoveryCodes' && (
                   <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-4">
-                    <p className="text-sm font-medium text-emerald-400">✓ Two-factor authentication is now enabled.</p>
+                    <p className="text-sm font-medium text-emerald-400">
+                      {codesWereRegenerated
+                        ? '✓ New recovery codes generated.'
+                        : '✓ Two-factor authentication is now enabled.'}
+                    </p>
+                    {/* Said explicitly because it is not obvious and it is
+                        discovered at the worst possible moment otherwise — an
+                        old code that silently stopped working looks like a bug
+                        in the recovery flow, not like intended behaviour. */}
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                      <p className="text-xs text-amber-400">
+                        <strong>Any recovery codes you saved before now no longer work.</strong> Replace them with
+                        the list below — a code from a previous set will be rejected.
+                      </p>
+                    </div>
                     <p className="text-sm text-portal-secondary">
                       Save these recovery codes somewhere safe. Each one can be used once, if you ever lose access to your authenticator app.
                       <strong> They're shown here only this one time.</strong>
@@ -1032,6 +1134,40 @@ export default function SettingsPage() {
                     <div className="flex justify-end">
                       <button onClick={handleFinishEnroll} className="portal-btn-primary text-sm py-2 px-4">
                         I've saved these codes
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Regenerate — a live code only. A recovery code is
+                    deliberately not accepted: minting eight new bypasses is at
+                    least as sensitive as the thing being bypassed. */}
+                {showRegeneratePrompt && (
+                  <div className="pt-2 border-t border-[hsl(var(--portal-border-subtle))] space-y-3">
+                    <p className="text-sm text-portal-secondary">
+                      This replaces your remaining recovery codes with eight new ones. Your authenticator app is unaffected
+                      and keeps working — you will not need to scan anything again.
+                    </p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      value={regenerateCode}
+                      onChange={(e) => { setRegenerateCode(e.target.value.replace(/\D/g, '')); setTotpError(''); }}
+                      placeholder="123456"
+                      className="portal-input font-mono tracking-widest text-center"
+                    />
+                    {totpError && <p className="text-sm text-red-400">{totpError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => { setShowRegeneratePrompt(false); setRegenerateCode(''); setTotpError(''); }}
+                        className="portal-btn-secondary text-sm py-2 px-4"
+                      >
+                        Cancel
+                      </button>
+                      <button onClick={handleRegenerateRecoveryCodes} disabled={totpLoading} className="portal-btn-primary text-sm py-2 px-4 disabled:opacity-60">
+                        {totpLoading ? 'Generating…' : 'Generate New Codes'}
                       </button>
                     </div>
                   </div>
