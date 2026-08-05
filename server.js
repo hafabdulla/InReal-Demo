@@ -471,8 +471,27 @@ function parseDescription(description) {
   }
 }
 
+// Token scopes. Every token this server signs says what it is FOR, and every
+// token it accepts is checked against what the endpoint needs.
+//
+// This exists because of a specific trap on the way to 2FA-at-login. A login
+// flow with a second factor has to hand out an intermediate token after the
+// password step — "password accepted, now prove your second factor". Without a
+// scope claim, that token is signed with the same secret as a real session
+// token, so it IS a real session token: an attacker who knows the password
+// could stop at the challenge screen, take the token they were just given, and
+// use it on any authenticated endpoint. The 2FA would appear to work while
+// protecting nothing.
+//
+// Adding the claim later is not equivalent to adding it now. It has to be in
+// place, and enforced, BEFORE any challenge token is ever issued.
+const TOKEN_SCOPE = {
+  SESSION: 'session',              // full authority — what login returns today
+  MFA_CHALLENGE: 'mfa_challenge',  // password proven, second factor still owed
+};
+
 function signSessionToken(userId) {
-  return jwt.sign({ sub: userId }, JWT_SECRET, {
+  return jwt.sign({ sub: userId, scp: TOKEN_SCOPE.SESSION }, JWT_SECRET, {
     algorithm: 'HS256',
     expiresIn: SESSION_TOKEN_TTL,
   });
@@ -485,6 +504,22 @@ function getAuthenticatedUserId(req) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+
+    // A token with no `scp` is one issued before this claim existed. Those are
+    // treated as full sessions so that deploying this does not sign every
+    // logged-in user out at once.
+    //
+    // THIS LENIENCY IS TEMPORARY AND MUST BE REMOVED BEFORE DEPLOY 3.
+    // It is safe only while nothing issues a challenge token — the moment one
+    // exists, a missing claim stops being "old token" and starts being
+    // indistinguishable from "challenge token", which is the exact hole this
+    // whole mechanism was added to close.
+    //
+    // Safe to remove once SESSION_TOKEN_TTL (12h) has elapsed after this
+    // deploy, since no scope-less token can still verify past its own expiry.
+    const scope = payload.scp || TOKEN_SCOPE.SESSION;
+    if (scope !== TOKEN_SCOPE.SESSION) return null;
+
     const userId = Number(payload.sub);
     return Number.isInteger(userId) && userId > 0 ? userId : null;
   } catch {
@@ -1221,16 +1256,119 @@ function decryptValue(encryptedBase64) {
   return decrypted.toString('utf8');
 }
 
-// Reusable step-up check — verifies a fresh code against the user's ACTIVE
-// TOTP secret. Used by /totp/disable now; this is exactly the function
-// C.1 item 6's bank-detail step-up middleware will also call, so that
-// flow doesn't need to reinvent TOTP verification later.
+// ── Second-factor attempt lockout ────────────────────────────────────────────
+// Deliberately separate from the password lockout above, and keyed on user_id
+// rather than email, because these are different attacks: password guessing
+// arrives unauthenticated, whereas someone guessing a TOTP code already holds a
+// session or knows the password. Sharing one counter would let a failed code
+// lock someone out of logging in, and vice versa.
+//
+// Six digits is a million possibilities, but a code stays valid for ~90 seconds
+// across otplib's default window — so an unthrottled attacker gets as many
+// guesses as they can fit into that window, against every code, forever. Until
+// now nothing counted these at all: the bank-detail step-up, the password
+// step-up and recovery-code regeneration were all unlimited.
+//
+// Tighter than the password lockout (5 vs 10) because a legitimate user reading
+// a code off their own phone does not typically get it wrong five times, and
+// the consequence of a wrong guess here is higher.
+//
+// Same in-memory caveat as the password lockout: this resets on server restart,
+// which is accepted for Phase 1 and should move to a shared store when there is
+// more than one API instance. Recorded rather than assumed away — with two
+// instances behind a load balancer, an attacker gets one budget per instance.
+const TOTP_LOCKOUT_MAX_ATTEMPTS = 5;
+const TOTP_LOCKOUT_WINDOW_MS = 15 * 60 * 1000;
+
+const totpAttempts = new Map(); // user_id → { count, lockedUntil }
+
+function recordFailedTotpAttempt(userId) {
+  const now = Date.now();
+  const entry = totpAttempts.get(userId) || { count: 0, lockedUntil: null };
+  if (entry.lockedUntil && now > entry.lockedUntil) {
+    entry.count = 0;
+    entry.lockedUntil = null;
+  }
+  entry.count += 1;
+  if (entry.count >= TOTP_LOCKOUT_MAX_ATTEMPTS) {
+    entry.lockedUntil = now + TOTP_LOCKOUT_WINDOW_MS;
+    console.warn(`[totp.lockout] user_id=${userId} after ${entry.count} failed second-factor attempts`);
+  }
+  totpAttempts.set(userId, entry);
+}
+
+function resetTotpAttempts(userId) {
+  totpAttempts.delete(userId);
+}
+
+function isTotpLocked(userId) {
+  const entry = totpAttempts.get(userId);
+  if (!entry || !entry.lockedUntil) return false;
+  if (Date.now() > entry.lockedUntil) {
+    totpAttempts.delete(userId);
+    return false;
+  }
+  return true;
+}
+
+// Marks a TOTP step counter as spent, so the same code cannot be used twice.
+//
+// Enforced by the database rather than read-then-write, for the same reason
+// recovery-code redemption is: the UPDATE only matches while the stored counter
+// is genuinely lower, so two requests racing the same code produce one winner
+// and one zero-row result. A read, compare, then write would let both through.
+//
+// Returns false when the counter has already been used — that is a replay.
+async function consumeTotpCounter(userId, counter) {
+  const result = await pool.query(
+    `UPDATE user_totp
+        SET last_used_counter = $1, updated_at = NOW()
+      WHERE user_id = $2
+        AND (last_used_counter IS NULL OR last_used_counter < $1)`,
+    [counter, userId]
+  );
+  return result.rowCount > 0;
+}
+
+// Verifies a code against the user's ACTIVE TOTP secret, and burns it.
+//
+// Single choke point for every live-code check in the app — step-up, disable,
+// and (from Deploy 3) login. Attempt counting lives INSIDE it on purpose: a
+// caller that forgets to count still gets the protection, because the only way
+// to check a code is through here. Locked users get `false` rather than a
+// distinct value, so a caller that does not handle lockout explicitly still
+// fails closed; callers that want an accurate message check isTotpLocked first.
 async function verifyFreshTotpCode(userId, code) {
   if (!code) return false;
+  if (isTotpLocked(userId)) return false;
+
   const rows = await q('SELECT secret_encrypted, is_active FROM user_totp WHERE user_id = $1', [userId]);
   if (rows.length === 0 || !rows[0].is_active) return false;
   const secret = decryptValue(rows[0].secret_encrypted);
-  return authenticator.check(String(code).trim(), secret);
+
+  // checkDelta rather than check: it returns WHICH step matched, which is what
+  // makes the code identifiable and therefore burnable. `check` only says
+  // yes/no, so there would be nothing to record.
+  const delta = authenticator.checkDelta(String(code).trim(), secret);
+  if (delta === null || delta === undefined) {
+    recordFailedTotpAttempt(userId);
+    return false;
+  }
+
+  const step = authenticator.options?.step || 30;
+  const counter = Math.floor(Date.now() / 1000 / step) + delta;
+
+  // A replayed code counts as a failed attempt. It is not a user error, but it
+  // is exactly the pattern worth rate-limiting — and treating it as success
+  // would defeat the point of detecting it.
+  if (!(await consumeTotpCounter(userId, counter))) {
+    console.warn(`[totp.replay_refused] user_id=${userId} counter=${counter}`);
+    recordFailedTotpAttempt(userId);
+    return false;
+  }
+
+  resetTotpAttempts(userId);
+  return true;
 }
 
 // Redeems one of the eight recovery codes issued at enrolment, for the exact
@@ -1270,6 +1408,10 @@ const STEP_UP = {
   NOT_ENROLLED: 'not_enrolled',
   MISSING: 'missing',
   INVALID: 'invalid',
+  // Too many wrong codes. Distinct from INVALID because telling someone their
+  // code is wrong when the real problem is that they are locked out sends them
+  // into a loop of re-reading a code that was never going to be accepted.
+  LOCKED: 'locked',
 };
 
 // Recovery codes are NOT accepted here, on purpose. They are a route back to a
@@ -1281,6 +1423,9 @@ async function checkStepUp(userId, code) {
   const enrolled = rows.length > 0 && rows[0].is_active === true;
   if (!enrolled) return STEP_UP.NOT_ENROLLED;
   if (!code) return STEP_UP.MISSING;
+  // Checked before verifying, so a locked-out user is told the truth rather
+  // than being handed "invalid code" for a code that is actually correct.
+  if (isTotpLocked(userId)) return STEP_UP.LOCKED;
   return (await verifyFreshTotpCode(userId, code)) ? STEP_UP.PASSED : STEP_UP.INVALID;
 }
 
@@ -1687,11 +1832,32 @@ app.post('/api/auth/totp/verify', async (req, res) => {
       return res.status(409).json({ success: false, error: 'Two-factor authentication is already enabled.' });
     }
 
+    // Enrolment cannot use verifyFreshTotpCode — that one requires an ACTIVE
+    // enrolment, and this is the request that activates it. So the replay guard
+    // is applied inline instead, rather than left off: without it, the code
+    // used to enrol stays valid afterwards and could immediately authorise a
+    // step-up on the 2FA it just switched on.
+    if (isTotpLocked(userId)) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect codes. Please wait a few minutes and try again.',
+      });
+    }
+
     const secret = decryptValue(rows[0].secret_encrypted);
-    const isValid = authenticator.check(String(code).trim(), secret);
-    if (!isValid) {
+    const delta = authenticator.checkDelta(String(code).trim(), secret);
+    if (delta === null || delta === undefined) {
+      recordFailedTotpAttempt(userId);
       return res.status(400).json({ success: false, error: 'Invalid code. Please try again.' });
     }
+
+    const step = authenticator.options?.step || 30;
+    if (!(await consumeTotpCounter(userId, Math.floor(Date.now() / 1000 / step) + delta))) {
+      recordFailedTotpAttempt(userId);
+      return res.status(400).json({ success: false, error: 'That code has already been used. Wait for your app to show a new one.' });
+    }
+
+    resetTotpAttempts(userId);
 
     const { codes: recoveryCodes, hashes: hashedRecoveryCodes } = generateRecoveryCodes();
 
@@ -1735,6 +1901,12 @@ app.post('/api/auth/totp/recovery-codes', async (req, res) => {
       return res.status(409).json({
         success: false,
         error: 'Two-factor authentication is not enabled on this account.',
+      });
+    }
+    if (outcome === STEP_UP.LOCKED) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect codes. Please wait a few minutes and try again.',
       });
     }
     if (outcome !== STEP_UP.PASSED) {
@@ -1783,11 +1955,23 @@ app.post('/api/auth/totp/disable', async (req, res) => {
     let remainingRecoveryCodes = null;
 
     if (recoveryCode) {
+      // Deliberately NOT gated by the TOTP attempt lockout. Someone who has
+      // just failed five authenticator codes is precisely the person most
+      // likely to reach for a recovery code, and locking that path too would
+      // turn a rate limit into the lockout the recovery codes exist to prevent.
+      // A 10-character hex code is 40 bits, so it does not need the same
+      // throttle a 6-digit code does.
       const result = await redeemRecoveryCode(userId, recoveryCode);
       authorised = result.redeemed;
       viaRecoveryCode = true;
       remainingRecoveryCodes = result.remaining ?? null;
     } else {
+      if (isTotpLocked(userId)) {
+        return res.status(429).json({
+          success: false,
+          error: 'Too many incorrect codes. Wait a few minutes, or use one of your recovery codes instead.',
+        });
+      }
       authorised = await verifyFreshTotpCode(userId, code);
     }
 
@@ -4096,7 +4280,19 @@ app.put('/api/user/password', passwordChangeLimiter, async (req, res) => {
     // outright without 2FA; a password change already requires the current
     // password, where a payout redirection would otherwise require nothing.
     const stepUp = await checkStepUp(userId, req.body.totpCode);
-    if (stepUp === STEP_UP.MISSING || stepUp === STEP_UP.INVALID) {
+
+    if (stepUp === STEP_UP.LOCKED) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect codes. Please wait a few minutes and try again.',
+      });
+    }
+    // Written as "anything that is not an explicit pass is a refusal", not as a
+    // list of the failures known today. The previous version listed MISSING and
+    // INVALID by name, so adding a fifth outcome to STEP_UP silently turned it
+    // into an allowed case and let the password change through. Any new outcome
+    // must now fail closed by default.
+    if (stepUp !== STEP_UP.PASSED && stepUp !== STEP_UP.NOT_ENROLLED) {
       return res.status(403).json({
         success: false,
         // A distinct code, so the frontend can tell "ask for the 6-digit code"
@@ -4576,6 +4772,13 @@ app.post('/api/user/profile/bank-detail-request', async (req, res) => {
     if (!userId) return;
 
     const { code, accountHolderName, bankName, accountNumber, swiftBic, countryCode } = req.body;
+
+    if (isTotpLocked(userId)) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect codes. Please wait a few minutes and try again.',
+      });
+    }
 
     const hasValidCode = await verifyFreshTotpCode(userId, code);
     if (!hasValidCode) {
