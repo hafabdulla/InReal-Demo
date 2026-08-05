@@ -54,27 +54,40 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 }
 const SESSION_TOKEN_TTL = process.env.SESSION_TOKEN_TTL || '12h';
 
-// TOTP_ENCRYPTION_KEY was deliberately NOT a boot requirement while 2FA was
-// additive: a missing key only broke the specific endpoints that needed it, and
-// failing the whole boot over an optional feature would have been worse.
+// TOTP_ENCRYPTION_KEY is checked at boot, loudly — but does NOT stop the server.
 //
-// That calculus inverts the moment TOTP gates a login. A missing or mistyped
-// key now means every enrolled operator is locked out — and locked out with a
-// 500 from deep inside a decrypt call, which reads as "the site is broken"
-// rather than "the key is wrong". Failing at boot with the reason named is far
-// cheaper to diagnose than the same fault discovered by five people who cannot
-// sign in.
+// This was briefly written as a hard `process.exit(1)`, on the reasoning that a
+// missing key locks out every enrolled operator and failing early names the
+// cause. That reasoning was wrong, and the correction is worth keeping:
 //
-// Checked for shape, not just presence: a truncated or non-hex value fails at
-// decrypt time, which is exactly the late failure this is here to prevent.
+//   Without the key, the damage is CONTAINED — 2FA, bank details and operator
+//   login degrade, while the investor portal, the API and every other endpoint
+//   keep working. Exiting at boot converts that partial failure into a total
+//   outage of both portals. Trading availability for a clearer log line is a
+//   bad deal on a system real people are using.
+//
+// So: shout at boot, keep serving, and make the endpoints that need the key
+// fail with a diagnosable message instead of an opaque 500 (see
+// sendTotpErrorResponse). That gets the diagnosability without the outage.
+//
+// Shape-checked, not just presence-checked: a truncated or non-hex value passes
+// a presence check and then fails at decrypt time, which is the late, confusing
+// failure this is meant to pre-empt.
 const TOTP_KEY_RAW = process.env.TOTP_ENCRYPTION_KEY;
-if (!TOTP_KEY_RAW || !/^[0-9a-fA-F]{64}$/.test(TOTP_KEY_RAW.trim())) {
+const TOTP_KEY_OK = !!TOTP_KEY_RAW && /^[0-9a-fA-F]{64}$/.test(TOTP_KEY_RAW.trim());
+if (!TOTP_KEY_OK) {
   console.error(
-    'Missing or malformed TOTP_ENCRYPTION_KEY. It must be exactly 64 hex characters (32 bytes) — ' +
-    'generate one with `openssl rand -hex 32`. This is required at boot because two-factor ' +
-    'authentication now gates operator login; without it, every enrolled operator is locked out.'
+    '================================================================\n' +
+    'WARNING: TOTP_ENCRYPTION_KEY is missing or malformed.\n' +
+    'It must be exactly 64 hex characters (32 bytes): openssl rand -hex 32\n' +
+    '\n' +
+    'The server is starting anyway, but these WILL fail until it is set:\n' +
+    '  - operator sign-in for anyone with 2FA enrolled\n' +
+    '  - enrolling in or disabling 2FA\n' +
+    '  - bank-detail change requests\n' +
+    'Everything else, including the investor portal, is unaffected.\n' +
+    '================================================================'
   );
-  process.exit(1);
 }
 
 // Supabase Storage holds user documents (KYC/Finance/Property uploads). This
@@ -2224,6 +2237,17 @@ app.post('/api/admin/auth/login/mfa', async (req, res) => {
       return res.status(429).json({
         success: false,
         error: 'Too many incorrect codes. Wait a few minutes, or use one of your recovery codes.',
+      });
+    }
+
+    // Named explicitly rather than left to blow up inside decryptValue. Without
+    // this the operator sees "Internal server error" for a correct code, which
+    // points at the wrong thing entirely — the boot warning says what to fix,
+    // and so should the response.
+    if (!TOTP_KEY_OK && !recoveryCode) {
+      return res.status(503).json({
+        success: false,
+        error: 'Two-factor sign-in is not configured on this server (TOTP_ENCRYPTION_KEY). Use a recovery code, or contact whoever manages the deployment.',
       });
     }
 
