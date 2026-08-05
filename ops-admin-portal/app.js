@@ -603,6 +603,12 @@ function setActiveTab(tab) {
   // On mobile the sidebar is an overlay, not a permanent column — close it
   // once a destination is picked, same as most mobile nav drawers behave.
   closeMobileSidebar();
+
+  // Settings reads its own state on open rather than at sign-in. It is the one
+  // panel whose contents can change without this portal doing anything — the
+  // operator might enrol from a second browser, or spend a recovery code
+  // elsewhere — so a value cached at login would go stale silently.
+  if (target === 'settings') loadTotpStatus();
 }
 
 function refreshIcons() {
@@ -2377,6 +2383,23 @@ function render() {
 // never wrong here; it simply never got asked again, because nothing re-fetches
 // data that is already on the page.
 function resetWorkspaceForSignOut() {
+  // Settings holds the outgoing operator's 2FA state, and — until they click
+  // "I've saved these" — their recovery codes in plain text on screen. Those
+  // must not survive into the next person's session on a shared machine, which
+  // is the same leak this whole function exists to close.
+  totpState.step = 'idle';
+  totpState.codes = [];
+  totpState.status = null;
+  totpState.promptMode = null;
+  totpState.useRecovery = false;
+  const codesGrid = document.getElementById('totpCodesGrid');
+  if (codesGrid) codesGrid.innerHTML = '';
+  const secretField = document.getElementById('totpSecret');
+  if (secretField) secretField.value = '';
+  const qr = document.getElementById('totpQr');
+  if (qr) qr.removeAttribute('src');
+  setTotpError('');
+
   kycQueue = [];
   selectedKycUser = null;
   operatorList = [];
@@ -2403,6 +2426,239 @@ function resetWorkspaceForSignOut() {
   localStorage.removeItem(WORKSPACE_STORAGE_KEY);
 }
 
+// ── Settings → Security: the operator's own two-factor authentication ────────
+//
+// Every endpoint here is the SAME one the investor portal uses. Operators are
+// rows in `users` and both logins issue the same session token, so no
+// operator-specific TOTP API was needed — building one would have meant two
+// implementations of the same security control drifting apart, which is exactly
+// what the duplicated country lists did before they were consolidated.
+//
+// This screen exists because enrolment previously lived only in the investor
+// Settings page, so an operator had no way to enrol at all. That is what makes
+// it Deploy 2 of 3: enforcement at login (Deploy 3) without this screen would
+// lock all four operators out of production at once.
+
+const totpState = { step: 'idle', codes: [], regenerated: false, promptMode: null, useRecovery: false };
+
+function totpEl(id) {
+  return document.getElementById(id);
+}
+
+function setTotpError(message) {
+  const el = totpEl('totpError');
+  if (el) el.textContent = message || '';
+}
+
+// One place decides which of the five blocks is visible, rather than each
+// handler toggling classes on its way past. With six controls that can all
+// change the step, per-handler toggling reliably ends in two panels showing at
+// once or none at all.
+function renderTotpSection(status) {
+  const show = (id, visible) => totpEl(id)?.classList.toggle('hidden', !visible);
+
+  show('totpIdleDisabled', totpState.step === 'idle' && status?.enabled === false);
+  show('totpIdleEnabled', totpState.step === 'idle' && status?.enabled === true);
+  show('totpEnrollStep', totpState.step === 'enroll');
+  show('totpCodesStep', totpState.step === 'codes');
+  show('totpPrompt', totpState.step === 'prompt');
+  show('totpIntro', totpState.step === 'idle');
+
+  const tag = totpEl('totpStatusTag');
+  if (tag && status) {
+    tag.textContent = status.enabled ? 'On' : 'Off';
+    tag.className = status.enabled ? 'tag verified' : 'tag pending';
+  }
+
+  if (status?.enabled) {
+    const left = status.recoveryCodesRemaining;
+    const remaining = totpEl('totpRecoveryRemaining');
+    if (remaining && typeof left === 'number') {
+      // Phrased as a warning below three, because running out is discovered at
+      // exactly the moment the codes are needed — which is the one moment they
+      // cannot be replaced.
+      remaining.textContent =
+        left === 0
+          ? 'No recovery codes left. Generate new ones now — without them, a lost phone means asking another super admin for help.'
+          : `${left} recovery code${left === 1 ? '' : 's'} left.${left <= 2 ? ' Generate a new set while you still can.' : ''}`;
+      remaining.style.color = left <= 2 ? 'var(--portal-warning)' : '';
+    }
+  }
+
+  refreshIcons();
+}
+
+async function loadTotpStatus() {
+  setTotpError('');
+  try {
+    const res = await apiFetch('/api/auth/totp/status');
+    totpState.status = res.data;
+    renderTotpSection(res.data);
+  } catch (error) {
+    setTotpError(error.message || 'Could not load your two-factor status.');
+  }
+}
+
+async function startTotpEnrollment() {
+  setTotpError('');
+  try {
+    const res = await apiFetch('/api/auth/totp/enroll', { method: 'POST' });
+    totpEl('totpQr').src = res.data.qrCodeDataUrl;
+    totpEl('totpSecret').value = res.data.secret;
+    totpEl('totpVerifyCode').value = '';
+    totpState.step = 'enroll';
+    renderTotpSection(totpState.status);
+  } catch (error) {
+    setTotpError(error.message || 'Could not start setup.');
+  }
+}
+
+function renderRecoveryCodes(codes, wasRegenerated) {
+  totpState.codes = codes;
+  totpState.regenerated = wasRegenerated;
+  totpEl('totpCodesHeading').textContent = wasRegenerated
+    ? '✓ New recovery codes generated.'
+    : '✓ Two-factor authentication is on.';
+  // escapeHtml even though these are server-generated hex: the rule in this
+  // file is that nothing reaches innerHTML unescaped, and an exception "because
+  // this particular value is safe" is how the last two XSS bugs got in.
+  totpEl('totpCodesGrid').innerHTML = codes.map((c) => `<span>${escapeHtml(c)}</span>`).join('');
+  totpState.step = 'codes';
+  renderTotpSection(totpState.status);
+}
+
+async function verifyTotpEnrollment() {
+  setTotpError('');
+  const code = totpEl('totpVerifyCode').value.trim();
+  if (!/^\d{6}$/.test(code)) {
+    setTotpError('Enter the 6-digit code from your authenticator app.');
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/auth/totp/verify', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+    totpState.status = { enabled: true, recoveryCodesRemaining: res.data.recoveryCodes.length };
+    renderRecoveryCodes(res.data.recoveryCodes, false);
+  } catch (error) {
+    setTotpError(error.message || 'That code was not accepted.');
+  }
+}
+
+// Regenerate and turn-off share one prompt. They ask for the same thing — a
+// live code — and differ only in what they do with it and whether a recovery
+// code is an acceptable substitute.
+function openTotpPrompt(mode) {
+  totpState.promptMode = mode;
+  totpState.useRecovery = false;
+  setTotpError('');
+  totpEl('totpPromptCode').value = '';
+  totpEl('totpPromptText').textContent =
+    mode === 'regenerate'
+      ? 'This replaces your remaining recovery codes with eight new ones. Your authenticator app is unaffected and keeps working.'
+      : 'Turning two-factor authentication off leaves your operator account protected by a password alone.';
+  totpEl('totpPromptLabel').textContent = '6-digit code from your app';
+  totpEl('totpPromptCode').setAttribute('maxlength', '6');
+  totpEl('totpPromptCode').placeholder = '123456';
+  // Only offered when turning off. Regenerating mints eight new ways to bypass
+  // 2FA, so it is at least as sensitive as the thing it bypasses and takes a
+  // live code only.
+  totpEl('totpUseRecoveryBtn').classList.toggle('hidden', mode !== 'disable');
+  totpEl('totpRecoveryHint').classList.add('hidden');
+  totpState.step = 'prompt';
+  renderTotpSection(totpState.status);
+}
+
+function switchPromptToRecoveryCode() {
+  totpState.useRecovery = true;
+  setTotpError('');
+  totpEl('totpPromptLabel').textContent = 'Recovery code';
+  totpEl('totpPromptCode').value = '';
+  totpEl('totpPromptCode').setAttribute('maxlength', '14');
+  totpEl('totpPromptCode').placeholder = 'a1b2c3d4e5';
+  totpEl('totpUseRecoveryBtn').classList.add('hidden');
+  const hint = totpEl('totpRecoveryHint');
+  hint.textContent = 'Enter one of the codes you saved when you set this up. Each one works once.';
+  hint.classList.remove('hidden');
+}
+
+async function confirmTotpPrompt() {
+  setTotpError('');
+  const raw = totpEl('totpPromptCode').value.trim();
+
+  if (totpState.promptMode === 'regenerate') {
+    if (!/^\d{6}$/.test(raw)) {
+      setTotpError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+    try {
+      const res = await apiFetch('/api/auth/totp/recovery-codes', {
+        method: 'POST',
+        body: JSON.stringify({ code: raw }),
+      });
+      totpState.status = { enabled: true, recoveryCodesRemaining: res.data.recoveryCodes.length };
+      renderRecoveryCodes(res.data.recoveryCodes, true);
+    } catch (error) {
+      setTotpError(error.message || 'Could not generate new recovery codes.');
+    }
+    return;
+  }
+
+  // Disable path — a live code, or a recovery code for whoever no longer has
+  // the authenticator at all.
+  const body = totpState.useRecovery
+    ? { recoveryCode: raw.toLowerCase().replace(/[\s-]/g, '') }
+    : { code: raw };
+
+  if (totpState.useRecovery ? !body.recoveryCode : !/^\d{6}$/.test(raw)) {
+    setTotpError(totpState.useRecovery ? 'Enter one of your recovery codes.' : 'Enter the 6-digit code from your authenticator app.');
+    return;
+  }
+
+  try {
+    await apiFetch('/api/auth/totp/disable', { method: 'POST', body: JSON.stringify(body) });
+    totpState.step = 'idle';
+    await loadTotpStatus();
+  } catch (error) {
+    setTotpError(error.message || 'Could not turn off two-factor authentication.');
+  }
+}
+
+function bindSettingsEvents() {
+  totpEl('totpEnrollBtn')?.addEventListener('click', startTotpEnrollment);
+  totpEl('totpVerifyBtn')?.addEventListener('click', verifyTotpEnrollment);
+  totpEl('totpCancelBtn')?.addEventListener('click', () => {
+    totpState.step = 'idle';
+    setTotpError('');
+    loadTotpStatus();
+  });
+  totpEl('totpCodesDoneBtn')?.addEventListener('click', () => {
+    totpState.step = 'idle';
+    totpState.codes = [];
+    totpEl('totpCodesGrid').innerHTML = '';
+    loadTotpStatus();
+  });
+  totpEl('totpRegenerateBtn')?.addEventListener('click', () => openTotpPrompt('regenerate'));
+  totpEl('totpDisableBtn')?.addEventListener('click', () => openTotpPrompt('disable'));
+  totpEl('totpUseRecoveryBtn')?.addEventListener('click', switchPromptToRecoveryCode);
+  totpEl('totpPromptConfirmBtn')?.addEventListener('click', confirmTotpPrompt);
+  totpEl('totpPromptCancelBtn')?.addEventListener('click', () => {
+    totpState.step = 'idle';
+    setTotpError('');
+    renderTotpSection(totpState.status);
+  });
+
+  // Digits only while entering an authenticator code; recovery codes are hex
+  // and must not be stripped.
+  totpEl('totpVerifyCode')?.addEventListener('input', (e) => {
+    e.target.value = e.target.value.replace(/\D/g, '');
+  });
+  totpEl('totpPromptCode')?.addEventListener('input', (e) => {
+    if (!totpState.useRecovery) e.target.value = e.target.value.replace(/\D/g, '');
+  });
+}
+
 authEls.loginForm.addEventListener('submit', handleLogin);
 authEls.logoutBtn.addEventListener('click', handleLogout);
 
@@ -2410,6 +2666,7 @@ bindWorkspaceEvents();
 bindKycEvents();
 bindBankRequestEvents();
 bindPortfolioEvents();
+bindSettingsEvents();
 
 // Backdrop click closes whichever of the three drawers is currently open —
 // harmless to call close on ones that aren't open, they're already hidden.

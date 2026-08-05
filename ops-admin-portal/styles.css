@@ -975,6 +975,28 @@ tbody tr:hover td {
   line-height: 1.55;
 }
 
+/* Recovery codes, shown exactly once at enrolment or regeneration.
+   auto-fit rather than a fixed column count so it stays readable on a phone —
+   an operator setting up 2FA is quite likely to be holding one. Monospace and
+   generous letter-spacing because these get transcribed by hand onto paper,
+   where 0/O and 1/l are the difference between a working code and a lockout. */
+.recovery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  background: var(--portal-bg-tertiary);
+  border: 1px solid var(--portal-border-subtle);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.recovery-grid span {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  color: var(--portal-text-primary);
+}
+
 /* Prohibited-jurisdiction banner. Same shape as .edd-warning deliberately —
    an admin already knows how to read that component — but in danger red
    rather than amber, because the two mean materially different things: EDD

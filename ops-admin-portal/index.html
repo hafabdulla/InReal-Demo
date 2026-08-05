@@ -95,6 +95,15 @@
             <i data-lucide="scroll-text"></i>
             <span>Audit log</span>
           </button>
+          <!-- Settings is visible to EVERY operator, deliberately, unlike the
+               role-gated tabs above. It only ever acts on the signed-in
+               operator's own account, so there is nothing here to gate — and
+               gating it would stop the narrower roles from securing their own
+               logins, which is the opposite of the point. -->
+          <button class="nav-item" data-tab="settings" data-title="Settings">
+            <i data-lucide="settings"></i>
+            <span>Settings</span>
+          </button>
         </nav>
 
         <section class="side-card">
@@ -903,6 +912,107 @@
               </div>
             </div>
             <div class="audit-list" id="auditList"></div>
+          </section>
+
+          <!-- SETTINGS — the operator's own account.
+               Everything here acts on the signed-in operator and nobody else,
+               which is why it carries no role gate. Security is its only
+               section today; it is built as a section rather than a bare 2FA
+               screen so notification or display preferences can join it without
+               restructuring the tab. -->
+          <section class="panel" data-panel="settings">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Your account</p>
+                <h3>Settings</h3>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="panel-head" style="margin-bottom:16px">
+                <div>
+                  <p class="eyebrow">Security</p>
+                  <h3 style="font-size:1rem">Two-factor authentication</h3>
+                </div>
+                <span class="tag" id="totpStatusTag">Checking…</span>
+              </div>
+
+              <p class="helper" id="totpIntro" style="margin-bottom:16px">
+                Adds a six-digit code from your phone on top of your password. You approve KYC decisions and
+                bank-detail changes from this portal, so this protects more than your own account.
+              </p>
+
+              <!-- Idle: not yet enrolled -->
+              <div id="totpIdleDisabled" class="hidden">
+                <button class="primary-btn" id="totpEnrollBtn">Set up two-factor authentication</button>
+              </div>
+
+              <!-- Idle: already enrolled -->
+              <div id="totpIdleEnabled" class="hidden">
+                <p class="helper" id="totpRecoveryRemaining" style="margin-bottom:12px"></p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="ghost-btn" id="totpRegenerateBtn">New recovery codes</button>
+                  <button class="ghost-btn" id="totpDisableBtn">Turn off</button>
+                </div>
+              </div>
+
+              <!-- Step 1 — scan -->
+              <div id="totpEnrollStep" class="hidden">
+                <p class="helper" style="margin-bottom:12px">
+                  Scan this with an authenticator app (Google Authenticator, Authy, 1Password), or type the code in manually.
+                </p>
+                <div class="edd-warning" style="margin-bottom:12px">
+                  <i data-lucide="alert-triangle" style="width:14px;height:14px;flex-shrink:0"></i>
+                  <span>Setting up again? Delete any existing InReal entry in your app first, or you'll have two and won't know which one works.</span>
+                </div>
+                <img id="totpQr" alt="Two-factor QR code" width="160" height="160"
+                     style="border-radius:8px;border:1px solid var(--portal-border-subtle);background:#fff;padding:6px" />
+                <div class="field" style="margin-top:12px">
+                  <label for="totpSecret">Manual entry code</label>
+                  <input type="text" id="totpSecret" readonly />
+                </div>
+                <div class="field">
+                  <label for="totpVerifyCode">Enter the 6-digit code from your app</label>
+                  <input type="text" id="totpVerifyCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button class="primary-btn" id="totpVerifyBtn">Verify &amp; enable</button>
+                  <button class="ghost-btn" id="totpCancelBtn">Cancel</button>
+                </div>
+              </div>
+
+              <!-- Step 2 — recovery codes, shown exactly once -->
+              <div id="totpCodesStep" class="hidden">
+                <p style="color:var(--portal-success);font-weight:600;margin-bottom:8px" id="totpCodesHeading"></p>
+                <div class="edd-warning" style="margin-bottom:12px">
+                  <i data-lucide="alert-triangle" style="width:14px;height:14px;flex-shrink:0"></i>
+                  <span><strong>Any recovery codes you saved before now no longer work.</strong> Replace them with this list.</span>
+                </div>
+                <p class="helper" style="margin-bottom:12px">
+                  Save these somewhere safe. Each one works once, and they are the only way back in if you lose your phone.
+                  <strong>They are shown this one time only.</strong>
+                </p>
+                <div id="totpCodesGrid" class="recovery-grid"></div>
+                <button class="primary-btn" id="totpCodesDoneBtn" style="margin-top:12px">I've saved these</button>
+              </div>
+
+              <!-- Prompt: reused for both regenerate and turn-off -->
+              <div id="totpPrompt" class="hidden">
+                <p class="helper" id="totpPromptText" style="margin-bottom:12px"></p>
+                <div class="field">
+                  <label for="totpPromptCode" id="totpPromptLabel">6-digit code from your app</label>
+                  <input type="text" id="totpPromptCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+                </div>
+                <p class="helper hidden" id="totpRecoveryHint" style="margin-bottom:12px"></p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="primary-btn" id="totpPromptConfirmBtn">Confirm</button>
+                  <button class="ghost-btn" id="totpPromptCancelBtn">Cancel</button>
+                  <button class="ghost-btn hidden" id="totpUseRecoveryBtn">Use a recovery code instead</button>
+                </div>
+              </div>
+
+              <p class="helper" id="totpError" style="color:var(--portal-danger);margin-top:12px"></p>
+            </div>
           </section>
         </main>
       </div>
