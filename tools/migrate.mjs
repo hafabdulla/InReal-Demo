@@ -45,7 +45,21 @@ const valueOf = (flag) => {
 
 const MODE = has('--status') ? 'status' : has('--baseline') ? 'baseline' : 'up';
 const WITH_SEED = has('--with-seed');
-const DATABASE_URL = valueOf('--url') || process.env.DATABASE_URL;
+// --prod reads PRODUCTION_DATABASE_URL from .env. It exists because the
+// alternative — pasting the production connection string on the command line
+// every time — is both easy to get wrong and easy to leave in shell history.
+// Now that local and production are separate databases, applying a migration to
+// production is a routine step rather than an exceptional one, and a routine
+// step needs a short, unambiguous command.
+const USE_PROD = has('--prod');
+if (USE_PROD && !process.env.PRODUCTION_DATABASE_URL) {
+  console.error('--prod needs PRODUCTION_DATABASE_URL in .env. Add it (the Sydney/production');
+  console.error('connection string) alongside DATABASE_URL, which stays pointed at local.');
+  process.exit(1);
+}
+const DATABASE_URL = USE_PROD
+  ? process.env.PRODUCTION_DATABASE_URL
+  : (valueOf('--url') || process.env.DATABASE_URL);
 
 if (!DATABASE_URL) {
   console.error('No database URL. Set DATABASE_URL in .env, or pass --url "postgres://…".');

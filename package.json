@@ -17,7 +17,9 @@
     "lint": "eslint . --quiet",
     "db:migrate": "node tools/migrate.mjs",
     "db:status": "node tools/migrate.mjs --status",
-    "db:baseline": "node tools/migrate.mjs --baseline"
+    "db:baseline": "node tools/migrate.mjs --baseline",
+    "db:status:prod": "node tools/migrate.mjs --status --prod",
+    "db:migrate:prod": "node tools/migrate.mjs --prod"
   },
   "dependencies": {
     "@emotion/is-prop-valid": "^1.4.0",

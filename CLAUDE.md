@@ -14,7 +14,16 @@ A real-estate fractional-investment platform, currently in a pre-launch pilot. I
 | Admin portal | Plain HTML/CSS/vanilla JS, no build step | **Separate** Vercel project | `ops-admin-portal/` — has its own `vercel.json`. A push updates both projects, but check both deploys separately; they've gone out of sync before |
 | Backend | Node/Express + `pg` (Postgres via Supabase) | Render | `server.js` — one file, ~3000 lines |
 
-Database is Supabase Postgres, shared between local dev and production (same instance, not separate environments) — a migration you run locally already applies to prod.
+**Two separate Supabase projects since 06 Aug 2026** — they were one shared instance before that, and a lot of older tracker entries still describe that world.
+
+| | Project | Region | Used by |
+|---|---|---|---|
+| **Local dev** | `InReal Local DB` (`yikifsvzxdjvfkxknhpp`) | Mumbai | your `.env` |
+| **Production** | `InReal - Demo` (`xxyvfaczurcptmxcgolt`) | Sydney | Render's own env vars |
+
+Each has its own `JWT_SECRET` and `TOTP_ENCRYPTION_KEY`. **A migration run locally no longer reaches production** — it has to be applied there explicitly. That is the one new failure mode the split introduced: ship code that needs a column, forget the production migration, and those endpoints 500. **Migrations go to production BEFORE the code that needs them, never after.**
+
+**Supabase Storage is still shared** — documents live in a bucket, not the database, so local uploads still land in the production bucket. Half the split remains.
 
 ## Before touching anything
 
@@ -23,7 +32,7 @@ Database is Supabase Postgres, shared between local dev and production (same ins
    - The **Plain-English Status** table at the top — what's actually live vs. built-but-untested vs. not started.
    - **Part C** — the priority order from the actual client meeting (not the same as technical build-dependency order — both are documented, don't confuse them).
    - The **Engineering Log** (Parts A/B and the D.x entries) — exact bugs found, exact fixes, exact tests run. Several real mistakes happened during this build (a KYC-status value mixup, an email case-sensitivity bug, a CSS grid overflow bug) — all documented there so they aren't rediscovered as "new" issues.
-2. Check `database/pg/` for the current schema — numbered migration files (`01` through `12` so far).
+2. Check `database/pg/` for the current schema — numbered migration files (`01` through `14`, plus `08b`, which is numbered that way because 09 and 10 ALTER a table 08b creates).
 
    **Use the migration runner, not manual pastes.** `npm run db:status` shows what a database has and what it is missing; `npm run db:migrate` applies the pending ones. It tracks state in a `schema_migrations` table, runs each file in its own transaction, and refuses to run if a migration that was already applied has since been edited.
 
@@ -33,9 +42,13 @@ Database is Supabase Postgres, shared between local dev and production (same ins
    | `npm run db:migrate` | Apply pending migrations (asks first, and names the target host) |
    | `node tools/migrate.mjs --with-seed` | Also apply seed files — **dev databases only**, this is how demo rows get into production by accident |
    | `node tools/migrate.mjs --baseline` | Record all migrations as applied *without running them*. For an existing database that already has the schema but no tracking table |
-   | `node tools/migrate.mjs --url "postgres://…"` | Target a database other than `DATABASE_URL` |
+   | `npm run db:status:prod` | Same, against production (needs `PRODUCTION_DATABASE_URL` in `.env`) |
+   | `npm run db:migrate:prod` | **Apply pending migrations to production.** Do this before deploying code that needs them |
+   | `node tools/migrate.mjs --url "postgres://…"` | Target any other database |
 
-   The old `npm run db:setup` still exists but only knows files `01` and `02` by name — prefer the runner. Production was baselined on 05 Aug, so it reports 12 recorded / 0 pending.
+   The old `npm run db:setup` still exists but only knows files `01` and `02` by name — prefer the runner. Both databases were at 15 recorded / 0 pending as of 06 Aug.
+
+   **The schema used to be partly created by application boot code.** `password_reset_tokens`, `kyc_decisions`, `user_documents` and the `users` auth columns existed only because `ensure*()` in `server.js` created them at boot — they were in no migration at all. That was invisible until a second database was built from the files alone (migrations 09 and 02 both failed). Fixed by `08b` and `13`; the `ensure*` functions were left in place as a redundant safety net rather than a hidden dependency. **Do not add schema in boot code** — it produces a database nobody can reproduce.
 
    **A seed file is never applied implicitly.** Anything with `seed` in the filename needs `--with-seed`, because `02-seed-demo-data-postgres.sql` inserts demo users and properties and re-running it would refill a database that had just been cleaned of exactly that.
 
@@ -71,6 +84,7 @@ Database is Supabase Postgres, shared between local dev and production (same ins
 - **`kyc_status` uses `'Approved'`, `accreditation_status` uses `'Verified'`** — yes, that's backwards-sounding, but it's what's actually in the code (confirmed against the real `UPDATE` statement, not assumed). Getting this backwards once already broke investment eligibility for every user; don't re-derive it from intuition, check the actual KYC-decision code if unsure.
 - **The three-role operator model now exists and is live** (`super_admin`/`finance_admin`/`operations_admin`, migration 11). Both money-adjacent stopgaps — bank-detail review and portfolio adjustments — have been retrofitted to `FINANCE_ROLES`, and the four real operators hold real roles as of 04 Aug. Use `requireOperator(req, res, <ROLE_SET>)`; the sets are defined near the top of `server.js`. The legacy `users.role` fallback still exists on purpose and is what makes the current state safe — don't remove it yet. **Authorisation is decided by `getOperatorRole()`, never by reading `users.role` directly** — the ops login door did the latter and silently blocked every operator granted through the Operators tab, including a product owner (D.33).
 - **The ops portal now has a second factor at login** (D.34). Operator sign-in is two calls: `/api/admin/auth/login` (password → challenge token) then `/api/admin/auth/login/mfa` (code → session). Tokens carry a `scp` claim and `getAuthenticatedUserId` accepts only `session`, so a challenge token is refused everywhere real. Enforcement is currently **conditional** — see `REQUIRE_OPERATOR_2FA` above; don't make it mandatory until every operator has enrolled.
+- **Row Level Security is ON for every table, with no policies, and must stay that way.** Supabase publishes a Data API over every `public` table; with RLS off, anything holding the anon key reads them directly, bypassing `server.js` entirely. Production had it off on 10 of 15 tables until 06 Aug (migration 14). The app is unaffected because it connects as `postgres` (`rolbypassrls`) and Storage uses the service_role key. **A new table starts with RLS off and is exposed the moment it exists** — enable it in the same migration that creates it, and do not add policies, since a policy opens a path back up.
 - **Client-side caches are scoped to the session that filled them.** The ops portal keeps server data in module state *and* in `localStorage`, and a sign-out that only clears the token leaves all of it readable by the next person to log in on that machine — this was a real cross-session data leak, fixed 04 Aug. Anything new that caches server data must be cleared in `resetWorkspaceForSignOut()`, and any role-gated panel must be unreachable via `setActiveTab()`.
 
 ## Frontend gotchas
