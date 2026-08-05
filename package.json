@@ -14,7 +14,10 @@
     "dev:backend:watch": "node --watch server.js",
     "build": "node tools/generate-llms.js || true && npx vite build",
     "preview": "vite preview --host :: --port 3000",
-    "lint": "eslint . --quiet"
+    "lint": "eslint . --quiet",
+    "db:migrate": "node tools/migrate.mjs",
+    "db:status": "node tools/migrate.mjs --status",
+    "db:baseline": "node tools/migrate.mjs --baseline"
   },
   "dependencies": {
     "@emotion/is-prop-valid": "^1.4.0",

@@ -23,7 +23,21 @@ Database is Supabase Postgres, shared between local dev and production (same ins
    - The **Plain-English Status** table at the top — what's actually live vs. built-but-untested vs. not started.
    - **Part C** — the priority order from the actual client meeting (not the same as technical build-dependency order — both are documented, don't confuse them).
    - The **Engineering Log** (Parts A/B and the D.x entries) — exact bugs found, exact fixes, exact tests run. Several real mistakes happened during this build (a KYC-status value mixup, an email case-sensitivity bug, a CSS grid overflow bug) — all documented there so they aren't rediscovered as "new" issues.
-2. Check `database/pg/` for the current schema — numbered migration files (`01` through `11` so far). **Migrations are not auto-applied.** `npm run db:setup` only knows about files `01` and `02` by name. Every migration after that must be manually pasted into Supabase's SQL Editor. Always keep the `.sql` file in the repo for the record even though running it is a separate manual step.
+2. Check `database/pg/` for the current schema — numbered migration files (`01` through `12` so far).
+
+   **Use the migration runner, not manual pastes.** `npm run db:status` shows what a database has and what it is missing; `npm run db:migrate` applies the pending ones. It tracks state in a `schema_migrations` table, runs each file in its own transaction, and refuses to run if a migration that was already applied has since been edited.
+
+   | Command | What it does |
+   |---|---|
+   | `npm run db:status` | Which migrations this database has, and which are pending |
+   | `npm run db:migrate` | Apply pending migrations (asks first, and names the target host) |
+   | `node tools/migrate.mjs --with-seed` | Also apply seed files — **dev databases only**, this is how demo rows get into production by accident |
+   | `node tools/migrate.mjs --baseline` | Record all migrations as applied *without running them*. For an existing database that already has the schema but no tracking table |
+   | `node tools/migrate.mjs --url "postgres://…"` | Target a database other than `DATABASE_URL` |
+
+   The old `npm run db:setup` still exists but only knows files `01` and `02` by name — prefer the runner. Production was baselined on 05 Aug, so it reports 12 recorded / 0 pending.
+
+   **A seed file is never applied implicitly.** Anything with `seed` in the filename needs `--with-seed`, because `02-seed-demo-data-postgres.sql` inserts demo users and properties and re-running it would refill a database that had just been cleaned of exactly that.
 
 ## Environment variables
 
