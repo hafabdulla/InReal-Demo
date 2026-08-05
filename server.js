@@ -2048,7 +2048,28 @@ app.post('/api/admin/auth/login', async (req, res) => {
     }
 
     const user = await verifyLoginCredentials(email, password);
-    if (!user || user.Role !== 'admin') {
+    if (!user) {
+      recordFailedLogin(email);
+      return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
+    }
+
+    // Authorisation is decided by getOperatorRole — the SAME question every
+    // other operator endpoint asks — not by the legacy `users.role` column.
+    //
+    // This door used to check `user.Role !== 'admin'` directly, and that made
+    // the Operators tab a lie. Granting someone access through the portal
+    // writes to `admin_users` and never touches `users.role`, so every operator
+    // created that way was recorded correctly, listed correctly, audited
+    // correctly — and could not sign in. Only the accounts bootstrapped through
+    // ADMIN_EMAILS worked, because that path sets `users.role = 'admin'` at
+    // boot. A real product owner was locked out this way.
+    //
+    // getOperatorRole keeps the legacy column as a FALLBACK, which is the right
+    // direction for it: an old admin with no admin_users row still gets in, but
+    // the legacy flag is no longer able to *deny* someone the new model allows.
+    // It also honours revocation, which a raw role check cannot.
+    const operatorRole = await getOperatorRole(user.UserID);
+    if (!operatorRole) {
       recordFailedLogin(email);
       return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
     }

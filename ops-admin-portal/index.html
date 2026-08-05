@@ -967,14 +967,14 @@
                 </div>
                 <img id="totpQr" alt="Two-factor QR code" width="160" height="160"
                      style="border-radius:8px;border:1px solid var(--portal-border-subtle);background:#fff;padding:6px" />
-                <div class="field" style="margin-top:12px">
-                  <label for="totpSecret">Manual entry code</label>
-                  <input type="text" id="totpSecret" readonly />
-                </div>
-                <div class="field">
-                  <label for="totpVerifyCode">Enter the 6-digit code from your app</label>
-                  <input type="text" id="totpVerifyCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
-                </div>
+                <label class="kyc-form-label" style="margin-top:12px">
+                  Manual entry code
+                  <input class="field code-input" type="text" id="totpSecret" readonly style="max-width:320px" />
+                </label>
+                <label class="kyc-form-label">
+                  Enter the 6-digit code from your app
+                  <input class="field code-input" type="text" id="totpVerifyCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+                </label>
                 <div style="display:flex;gap:8px;margin-top:12px">
                   <button class="primary-btn" id="totpVerifyBtn">Verify &amp; enable</button>
                   <button class="ghost-btn" id="totpCancelBtn">Cancel</button>
@@ -999,10 +999,10 @@
               <!-- Prompt: reused for both regenerate and turn-off -->
               <div id="totpPrompt" class="hidden">
                 <p class="helper" id="totpPromptText" style="margin-bottom:12px"></p>
-                <div class="field">
-                  <label for="totpPromptCode" id="totpPromptLabel">6-digit code from your app</label>
-                  <input type="text" id="totpPromptCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
-                </div>
+                <label class="kyc-form-label">
+                  <span id="totpPromptLabel">6-digit code from your app</span>
+                  <input class="field code-input" type="text" id="totpPromptCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+                </label>
                 <p class="helper hidden" id="totpRecoveryHint" style="margin-bottom:12px"></p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
                   <button class="primary-btn" id="totpPromptConfirmBtn">Confirm</button>

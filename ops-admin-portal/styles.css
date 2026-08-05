@@ -975,6 +975,17 @@ tbody tr:hover td {
   line-height: 1.55;
 }
 
+/* Codes are read off a phone or a printout and typed in one go, so they get
+   monospace and wide tracking — the same reasoning as .recovery-grid below.
+   Capped rather than full-width because a six-character value in a 600px box
+   reads as a mistake, and the caret starting mid-card makes it worse. */
+.code-input {
+  max-width: 220px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 1rem;
+  letter-spacing: 0.18em;
+}
+
 /* Recovery codes, shown exactly once at enrolment or regeneration.
    auto-fit rather than a fixed column count so it stays readable on a phone —
    an operator setting up 2FA is quite likely to be holding one. Monospace and
