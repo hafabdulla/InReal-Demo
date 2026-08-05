@@ -54,6 +54,29 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 }
 const SESSION_TOKEN_TTL = process.env.SESSION_TOKEN_TTL || '12h';
 
+// TOTP_ENCRYPTION_KEY was deliberately NOT a boot requirement while 2FA was
+// additive: a missing key only broke the specific endpoints that needed it, and
+// failing the whole boot over an optional feature would have been worse.
+//
+// That calculus inverts the moment TOTP gates a login. A missing or mistyped
+// key now means every enrolled operator is locked out — and locked out with a
+// 500 from deep inside a decrypt call, which reads as "the site is broken"
+// rather than "the key is wrong". Failing at boot with the reason named is far
+// cheaper to diagnose than the same fault discovered by five people who cannot
+// sign in.
+//
+// Checked for shape, not just presence: a truncated or non-hex value fails at
+// decrypt time, which is exactly the late failure this is here to prevent.
+const TOTP_KEY_RAW = process.env.TOTP_ENCRYPTION_KEY;
+if (!TOTP_KEY_RAW || !/^[0-9a-fA-F]{64}$/.test(TOTP_KEY_RAW.trim())) {
+  console.error(
+    'Missing or malformed TOTP_ENCRYPTION_KEY. It must be exactly 64 hex characters (32 bytes) — ' +
+    'generate one with `openssl rand -hex 32`. This is required at boot because two-factor ' +
+    'authentication now gates operator login; without it, every enrolled operator is locked out.'
+  );
+  process.exit(1);
+}
+
 // Supabase Storage holds user documents (KYC/Finance/Property uploads). This
 // replaced local-disk storage because Render's filesystem is ephemeral —
 // anything written to local disk is silently lost on the next deploy or
@@ -497,6 +520,52 @@ function signSessionToken(userId) {
   });
 }
 
+// Issued after the password step, before the second factor. Carries no
+// authority: getAuthenticatedUserId refuses anything that is not SESSION, so
+// this cannot be used against a single real endpoint.
+//
+// Five minutes, not twelve hours. It only has to survive someone reading a code
+// off their phone, and a long-lived one sitting in browser storage is a
+// half-authenticated credential waiting to be stolen.
+const MFA_CHALLENGE_TTL = '5m';
+
+function signMfaChallengeToken(userId) {
+  return jwt.sign({ sub: userId, scp: TOKEN_SCOPE.MFA_CHALLENGE }, JWT_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: MFA_CHALLENGE_TTL,
+  });
+}
+
+// The mirror of getAuthenticatedUserId: accepts ONLY challenge tokens, so a
+// real session token cannot be replayed at the challenge endpoint to skip
+// straight past it either.
+function getMfaChallengeUserId(req) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+    if (payload.scp !== TOKEN_SCOPE.MFA_CHALLENGE) return null;
+    const userId = Number(payload.sub);
+    return Number.isInteger(userId) && userId > 0 ? userId : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether an operator who has NOT enrolled may still sign in.
+//
+// Default false, and that is deliberate: at the time this shipped, 2 of 5
+// operators had enrolled. Defaulting to true would have locked three people out
+// of production the moment it deployed — including a product owner who had just
+// been unblocked from a different login bug (D.33).
+//
+// REQ-AUTH-07 wants mandatory, and this flag is how it gets there without a
+// flag day: enrolled operators are challenged from this deploy onward, everyone
+// else is nudged, and the flip to mandatory is a one-line env change once the
+// enrolment count reaches five. DO NOT flip it before checking that count.
+const REQUIRE_OPERATOR_2FA = String(process.env.REQUIRE_OPERATOR_2FA || '').toLowerCase() === 'true';
+
 function getAuthenticatedUserId(req) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -505,20 +574,12 @@ function getAuthenticatedUserId(req) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
 
-    // A token with no `scp` is one issued before this claim existed. Those are
-    // treated as full sessions so that deploying this does not sign every
-    // logged-in user out at once.
-    //
-    // THIS LENIENCY IS TEMPORARY AND MUST BE REMOVED BEFORE DEPLOY 3.
-    // It is safe only while nothing issues a challenge token — the moment one
-    // exists, a missing claim stops being "old token" and starts being
-    // indistinguishable from "challenge token", which is the exact hole this
-    // whole mechanism was added to close.
-    //
-    // Safe to remove once SESSION_TOKEN_TTL (12h) has elapsed after this
-    // deploy, since no scope-less token can still verify past its own expiry.
-    const scope = payload.scp || TOKEN_SCOPE.SESSION;
-    if (scope !== TOKEN_SCOPE.SESSION) return null;
+    // Strict since Deploy 3 (D.34). The transitional leniency that treated a
+    // MISSING `scp` as a session has been removed — a token must now say what
+    // it is for. Anyone still holding a token minted before Deploy 1 is signed
+    // out once and signs back in; that is the entire cost, and it buys the
+    // property that an unscoped token can never again be mistaken for a session.
+    if (payload.scp !== TOKEN_SCOPE.SESSION) return null;
 
     const userId = Number(payload.sub);
     return Number.isInteger(userId) && userId > 0 ? userId : null;
@@ -680,9 +741,11 @@ async function requireOperator(req, res, allowedRoles) {
 
 const GENERIC_LOGIN_ERROR = 'Invalid email or password';
 
-async function verifyLoginCredentials(email, password) {
-  const users = await q(
-    `SELECT
+// The exact column set buildLoginResponse/sanitizeUserRecord expect. Hoisted
+// because operator login now loads this row in TWO places — the password step
+// and the second-factor step — and two hand-maintained copies of a 22-column
+// list is a guarantee that one of them eventually goes stale.
+const LOGIN_USER_COLUMNS = `
       user_id AS "UserID",
       email AS "Email",
       first_name AS "FirstName",
@@ -705,6 +768,11 @@ async function verifyLoginCredentials(email, password) {
       password_salt AS "PasswordSalt",
       COALESCE(role, 'user') AS "Role",
       created_at AS "CreatedAt"
+`;
+
+async function verifyLoginCredentials(email, password) {
+  const users = await q(
+    `SELECT ${LOGIN_USER_COLUMNS}
     FROM users
     WHERE LOWER(email) = $1 AND is_active = true AND is_deleted = false`,
     [email]
@@ -2074,10 +2142,122 @@ app.post('/api/admin/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
     }
 
+    // Password is proven. Now the second factor — REQ-AUTH-07.
+    const totpRows = await q('SELECT is_active FROM user_totp WHERE user_id = $1', [user.UserID]);
+    const hasTotp = totpRows.length > 0 && totpRows[0].is_active === true;
+
+    if (hasTotp) {
+      // No session token here, deliberately. The password alone buys a
+      // challenge token and nothing else — that is the whole point of the
+      // scope claim added in Deploy 1.
+      resetLoginAttempts(email);
+      return res.json({
+        success: true,
+        mfaRequired: true,
+        challengeToken: signMfaChallengeToken(user.UserID),
+      });
+    }
+
+    if (REQUIRE_OPERATOR_2FA) {
+      // Enrolment lives behind a login, so someone refused here cannot fix it
+      // themselves. Say so plainly and name the way out, rather than returning
+      // the generic error and leaving them to guess.
+      return res.status(403).json({
+        success: false,
+        code: 'OPERATOR_2FA_REQUIRED',
+        error: 'Two-factor authentication is required for operator accounts. Ask a super admin to enable access so you can enrol in Settings → Security.',
+      });
+    }
+
     resetLoginAttempts(email);
-    res.json(await buildLoginResponse(user));
+    const response = await buildLoginResponse(user);
+    // Surfaced so the portal can nudge. Not an error — this path exists only
+    // while the rollout is in progress.
+    response.data.TotpEnrolmentPending = true;
+    res.json(response);
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/admin/auth/login/mfa — second half of the operator login.
+//
+// Takes the challenge token from /api/admin/auth/login plus a live code, and
+// returns the real session. Split into two calls rather than one so the
+// password is never held in browser memory while the operator reads a code off
+// their phone, and so the challenge cannot be brute-forced without first
+// re-proving the password.
+//
+// A recovery code is accepted here, unlike on any step-up action. That is a
+// considered exception: operator TOTP enrolment lives behind this very login,
+// so an operator with a lost phone and no recovery route would need another
+// super admin to intervene — and if the last super admin loses their phone,
+// nobody can. The code is single-use and 40 bits, and it only reaches the same
+// place the password plus the phone would have.
+app.post('/api/admin/auth/login/mfa', async (req, res) => {
+  try {
+    const userId = getMfaChallengeUserId(req);
+    if (!userId) {
+      // Covers expired (5 min), malformed, and — importantly — a full session
+      // token presented here in the hope of skipping the challenge.
+      return res.status(401).json({
+        success: false,
+        code: 'CHALLENGE_EXPIRED',
+        error: 'That sign-in attempt expired. Please enter your email and password again.',
+      });
+    }
+
+    const { code, recoveryCode } = req.body || {};
+    if (!code && !recoveryCode) {
+      return res.status(400).json({ success: false, error: 'A code is required.' });
+    }
+
+    // Re-checked here, not trusted from the first call. The role could have
+    // been revoked in the five minutes the challenge token is alive, and the
+    // whole point of revocation is that it takes effect immediately.
+    const operatorRole = await getOperatorRole(userId);
+    if (!operatorRole) {
+      return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
+    }
+
+    if (isTotpLocked(userId)) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect codes. Wait a few minutes, or use one of your recovery codes.',
+      });
+    }
+
+    let authorised = false;
+    let viaRecovery = false;
+    if (recoveryCode) {
+      authorised = (await redeemRecoveryCode(userId, recoveryCode)).redeemed;
+      viaRecovery = true;
+    } else {
+      authorised = await verifyFreshTotpCode(userId, code);
+    }
+
+    if (!authorised) {
+      return res.status(401).json({
+        success: false,
+        error: viaRecovery
+          ? 'That recovery code is not valid. Each code can only be used once.'
+          : 'That code is not valid. Please try again.',
+      });
+    }
+
+    const rows = await q(
+      `SELECT ${LOGIN_USER_COLUMNS} FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
+    );
+    if (rows.length === 0) {
+      return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
+    }
+
+    console.log(`[auth.operator_mfa_passed] user_id=${userId} via=${viaRecovery ? 'recovery_code' : 'totp'}`);
+    res.json(await buildLoginResponse(rows[0]));
+  } catch (error) {
+    console.error('API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 

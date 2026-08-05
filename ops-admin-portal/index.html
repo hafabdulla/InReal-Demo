@@ -41,6 +41,34 @@
       </div>
     </div>
 
+    <!-- Second step of operator sign-in. Reached only after the password has
+         already been accepted, and only for operators who have enrolled — the
+         server decides that, not this markup. Nothing here is a session yet:
+         the token held at this point is scoped `mfa_challenge` and is refused
+         by every real endpoint. -->
+    <div id="authMfa" class="auth-screen hidden">
+      <div class="auth-card">
+        <p class="eyebrow">Operations</p>
+        <h2>Two-factor verification</h2>
+        <p class="auth-copy">Your password was accepted. Enter the code from your authenticator app to finish signing in.</p>
+        <form id="mfaForm" class="auth-form">
+          <label>
+            <span id="mfaCodeLabel">6-digit code from your app</span>
+            <input class="field code-input" id="mfaCode" type="text" inputmode="numeric" maxlength="6"
+                   placeholder="123456" autocomplete="one-time-code" autofocus />
+          </label>
+          <p id="mfaError" class="auth-error"></p>
+          <button class="primary-btn" type="submit" id="mfaSubmitBtn">Verify</button>
+          <!-- Accepted here, unlike on step-up actions. Operator enrolment
+               lives behind this login, so without this route a lost phone
+               would need another super admin — and if the last super admin
+               loses theirs, nobody can help. -->
+          <button class="ghost-btn" type="button" id="mfaUseRecoveryBtn">Use a recovery code instead</button>
+          <button class="ghost-btn" type="button" id="mfaCancelBtn">Back to sign in</button>
+        </form>
+      </div>
+    </div>
+
     <div class="shell hidden" id="appShell">
       <aside class="sidebar">
         <div class="sidebar-brand">
@@ -950,7 +978,7 @@
               <!-- Idle: already enrolled -->
               <div id="totpIdleEnabled" class="hidden">
                 <p class="helper" id="totpRecoveryRemaining" style="margin-bottom:12px"></p>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <div class="settings-actions">
                   <button class="ghost-btn" id="totpRegenerateBtn">New recovery codes</button>
                   <button class="ghost-btn" id="totpDisableBtn">Turn off</button>
                 </div>
@@ -975,7 +1003,7 @@
                   Enter the 6-digit code from your app
                   <input class="field code-input" type="text" id="totpVerifyCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
                 </label>
-                <div style="display:flex;gap:8px;margin-top:12px">
+                <div class="settings-actions">
                   <button class="primary-btn" id="totpVerifyBtn">Verify &amp; enable</button>
                   <button class="ghost-btn" id="totpCancelBtn">Cancel</button>
                 </div>
@@ -1004,7 +1032,7 @@
                   <input class="field code-input" type="text" id="totpPromptCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
                 </label>
                 <p class="helper hidden" id="totpRecoveryHint" style="margin-bottom:12px"></p>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <div class="settings-actions">
                   <button class="primary-btn" id="totpPromptConfirmBtn">Confirm</button>
                   <button class="ghost-btn" id="totpPromptCancelBtn">Cancel</button>
                   <button class="ghost-btn hidden" id="totpUseRecoveryBtn">Use a recovery code instead</button>

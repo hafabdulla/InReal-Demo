@@ -23,6 +23,7 @@ const defaultState = {
 const authEls = {
   loading: document.getElementById('authLoading'),
   login: document.getElementById('authLogin'),
+  mfa: document.getElementById('authMfa'),
   appShell: document.getElementById('appShell'),
   loginForm: document.getElementById('loginForm'),
   loginError: document.getElementById('loginError'),
@@ -162,9 +163,14 @@ function clearAuthSession() {
   resetWorkspaceForSignOut();
 }
 
+// One place owns which screen is visible. 'mfa' joined the set when the second
+// factor split login into two steps; routing it through here rather than
+// toggling classes at each call site is what stops the password screen and the
+// challenge screen ever being on-screen together.
 function showAuthScreen(screen) {
   authEls.loading.classList.toggle('hidden', screen !== 'loading');
   authEls.login.classList.toggle('hidden', screen !== 'login');
+  authEls.mfa?.classList.toggle('hidden', screen !== 'mfa');
   authEls.appShell.classList.toggle('hidden', screen !== 'app');
 }
 
@@ -662,6 +668,16 @@ async function handleLogin(event) {
     return;
   }
 
+  // The password was right but it is not enough on its own — this operator has
+  // a second factor. No session token came back, only a short-lived challenge
+  // token, so there is nothing to establish a session with yet.
+  if (loginResult.mfaRequired) {
+    pendingChallengeToken = loginResult.challengeToken;
+    showMfaChallenge();
+    authEls.loginSubmitBtn.disabled = false;
+    return;
+  }
+
   try {
     await establishSession({ user: loginResult.data, token: loginResult.token });
     addAudit('Admin signed in', `${loginResult.data.Email} • just now`, 'Operations workspace unlocked.');
@@ -680,8 +696,105 @@ async function handleLogin(event) {
   }
 }
 
+// ── Second factor at login (REQ-AUTH-07) ────────────────────────────────────
+// Held in module state only, never in localStorage. It is a half-authenticated
+// credential with a five-minute life; persisting it would leave it on a shared
+// machine after the operator gave up and walked away.
+let pendingChallengeToken = null;
+let mfaUseRecoveryCode = false;
+
+function showMfaChallenge() {
+  mfaUseRecoveryCode = false;
+  setLoginError('');
+  document.getElementById('mfaError').textContent = '';
+  document.getElementById('mfaCode').value = '';
+  document.getElementById('mfaCodeLabel').textContent = '6-digit code from your app';
+  document.getElementById('mfaCode').setAttribute('maxlength', '6');
+  document.getElementById('mfaCode').placeholder = '123456';
+  document.getElementById('mfaUseRecoveryBtn').classList.remove('hidden');
+  showAuthScreen('mfa');
+  document.getElementById('mfaCode').focus();
+}
+
+function cancelMfaChallenge() {
+  pendingChallengeToken = null;
+  mfaUseRecoveryCode = false;
+  document.getElementById('mfaCode').value = '';
+  showAuthScreen('login');
+}
+
+function switchMfaToRecoveryCode() {
+  mfaUseRecoveryCode = true;
+  document.getElementById('mfaError').textContent = '';
+  document.getElementById('mfaCodeLabel').textContent = 'Recovery code';
+  document.getElementById('mfaCode').value = '';
+  document.getElementById('mfaCode').setAttribute('maxlength', '14');
+  document.getElementById('mfaCode').placeholder = 'a1b2c3d4e5';
+  document.getElementById('mfaUseRecoveryBtn').classList.add('hidden');
+}
+
+async function submitMfaChallenge(event) {
+  if (event) event.preventDefault();
+  const errorEl = document.getElementById('mfaError');
+  errorEl.textContent = '';
+
+  const raw = document.getElementById('mfaCode').value.trim();
+  if (!raw) {
+    errorEl.textContent = mfaUseRecoveryCode ? 'Enter one of your recovery codes.' : 'Enter the 6-digit code.';
+    return;
+  }
+  if (!mfaUseRecoveryCode && !/^\d{6}$/.test(raw)) {
+    errorEl.textContent = 'Enter the 6-digit code from your authenticator app.';
+    return;
+  }
+  if (!pendingChallengeToken) {
+    cancelMfaChallenge();
+    setLoginError('That sign-in attempt expired. Please sign in again.');
+    return;
+  }
+
+  const btn = document.getElementById('mfaSubmitBtn');
+  btn.disabled = true;
+  try {
+    const response = await fetch(`${getApiBase()}/api/admin/auth/login/mfa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pendingChallengeToken}` },
+      body: JSON.stringify(
+        mfaUseRecoveryCode
+          ? { recoveryCode: raw.toLowerCase().replace(/[\s-]/g, '') }
+          : { code: raw }
+      ),
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || !payload.success) {
+      // An expired challenge sends them back to the password screen, because
+      // there is nothing left to retry against — retrying the code would just
+      // fail again with a message that does not explain why.
+      if (payload.code === 'CHALLENGE_EXPIRED') {
+        cancelMfaChallenge();
+        setLoginError('That sign-in attempt expired. Please sign in again.');
+        return;
+      }
+      errorEl.textContent = payload.error || 'That code was not accepted.';
+      return;
+    }
+
+    pendingChallengeToken = null;
+    await establishSession({ user: payload.data, token: payload.token });
+    addAudit('Admin signed in', `${payload.data.Email} • just now`, 'Two-factor verified.');
+    renderAudit();
+  } catch (error) {
+    console.error('Second-factor verification failed:', error);
+    errorEl.textContent = "We couldn't reach the server. Please try again.";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function handleLogout() {
   const email = authSession?.user?.Email || 'Admin';
+  pendingChallengeToken = null;
   clearAuthSession();
   showAuthScreen('login');
   setLoginError('');
@@ -2661,6 +2774,15 @@ function bindSettingsEvents() {
 
 authEls.loginForm.addEventListener('submit', handleLogin);
 authEls.logoutBtn.addEventListener('click', handleLogout);
+
+document.getElementById('mfaForm').addEventListener('submit', submitMfaChallenge);
+document.getElementById('mfaCancelBtn').addEventListener('click', cancelMfaChallenge);
+document.getElementById('mfaUseRecoveryBtn').addEventListener('click', switchMfaToRecoveryCode);
+// Digits only for an authenticator code; recovery codes are hex and must not
+// be stripped by the same filter.
+document.getElementById('mfaCode').addEventListener('input', (e) => {
+  if (!mfaUseRecoveryCode) e.target.value = e.target.value.replace(/\D/g, '');
+});
 
 bindWorkspaceEvents();
 bindKycEvents();

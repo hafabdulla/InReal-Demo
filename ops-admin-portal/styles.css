@@ -975,6 +975,18 @@ tbody tr:hover td {
   line-height: 1.55;
 }
 
+/* Action row under a Settings form control. Exists because these buttons kept
+   sitting flush against the input above them — a confirm button touching the
+   field it acts on reads as part of the field, and on the destructive ones
+   ("Turn off") that is worth a deliberate gap rather than an inline style
+   repeated at five call sites. */
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
 /* Codes are read off a phone or a printout and typed in one go, so they get
    monospace and wide tracking — the same reasoning as .recovery-grid below.
    Capped rather than full-width because a six-character value in a 600px box
