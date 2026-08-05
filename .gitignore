@@ -34,3 +34,6 @@ database/README.md
 database/SETUP_CHECKLIST.md
 ops-admin-portal/README.md
 documents/
+# One-off test-data cleanup artefacts — contain real user rows, never commit
+db-cleanup-snapshot-*.json
+db-cleanup-orphaned-storage-paths.txt
