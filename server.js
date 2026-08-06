@@ -579,6 +579,36 @@ function getMfaChallengeUserId(req) {
 // enrolment count reaches five. DO NOT flip it before checking that count.
 const REQUIRE_OPERATOR_2FA = String(process.env.REQUIRE_OPERATOR_2FA || '').toLowerCase() === 'true';
 
+// Whether an operator is BLOCKED from approving a KYC application until the
+// applicant's onboarding documents have been uploaded and signed off.
+//
+// The requirement is the product owner's, 6 August 2026: "If upload an eligible
+// passport but cannot show the proff of address or residence, then the system
+// won't let him go further." Collection alone was never the ask — this is a gate.
+//
+// OFF BY DEFAULT, and the default is the point. Two separate reasons:
+//
+//   1. Turning it on retroactively makes every applicant already sitting in the
+//      Pending queue unapprovable, because none of them has uploaded anything —
+//      no operator could clear them and nothing on screen would explain why.
+//      That is precisely the failure this project already shipped once and had
+//      to fix (D.30, the signup country that permanently blocked legitimate
+//      applicants). Building the same shape again with the switch pre-flipped
+//      would be repeating it knowingly.
+//
+//   2. The timing is a live open question, not an engineering choice — Q-8,
+//      "for the first pilot user, or later?", is unanswered. KYC is currently a
+//      manual process outside the app, so the compliance floor is met either
+//      way. A flag lets the product owner answer it with an env change instead
+//      of a deploy.
+//
+// Same pattern, and for the same reason, as REQUIRE_OPERATOR_2FA above: ship the
+// enforcement inert, verify it, then flip it deliberately once the population it
+// applies to is ready. Everything else in this feature — upload, review,
+// sign-off, the investor's view of their own status — is live regardless of this
+// flag. Only the approval block is gated.
+const REQUIRE_KYC_DOCUMENTS = String(process.env.REQUIRE_KYC_DOCUMENTS || '').toLowerCase() === 'true';
+
 function getAuthenticatedUserId(req) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -3158,6 +3188,12 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
     // Prohibited tier actually blocks approval, the reviewer must be shown the
     // same verdict the approval endpoint will enforce. Deriving it in two
     // places invites the two from drifting apart.
+    // One query for the whole queue rather than one per applicant. The queue is
+    // small today and this is not a performance worry so much as a shape one:
+    // a per-row lookup here is the kind of thing that stops being noticeable
+    // only until the pilot has real volume.
+    const documentStates = await getOnboardingDocumentStates(rows.map((row) => row.UserID));
+
     const withJurisdiction = rows.map((row) => ({
       ...row,
       Jurisdiction: assessJurisdiction({
@@ -3165,9 +3201,21 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
         countryOfResidence: row.CountryOfResidence,
         nationalities: row.Nationalities,
       }),
+      // Sent with the queue so the reviewer can see at a glance who is actually
+      // ready to be decided, without opening every drawer in turn.
+      Documents: documentStates.get(Number(row.UserID)),
     }));
 
-    return res.json({ success: true, data: withJurisdiction, count: withJurisdiction.length });
+    return res.json({
+      success: true,
+      data: withJurisdiction,
+      count: withJurisdiction.length,
+      // Whether the approval gate is armed. The portal must not decide this for
+      // itself — a client-side guess that disagrees with the server produces
+      // exactly the D.26 lockout shape, where the UI refuses something the API
+      // would have allowed.
+      documentGateEnforced: REQUIRE_KYC_DOCUMENTS,
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
@@ -3280,6 +3328,37 @@ app.post('/api/ops/kyc-reviews/:userId/decision', async (req, res) => {
             ),
             { httpStatus: 422 }
           );
+        }
+
+        // The onboarding document gate (PO-16, 6 August 2026): "If upload an
+        // eligible passport but cannot show the proff of address or residence,
+        // then the system won't let him go further."
+        //
+        // Read inside the transaction, under the FOR UPDATE lock taken above,
+        // for the same reason the status re-check is: without it a document
+        // could be superseded by a fresh upload between this check and the
+        // status write, and the approval would be recorded against a file that
+        // no longer says what it said when it was read.
+        //
+        // Like the jurisdiction check, this blocks APPROVAL ONLY. Declining an
+        // applicant who never sent their documents has to stay possible, or an
+        // abandoned application becomes permanently unresolvable — which is the
+        // shape of bug D.30 was.
+        if (REQUIRE_KYC_DOCUMENTS) {
+          const documentState = await getOnboardingDocumentState(targetUserId, tx);
+          if (!documentState.complete) {
+            const outstanding = documentState.requirements
+              .filter((r) => r.status !== 'accepted')
+              .map((r) => `${r.label} (${r.status.replace(/_/g, ' ')})`)
+              .join('; ');
+            throw Object.assign(
+              new Error(
+                `Cannot approve: the required onboarding documents have not all been accepted — ${outstanding}. ` +
+                `Sign off each document before approving, or decline the application.`
+              ),
+              { httpStatus: 422 }
+            );
+          }
         }
       }
 
@@ -4089,6 +4168,506 @@ const DOCUMENT_CATEGORIES = new Set(['KYC', 'Finance', 'Property']);
 // counterpart. See database/pg/10-add-document-visibility.sql for the
 // compliance rules that make this column necessary rather than nice to have.
 const DOCUMENT_VISIBILITIES = new Set(['investor_visible', 'operator_only']);
+
+// ===========================================================================
+// Onboarding documents — investor uploads, operator sign-off (PO-10, PO-16)
+// ===========================================================================
+
+// The two documents Compliance Manual §5 requires of EVERY Participant at
+// onboarding, at the lowest due-diligence tier. Not banded by subscription size:
+// the USD 10,000 threshold in §5.6 scales source-of-funds evidence, and has
+// nothing to do with these two. That distinction was very nearly implemented
+// backwards — see the tracker's PO-15.
+const ONBOARDING_REQUIRED_DOCUMENT_TYPES = ['identity', 'proof_of_address'];
+
+const ONBOARDING_DOCUMENT_LABELS = {
+  identity: 'Passport or national ID',
+  proof_of_address: 'Proof of address',
+  source_of_funds: 'Source of funds',
+};
+
+// Manual §5: a proof of address must be less than three months old.
+const PROOF_OF_ADDRESS_MAX_AGE_MONTHS = 3;
+
+// Shown to the investor verbatim when a document is rejected, so they know what
+// to fix. Every one is a statement about the DOCUMENT — legible, current, the
+// right kind, matching the applicant. None is a statement about the person,
+// which is what makes the whole list safe to disclose without a case-by-case
+// tipping-off judgement each time. The operator's free-text notes are internal
+// and are deliberately never returned by an investor-facing endpoint.
+const DOCUMENT_REJECTION_REASONS = {
+  unreadable: 'The file was not clear enough to read. Please upload a sharper scan or photo.',
+  expired: 'The document has expired. Please upload a current one.',
+  too_old: `The document is more than ${PROOF_OF_ADDRESS_MAX_AGE_MONTHS} months old. Please upload a more recent one.`,
+  wrong_document_type: 'That is not the type of document required here. Please check the guidance and upload again.',
+  name_mismatch: 'The name on the document does not match the name on your account.',
+  incomplete: 'Part of the document was missing or cut off. Please upload all pages in full.',
+  other: 'This document could not be accepted. Our team will be in touch with the details.',
+};
+
+// A proof of address has no issue date in its bytes, so the investor declares
+// one. This is a DECLARED value and the server can only sanity-check it — the
+// operator is the one who checks it against the document itself. Same
+// declared-versus-verified split as nationality: the declaration creates the
+// liability, the sign-off is the evidence.
+function validateProofOfAddressDate(raw) {
+  const value = String(raw ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { ok: false, error: 'documentIssuedOn must be a date in YYYY-MM-DD format' };
+  }
+  const issued = new Date(`${value}T00:00:00Z`);
+  // Catches a well-formed but non-existent date such as 2026-02-31, which the
+  // Date constructor silently rolls forward into March rather than rejecting.
+  if (Number.isNaN(issued.getTime()) || issued.toISOString().slice(0, 10) !== value) {
+    return { ok: false, error: 'documentIssuedOn is not a real date' };
+  }
+
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (issued > today) {
+    return { ok: false, error: 'documentIssuedOn cannot be in the future' };
+  }
+
+  // Month arithmetic rather than a fixed day count, because "three months" in
+  // the manual means three calendar months. Date.UTC handles the underflow into
+  // the previous year on its own. A day-of-month that does not exist in the
+  // target month (31 May → 31 Feb) rolls forward a couple of days, which makes
+  // the cutoff very slightly more generous — acceptable, and preferable to
+  // rejecting a document on an off-by-one the investor cannot understand.
+  const cutoff = new Date(Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth() - PROOF_OF_ADDRESS_MAX_AGE_MONTHS,
+    today.getUTCDate()
+  ));
+  if (issued < cutoff) {
+    return {
+      ok: false,
+      error: `A proof of address must be less than ${PROOF_OF_ADDRESS_MAX_AGE_MONTHS} months old. This one is dated ${value}.`,
+    };
+  }
+  return { ok: true, value };
+}
+
+// The state of each onboarding requirement for a set of users, in one query
+// rather than one per user — the KYC queue needs this for every pending
+// applicant at once, and a per-row lookup there would be an N+1 against a table
+// that will only grow.
+//
+// `runner` is `q` normally, or a transaction's `tx` when the caller needs the
+// answer inside the same transaction as a decision write. Passing it in matters:
+// the approval gate must read this under the same FOR UPDATE lock that guards
+// the status change, or a document could be superseded between the check and
+// the approval.
+//
+// ON document_issued_on BEING SELECTED AS TEXT: it is a DATE — no time, no
+// timezone. The pg driver parses a DATE into a JS Date at the SERVER's local
+// midnight, and res.json() then serialises that as a UTC instant, so a document
+// dated 2026-07-22 leaves a UTC+5 host as "2026-07-21T19:00:00.000Z". Every
+// consumer would then have to convert back through the right offset to recover
+// the day, and a reviewer whose browser sits in a different zone from the server
+// sees the wrong date. That is not cosmetic: this is the date the "less than
+// three months old" rule in Manual §5 is judged against, and an off-by-one
+// either accepts a stale proof of address or rejects a valid one. to_char keeps
+// it a plain calendar date all the way to the screen.
+async function getOnboardingDocumentStates(userIds, runner = q) {
+  const states = new Map();
+  for (const userId of userIds) {
+    states.set(Number(userId), {
+      requirements: ONBOARDING_REQUIRED_DOCUMENT_TYPES.map((type) => ({
+        type,
+        label: ONBOARDING_DOCUMENT_LABELS[type],
+        status: 'missing',
+        document: null,
+        review: null,
+      })),
+      complete: false,
+      missing: [...ONBOARDING_REQUIRED_DOCUMENT_TYPES],
+    });
+  }
+  if (states.size === 0) return states;
+
+  // LATERAL rather than a GROUP BY, so each document carries its own most
+  // recent review. The review_id tiebreak is not decorative: `reviewed_at`
+  // defaults to NOW(), which in Postgres is transaction start time, so two
+  // reviews written in one transaction share a timestamp exactly and the
+  // ordering would otherwise be undefined.
+  const rows = await runner(
+    `SELECT
+       d.document_id        AS "DocumentID",
+       d.user_id            AS "UserID",
+       d.kyc_document_type  AS "DocumentType",
+       d.original_file_name AS "OriginalFileName",
+       -- Rendered to text rather than returned as a date, deliberately.
+       -- See the note above this function for why.
+       to_char(d.document_issued_on, 'YYYY-MM-DD') AS "DocumentIssuedOn",
+       d.created_at         AS "UploadedAt",
+       r.outcome            AS "ReviewOutcome",
+       r.reason_code        AS "ReviewReasonCode",
+       r.notes              AS "ReviewNotes",
+       r.reviewed_at        AS "ReviewedAt"
+     FROM user_documents d
+     LEFT JOIN LATERAL (
+       SELECT outcome, reason_code, notes, reviewed_at
+       FROM kyc_document_reviews
+       WHERE document_id = d.document_id
+       ORDER BY reviewed_at DESC, review_id DESC
+       LIMIT 1
+     ) r ON true
+     WHERE d.user_id = ANY($1::int[])
+       AND d.source = 'investor'
+       AND d.is_superseded = false`,
+    [[...states.keys()]]
+  );
+
+  for (const row of rows) {
+    const state = states.get(Number(row.UserID));
+    if (!state) continue;
+    const requirement = state.requirements.find((r) => r.type === row.DocumentType);
+    // A document type outside the onboarding set (source_of_funds) is skipped
+    // rather than treated as an error — it is a real row, it just answers no
+    // onboarding requirement.
+    if (!requirement) continue;
+
+    requirement.document = {
+      documentId: row.DocumentID,
+      originalFileName: row.OriginalFileName,
+      documentIssuedOn: row.DocumentIssuedOn,
+      uploadedAt: row.UploadedAt,
+    };
+    if (row.ReviewOutcome === 'accepted') {
+      requirement.status = 'accepted';
+    } else if (row.ReviewOutcome === 'rejected') {
+      requirement.status = 'rejected';
+    } else {
+      requirement.status = 'awaiting_review';
+    }
+    if (row.ReviewOutcome) {
+      requirement.review = {
+        outcome: row.ReviewOutcome,
+        reasonCode: row.ReviewReasonCode,
+        // Internal. Stripped before this ever reaches an investor — see the
+        // investor-facing endpoint, which rebuilds its own view of this object.
+        notes: row.ReviewNotes,
+        reviewedAt: row.ReviewedAt,
+      };
+    }
+  }
+
+  for (const state of states.values()) {
+    state.missing = state.requirements.filter((r) => r.status !== 'accepted').map((r) => r.type);
+    state.complete = state.missing.length === 0;
+  }
+  return states;
+}
+
+async function getOnboardingDocumentState(userId, runner = q) {
+  const states = await getOnboardingDocumentStates([userId], runner);
+  return states.get(Number(userId));
+}
+
+// POST /api/user/kyc-documents — the investor uploading their own onboarding
+// evidence. The counterpart to POST /api/ops/documents, which is an operator
+// filing something FOR an investor; this is the investor filing something for
+// an operator to check.
+app.post('/api/user/kyc-documents', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const { kycDocumentType, fileBase64, fileName, documentIssuedOn } = req.body || {};
+
+    // Only the two onboarding requirements are accepted here. `source_of_funds`
+    // exists in the schema because PO-15 settled the model, but it belongs to
+    // the subscription moment — its Tier 1 evidence is a bank statement showing
+    // a wire that has not happened at onboarding — and there is no review flow
+    // behind it yet. Accepting it would collect a document nobody looks at.
+    if (!ONBOARDING_REQUIRED_DOCUMENT_TYPES.includes(kycDocumentType)) {
+      return res.status(400).json({
+        success: false,
+        error: `kycDocumentType must be one of: ${ONBOARDING_REQUIRED_DOCUMENT_TYPES.join(', ')}`,
+      });
+    }
+    if (!fileBase64 || !fileName) {
+      return res.status(400).json({ success: false, error: 'fileBase64 and fileName are required' });
+    }
+
+    // Required for a proof of address and refused on anything else, rather than
+    // accepted and ignored. Same allow-list-and-reject stance as the profile
+    // endpoints: a client that thinks it recorded a date should not be able to
+    // be silently wrong about it.
+    let issuedOn = null;
+    if (kycDocumentType === 'proof_of_address') {
+      const dateCheck = validateProofOfAddressDate(documentIssuedOn);
+      if (!dateCheck.ok) {
+        return res.status(400).json({ success: false, error: dateCheck.error });
+      }
+      issuedOn = dateCheck.value;
+    } else if (documentIssuedOn !== undefined && documentIssuedOn !== null && documentIssuedOn !== '') {
+      return res.status(400).json({
+        success: false,
+        error: 'documentIssuedOn only applies to a proof of address',
+      });
+    }
+
+    // Read from the authenticated session's own row, never from the request.
+    const owner = await q(
+      `SELECT kyc_status FROM users
+       WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
+    );
+    if (owner.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    // Approved investors have nothing left to prove, and a declined account may
+    // not add to a file that has already been decided — PO-1 locks a declined
+    // account to the decline notice, and letting it keep uploading would be a
+    // way back in through the side. Re-application is a separate, unbuilt route
+    // that runs through support (PO-5), not an upload.
+    if (owner[0].kyc_status !== 'Pending') {
+      return res.status(409).json({
+        success: false,
+        error: `Documents can only be uploaded while your verification is in progress. Yours is '${owner[0].kyc_status}'.`,
+      });
+    }
+
+    // Content-based validation, before anything is written anywhere. Identical
+    // rules to every other upload path in this app — PDF, JPEG or PNG only,
+    // 8 MB cap, judged on magic bytes rather than the filename or a claimed
+    // mimeType.
+    const validation = validateUploadedFile(fileBase64);
+    if (!validation.ok) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+    const { fileBuffer, extension } = validation;
+    const correctedFileName = withDetectedExtension(fileName, extension);
+
+    const storagePath = `${userId}/${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    await ensureDocumentsBucket();
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from(DOCUMENTS_BUCKET)
+      .upload(storagePath, fileBuffer, {
+        contentType: contentTypeForDetectedExtension(extension),
+        upsert: false,
+      });
+    if (uploadError) {
+      console.error('Supabase Storage upload error:', uploadError);
+      return res.status(500).json({ success: false, error: 'Could not store document' });
+    }
+
+    const inserted = await withTransaction(async (tx) => {
+      // Replacing rather than deleting. A rejected document and its rejection
+      // are both part of the compliance file under Manual §9 — what the
+      // investor sent, what the operator found, and what they sent instead is
+      // the story a later audit needs. `is_superseded` is the existing
+      // mechanism for exactly this and is never a delete.
+      await tx(
+        `UPDATE user_documents SET is_superseded = true
+         WHERE user_id = $1 AND source = 'investor'
+           AND kyc_document_type = $2 AND is_superseded = false`,
+        [userId, kycDocumentType]
+      );
+
+      // visibility is investor_visible on purpose: this is the investor's own
+      // submission and hiding it from them would make the portal look like it
+      // lost their file. uploaded_by_admin_id stays NULL — the CHECK constraint
+      // in migration 15 requires that for an investor-sourced row.
+      const rows = await tx(
+        `INSERT INTO user_documents (
+           user_id, category, label, file_name, original_file_name, mime_type,
+           uploaded_by_admin_id, visibility, source, kyc_document_type, document_issued_on
+         ) VALUES ($1, 'KYC', $2, $3, $4, $5, NULL, 'investor_visible', 'investor', $6, $7)
+         RETURNING document_id AS "DocumentID", created_at AS "CreatedAt"`,
+        [
+          userId,
+          ONBOARDING_DOCUMENT_LABELS[kycDocumentType],
+          storagePath,
+          correctedFileName,
+          contentTypeForDetectedExtension(extension),
+          kycDocumentType,
+          issuedOn,
+        ]
+      );
+      return rows[0];
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        documentId: inserted.DocumentID,
+        kycDocumentType,
+        originalFileName: correctedFileName,
+        documentIssuedOn: issuedOn,
+        status: 'awaiting_review',
+        uploadedAt: inserted.CreatedAt,
+      },
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/user/kyc-documents — what the investor still has to do, and what has
+// come back from review. Scoped to the authenticated session throughout.
+app.get('/api/user/kyc-documents', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const state = await getOnboardingDocumentState(userId);
+
+    // Rebuilt field by field rather than passed through, so an operator's
+    // internal note cannot reach the investor by being added to the shared
+    // shape later and forgotten here. The investor sees the fixed, disclosable
+    // sentence for the reason code and nothing else from the review.
+    const requirements = state.requirements.map((requirement) => ({
+      type: requirement.type,
+      label: requirement.label,
+      status: requirement.status,
+      document: requirement.document
+        ? {
+            documentId: requirement.document.documentId,
+            originalFileName: requirement.document.originalFileName,
+            documentIssuedOn: requirement.document.documentIssuedOn,
+            uploadedAt: requirement.document.uploadedAt,
+          }
+        : null,
+      rejectionReason:
+        requirement.status === 'rejected'
+          ? DOCUMENT_REJECTION_REASONS[requirement.review?.reasonCode] || DOCUMENT_REJECTION_REASONS.other
+          : null,
+      reviewedAt: requirement.review?.reviewedAt || null,
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        requirements,
+        complete: state.complete,
+        proofOfAddressMaxAgeMonths: PROOF_OF_ADDRESS_MAX_AGE_MONTHS,
+      },
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/kyc-reviews/:userId/documents — the applicant's onboarding
+// documents, for the reviewer. Includes the operator notes the investor-facing
+// endpoint strips.
+app.get('/api/ops/kyc-reviews/:userId/documents', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const targetUserId = Number(req.params.userId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    const state = await getOnboardingDocumentState(targetUserId);
+    res.json({
+      success: true,
+      data: {
+        requirements: state.requirements,
+        complete: state.complete,
+        missing: state.missing,
+        // So the drawer can say whether the gate is actually armed rather than
+        // guessing — a reviewer looking at an incomplete file needs to know
+        // whether approval will be refused or merely inadvisable.
+        enforced: REQUIRE_KYC_DOCUMENTS,
+      },
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/kyc-documents/:id/review — the operator sign-off PO-10 requires.
+// Append-only: a re-review is a new row, and the earlier finding stays readable.
+app.post('/api/ops/kyc-documents/:id/review', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const documentId = Number(req.params.id);
+    if (!Number.isInteger(documentId) || documentId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid document id' });
+    }
+
+    const { outcome, reasonCode, notes = '' } = req.body || {};
+    if (!['accepted', 'rejected'].includes(outcome)) {
+      return res.status(400).json({ success: false, error: "outcome must be 'accepted' or 'rejected'" });
+    }
+
+    // A rejection the investor cannot act on is a dead end, so the reason is
+    // mandatory and comes from a fixed list rather than free text — the list is
+    // what makes it safe to show them. Refused on an acceptance for the same
+    // reason the decline endpoint refuses a reason type on an approval: a field
+    // that does not apply should fail, not be quietly stored.
+    if (outcome === 'rejected') {
+      if (!Object.prototype.hasOwnProperty.call(DOCUMENT_REJECTION_REASONS, reasonCode)) {
+        return res.status(400).json({
+          success: false,
+          error: `reasonCode is required for a rejection and must be one of: ${Object.keys(DOCUMENT_REJECTION_REASONS).join(', ')}`,
+        });
+      }
+    } else if (reasonCode !== undefined && reasonCode !== null && reasonCode !== '') {
+      return res.status(400).json({ success: false, error: 'reasonCode only applies to a rejection' });
+    }
+
+    const documents = await q(
+      `SELECT document_id, user_id, source, is_superseded, kyc_document_type
+       FROM user_documents WHERE document_id = $1`,
+      [documentId]
+    );
+    if (documents.length === 0) {
+      return res.status(404).json({ success: false, error: 'Document not found' });
+    }
+    // Only an investor's own submission is signed off. An operator-assigned
+    // document has no applicant claim to verify, so reviewing one would record
+    // a finding about nothing.
+    if (documents[0].source !== 'investor') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only investor-uploaded onboarding documents can be reviewed',
+      });
+    }
+    // A superseded document has already been replaced by a newer upload.
+    // Reviewing it would write a finding that no longer describes the file in
+    // front of anyone, and the state helper — which reads live rows only —
+    // would never surface it.
+    if (documents[0].is_superseded) {
+      return res.status(409).json({
+        success: false,
+        error: 'This document has been replaced by a newer upload. Review the current one instead.',
+      });
+    }
+
+    const inserted = await q(
+      `INSERT INTO kyc_document_reviews (document_id, reviewer_admin_id, outcome, reason_code, notes)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING review_id AS "ReviewID", reviewed_at AS "ReviewedAt"`,
+      [documentId, adminUserId, outcome, outcome === 'rejected' ? reasonCode : null, String(notes).trim()]
+    );
+
+    const state = await getOnboardingDocumentState(documents[0].user_id);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        reviewId: inserted[0].ReviewID,
+        documentId,
+        outcome,
+        reasonCode: outcome === 'rejected' ? reasonCode : null,
+        reviewedAt: inserted[0].ReviewedAt,
+        complete: state.complete,
+        missing: state.missing,
+      },
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
 
 // POST /api/ops/documents — admin uploads a document and assigns it to a
 // specific user. userId is validated against the real users table before

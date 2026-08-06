@@ -109,7 +109,7 @@ const TAINTED_ROOT = /^(user|intent|doc|row|req|r|h|u)\b/;
 // that can only ever emit digits/dates, plus the internal enum-to-CSS-class
 // helpers which never see user input.
 const SAFE_WRAPPER =
-  /\b(escapeHtml|escapeAttr|formatDate|formatMoney|formatCurrency|statusClass|tierClass|Number|encodeURIComponent)\s*\(/;
+  /\b(escapeHtml|escapeAttr|formatDate|formatDateOnly|formatMoney|formatCurrency|statusClass|tierClass|Number|encodeURIComponent)\s*\(/;
 
 // Pull out every template literal in the file.
 const templates = htmlSource.match(/`(?:[^`\\]|\\[\s\S])*`/g) || [];

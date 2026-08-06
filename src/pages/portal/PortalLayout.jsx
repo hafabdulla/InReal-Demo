@@ -6,7 +6,8 @@ import {
   Building2, 
   TrendingUp, 
   FileText,
-  Settings, 
+  ShieldCheck,
+  Settings,
   Menu,
   X,
   LogOut,
@@ -21,6 +22,10 @@ const navigation = [
   { name: 'Properties', href: '/portal/properties', icon: Building2 },
   { name: 'My Investments', href: '/portal/investments', icon: TrendingUp },
   { name: 'My Documents', href: '/portal/documents', icon: FileText },
+  // Sits above Settings rather than at the end: for an unapproved investor this
+  // is the only page that does anything, so burying it under Settings would
+  // hide the one thing standing between them and an approved account.
+  { name: 'Verification', href: '/portal/verification', icon: ShieldCheck },
   { name: 'Settings', href: '/portal/settings', icon: Settings },
 ];
 

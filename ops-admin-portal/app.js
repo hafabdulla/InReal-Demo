@@ -264,6 +264,25 @@ function formatDate(value) {
   return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+// For DATE columns, which carry no time and no timezone. Kept separate from
+// formatDate rather than adding a flag to it: formatDate renders an instant and
+// converting a plain date through it both shows a meaningless "12:00 AM" and
+// can land on the wrong day in a browser whose offset differs from the server's.
+// The API sends these as 'YYYY-MM-DD' (see server.js), and this reads the parts
+// directly so no offset is ever applied.
+function formatDateOnly(value) {
+  if (!value) return '—';
+  const iso = String(value).slice(0, 10);
+  const [year, month, day] = iso.split('-').map(Number);
+  if (!year || !month || !day) return '—';
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString([], {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
 function formatMoney(amount, currency = 'USD') {
   const n = Number(amount) || 0;
   return `${currency} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1608,13 +1627,16 @@ function openKycDrawer(userId) {
   // the button here is so the reviewer isn't invited to attempt something that
   // will be refused, not the control itself.
   const prohibitedWarning = document.getElementById('prohibitedWarning');
-  const approveBtn = document.getElementById('kycApproveBtn');
   prohibitedWarning.classList.toggle('hidden', risk.canApprove);
   if (!risk.canApprove) {
     document.getElementById('prohibitedWarningText').textContent = risk.reason;
   }
-  approveBtn.disabled = !risk.canApprove;
-  approveBtn.title = risk.canApprove ? '' : risk.reason;
+  // The document gate is the second condition on this button, and it is not
+  // known until loadKycDocuments returns. Cleared to a known state here, then
+  // set for real by applyApproveButtonState — which runs now for the
+  // jurisdiction half and again when the documents arrive.
+  kycDocumentState = null;
+  applyApproveButtonState();
 
   document.getElementById('kycReviewerName').value = '';
   document.getElementById('kycNotes').value = '';
@@ -1629,7 +1651,260 @@ function openKycDrawer(userId) {
   refreshIcons();
 
   loadKycHistory(user.UserID);
+  loadKycDocuments(user.UserID);
 }
+
+// ── Onboarding documents in the KYC drawer ──────────────────────────────────
+//
+// The operator sign-off PO-10 requires: "plus an operator sign-off before
+// approval". Each of the applicant's uploaded documents can be downloaded,
+// accepted, or rejected with a reason from a fixed list.
+
+// Presentation is looked up from a constant map keyed by the server's status
+// rather than derived from the string itself, so an unexpected value renders as
+// the neutral default instead of reaching the class attribute.
+const KYC_DOC_STATUS_PRESENTATION = {
+  missing: { label: 'Not uploaded', cls: 'kyc-doc-status-missing' },
+  awaiting_review: { label: 'Awaiting review', cls: 'kyc-doc-status-pending' },
+  accepted: { label: 'Accepted', cls: 'kyc-doc-status-accepted' },
+  rejected: { label: 'Rejected', cls: 'kyc-doc-status-rejected' },
+};
+
+// Must stay in step with DOCUMENT_REJECTION_REASONS in server.js — the server
+// rejects any code not on its own list, so a drift here shows up as a 400
+// rather than as a wrong reason being recorded.
+const KYC_DOC_REJECTION_REASONS = [
+  ['unreadable', 'Not clear enough to read'],
+  ['expired', 'Document has expired'],
+  ['too_old', 'Older than three months'],
+  ['wrong_document_type', 'Wrong type of document'],
+  ['name_mismatch', 'Name does not match the account'],
+  ['incomplete', 'Pages missing or cut off'],
+  ['other', 'Other — we will contact them'],
+];
+
+// Held so the approve button can be re-evaluated once the documents arrive,
+// which happens after the drawer has already rendered.
+let kycDocumentState = null;
+
+function renderKycDocuments(state) {
+  const emptyEl = document.getElementById('kycDocumentsEmpty');
+  const listEl = document.getElementById('kycDocumentsList');
+  const warnEl = document.getElementById('kycDocumentsGateWarning');
+  const warnTextEl = document.getElementById('kycDocumentsGateWarningText');
+
+  const requirements = state?.requirements || [];
+  if (requirements.length === 0) {
+    emptyEl.textContent = 'No onboarding requirements are configured.';
+    emptyEl.classList.remove('hidden');
+    listEl.classList.add('hidden');
+    warnEl.classList.add('hidden');
+    return;
+  }
+
+  emptyEl.classList.add('hidden');
+  listEl.classList.remove('hidden');
+
+  listEl.innerHTML = requirements
+    .map((req) => {
+      const presentation =
+        KYC_DOC_STATUS_PRESENTATION[req.status] || KYC_DOC_STATUS_PRESENTATION.missing;
+      const documentId = Number(req.document?.documentId) || 0;
+
+      // Built up before the template rather than as a nested ternary inside it.
+      // A conditional whose test is a server-sourced path reads to the escaping
+      // scanner as an unescaped interpolation — and the scanner is right to be
+      // blunt about that, so the code moves rather than the rule.
+      const issuedSuffix = req.document?.documentIssuedOn
+        ? ` &bull; dated ${formatDateOnly(req.document.documentIssuedOn)}`
+        : '';
+      const fileLine = req.document
+        ? `<p class="kyc-doc-meta">${escapeHtml(req.document.originalFileName)} &bull; sent ${formatDate(req.document.uploadedAt)}${issuedSuffix}</p>`
+        : '<p class="kyc-doc-meta">The applicant has not uploaded this yet.</p>';
+
+      // The operator's own note, shown here and nowhere the investor can reach.
+      const noteLine =
+        req.review && req.review.notes
+          ? `<p class="kyc-doc-note">Reviewer note: ${escapeHtml(req.review.notes)}</p>`
+          : '';
+
+      const reasonLine =
+        req.status === 'rejected' && req.review?.reasonCode
+          ? `<p class="kyc-doc-note">Rejected as: ${escapeHtml(req.review.reasonCode)}</p>`
+          : '';
+
+      const actions = req.document
+        ? `<div class="kyc-doc-actions">
+             <button class="ghost-btn kyc-doc-btn" type="button" data-act="download"
+                     data-docid="${documentId}"
+                     data-docname="${escapeAttr(req.document.originalFileName)}">Download</button>
+             <select class="field kyc-doc-reason" data-docid="${documentId}" aria-label="Rejection reason">
+               <option value="">Reason for rejecting…</option>
+               ${KYC_DOC_REJECTION_REASONS.map(
+                 ([value, text]) => `<option value="${escapeAttr(value)}">${escapeHtml(text)}</option>`
+               ).join('')}
+             </select>
+             <button class="decline-btn kyc-doc-btn" type="button" data-act="reject"
+                     data-docid="${documentId}">Reject</button>
+             <button class="approve-btn kyc-doc-btn" type="button" data-act="accept"
+                     data-docid="${documentId}">Accept</button>
+           </div>`
+        : '';
+
+      return `
+        <li class="kyc-doc-item">
+          <div class="kyc-doc-head">
+            <span class="kyc-doc-label">${escapeHtml(req.label)}</span>
+            <span class="kyc-doc-status ${presentation.cls}">${escapeHtml(presentation.label)}</span>
+          </div>
+          ${fileLine}
+          ${reasonLine}
+          ${noteLine}
+          ${actions}
+        </li>`;
+    })
+    .join('');
+
+  // Says plainly whether approval will actually be refused, rather than leaving
+  // the reviewer to infer it from a disabled button. `enforced` comes from the
+  // server — the portal never decides this for itself, because a client-side
+  // guess that disagreed with the API is exactly the D.26 lockout shape.
+  const outstanding = requirements.filter((req) => req.status !== 'accepted');
+  if (outstanding.length === 0) {
+    warnEl.classList.add('hidden');
+  } else {
+    warnEl.classList.remove('hidden');
+    const names = outstanding.map((req) => req.label).join(', ');
+    warnTextEl.textContent = state.enforced
+      ? `Approval is blocked until every document is accepted. Outstanding: ${names}. Declining is still available.`
+      : `Not all documents have been accepted (${names}). Document checks are not yet enforced, so approval is still permitted — confirm this is intended before approving.`;
+  }
+
+  refreshIcons();
+}
+
+async function loadKycDocuments(userId) {
+  const emptyEl = document.getElementById('kycDocumentsEmpty');
+  const listEl = document.getElementById('kycDocumentsList');
+
+  kycDocumentState = null;
+  emptyEl.textContent = 'Loading documents…';
+  emptyEl.classList.remove('hidden');
+  listEl.classList.add('hidden');
+  listEl.innerHTML = '';
+  document.getElementById('kycDocumentsGateWarning').classList.add('hidden');
+
+  try {
+    const result = await apiFetch(`/api/ops/kyc-reviews/${userId}/documents`);
+    kycDocumentState = result?.data || null;
+    renderKycDocuments(kycDocumentState);
+  } catch (error) {
+    emptyEl.textContent = `Could not load documents: ${error.message}`;
+    emptyEl.classList.remove('hidden');
+    listEl.classList.add('hidden');
+  } finally {
+    applyApproveButtonState();
+  }
+}
+
+// One place deciding whether Approve is available, because two conditions now
+// feed it — the jurisdiction verdict and the document gate — and letting each
+// set the property independently means whichever runs last silently wins.
+function applyApproveButtonState() {
+  const approveBtn = document.getElementById('kycApproveBtn');
+  if (!approveBtn || !selectedKycUser) return;
+
+  const risk = getJurisdiction(selectedKycUser);
+  const gateBlocks = Boolean(kycDocumentState?.enforced) && kycDocumentState?.complete === false;
+
+  approveBtn.disabled = !risk.canApprove || gateBlocks;
+  if (!risk.canApprove) {
+    approveBtn.title = risk.reason;
+  } else if (gateBlocks) {
+    approveBtn.title = 'Every onboarding document must be accepted before this account can be approved.';
+  } else {
+    approveBtn.title = '';
+  }
+}
+
+// Accept / reject / download, by delegation so the buttons can be re-rendered
+// freely after each action without rebinding anything.
+document.getElementById('kycDocumentsList').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-act]');
+  if (!button) return;
+
+  const action = button.dataset.act;
+  const documentId = Number(button.dataset.docid);
+  if (!documentId) return;
+
+  if (action === 'download') {
+    const fileName = button.dataset.docname || `document-${documentId}`;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = '…';
+    try {
+      const response = await fetch(`${getApiBase()}/api/ops/documents/${documentId}/file`, {
+        headers: { Authorization: `Bearer ${authSession?.token || ''}` },
+      });
+      if (!response.ok) throw new Error(`Download failed (${response.status})`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      addAudit('Document download failed', `${authSession?.user?.Email || 'Ops'} • just now`, error.message);
+      renderAudit();
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    return;
+  }
+
+  let reasonCode = null;
+  if (action === 'reject') {
+    const select = document.querySelector(`.kyc-doc-reason[data-docid="${documentId}"]`);
+    reasonCode = select?.value || '';
+    // Enforced server-side too; caught here so the reviewer gets an immediate
+    // answer rather than a round trip that comes back as a 400.
+    if (!reasonCode) {
+      const emptyEl = document.getElementById('kycDocumentsEmpty');
+      emptyEl.textContent = 'Choose a reason before rejecting a document.';
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+  }
+
+  button.disabled = true;
+  try {
+    const notes = document.getElementById('kycNotes')?.value?.trim() || '';
+    await apiFetch(`/api/ops/kyc-documents/${documentId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({
+        outcome: action === 'accept' ? 'accepted' : 'rejected',
+        ...(reasonCode ? { reasonCode } : {}),
+        ...(notes ? { notes } : {}),
+      }),
+    });
+    addAudit(
+      action === 'accept' ? 'Document accepted' : 'Document rejected',
+      `${authSession?.user?.Email || 'Ops'} • just now`,
+      `Document #${documentId} for ${selectedKycUser?.Email || 'applicant'}.`
+    );
+    renderAudit();
+    await loadKycDocuments(selectedKycUser.UserID);
+  } catch (error) {
+    const emptyEl = document.getElementById('kycDocumentsEmpty');
+    emptyEl.textContent = `Could not record that review: ${error.message}`;
+    emptyEl.classList.remove('hidden');
+    button.disabled = false;
+  }
+});
 
 // Pulls the durable decision trail from the server (kyc_decisions table via
 // GET /api/ops/kyc-reviews/:userId/history) — this is the actual record of past
@@ -2515,6 +2790,13 @@ function resetWorkspaceForSignOut() {
 
   kycQueue = [];
   selectedKycUser = null;
+  // Holds an applicant's document filenames and the reviewer's internal notes,
+  // both of which are server data about a named person. Cleared for the same
+  // reason as everything else in this function: a sign-out that only drops the
+  // token leaves the previous operator's workspace readable by the next one.
+  kycDocumentState = null;
+  const kycDocList = document.getElementById('kycDocumentsList');
+  if (kycDocList) kycDocList.innerHTML = '';
   operatorList = [];
   selectedOperatorId = null;
   bankRequestQueue = [];

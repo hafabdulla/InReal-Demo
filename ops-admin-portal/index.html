@@ -315,6 +315,22 @@
                      reviewer resolves against the applicant's documents. -->
                 <div class="edd-warning hidden" id="kycDrawerSignupMismatch"></div>
 
+                <!-- Onboarding documents the applicant uploaded, and the
+                     operator sign-off PO-10 requires before approval.
+                     Deliberately placed ABOVE the decision form: these are the
+                     evidence the declared details are checked against, so a
+                     reviewer should meet them before the approve button, not
+                     after it. -->
+                <div class="kyc-documents" id="kycDocumentsSection">
+                  <p class="kyc-form-label" style="margin-bottom:8px">Onboarding documents</p>
+                  <div class="prohibited-warning hidden" id="kycDocumentsGateWarning">
+                    <i data-lucide="file-warning" style="width:14px;height:14px;flex-shrink:0"></i>
+                    <span id="kycDocumentsGateWarningText"></span>
+                  </div>
+                  <p class="helper" id="kycDocumentsEmpty">Loading documents…</p>
+                  <ul class="kyc-doc-list hidden" id="kycDocumentsList"></ul>
+                </div>
+
                 <!-- Durable decision history pulled live from the server (kyc_decisions table) -->
                 <div class="kyc-history" id="kycHistorySection">
                   <p class="kyc-form-label" style="margin-bottom:8px">Decision history</p>

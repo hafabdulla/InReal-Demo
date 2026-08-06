@@ -9,6 +9,7 @@ import PropertiesPage from '@/pages/portal/PropertiesPage';
 import PropertyDetailPage from '@/pages/portal/PropertyDetailPage';
 import InvestmentsPage from '@/pages/portal/InvestmentsPage';
 import DocumentsPage from '@/pages/portal/DocumentsPage';
+import VerificationPage from '@/pages/portal/VerificationPage';
 import SettingsPage from '@/pages/portal/SettingsPage';
 import { AuthProvider } from '@/contexts/SQLServerAuthContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -82,6 +83,16 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <ProtectedRoute>
               <PortalLayout>
                 <DocumentsPage />
+              </PortalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/portal/verification"
+          element={
+            <ProtectedRoute>
+              <PortalLayout>
+                <VerificationPage />
               </PortalLayout>
             </ProtectedRoute>
           }
