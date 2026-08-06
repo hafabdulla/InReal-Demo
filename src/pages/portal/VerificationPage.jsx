@@ -91,7 +91,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function RequirementCard({ requirement, maxAgeMonths, onUpload, busy }) {
+function RequirementCard({ requirement, maxAgeMonths, onUpload, busy, canUpload }) {
   const fileInputRef = useRef(null);
   const [issuedOn, setIssuedOn] = useState('');
   const [pendingFile, setPendingFile] = useState(null);
@@ -99,7 +99,10 @@ function RequirementCard({ requirement, maxAgeMonths, onUpload, busy }) {
 
   const needsDate = requirement.type === 'proof_of_address';
   const guidance = REQUIREMENT_GUIDANCE[requirement.type] || { title: requirement.label, blurb: '' };
-  const isAccepted = requirement.status === 'accepted';
+  // Hidden when the account is not Pending as well as when the document is
+  // already accepted: the server refuses both, and offering a control that
+  // cannot succeed is worse than offering none.
+  const hideUploader = requirement.status === 'accepted' || !canUpload;
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -177,17 +180,23 @@ function RequirementCard({ requirement, maxAgeMonths, onUpload, busy }) {
 
         {requirement.status === 'awaiting_review' && (
           <p className="text-sm text-slate-grey">
-            Our team is checking this document. You do not need to do anything else for now — you can
-            still replace it below if you sent the wrong file.
+            Our team is checking this document. You do not need to do anything else for now
+            {/* Only promise a replacement control when one is actually rendered
+                below — when uploads are closed there is nothing there, and the
+                sentence would be telling the investor to use a control that
+                does not exist. */}
+            {hideUploader ? '.' : ' — you can still replace it below if you sent the wrong file.'}
           </p>
         )}
 
-        {isAccepted ? (
+        {requirement.status === 'accepted' && (
           <p className="text-sm text-emerald-700 flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4" />
             Checked and accepted by our team.
           </p>
-        ) : (
+        )}
+
+        {hideUploader ? null : (
           <div className="space-y-3">
             {needsDate && (
               <div>
@@ -257,6 +266,8 @@ export default function VerificationPage() {
   const [requirements, setRequirements] = useState([]);
   const [complete, setComplete] = useState(false);
   const [maxAgeMonths, setMaxAgeMonths] = useState(3);
+  const [canUpload, setCanUpload] = useState(true);
+  const [kycStatus, setKycStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [uploadingType, setUploadingType] = useState(null);
 
@@ -273,6 +284,8 @@ export default function VerificationPage() {
       if (data.success) {
         setRequirements(data.data?.requirements || []);
         setComplete(Boolean(data.data?.complete));
+        setCanUpload(data.data?.canUpload !== false);
+        setKycStatus(data.data?.kycStatus || null);
         if (data.data?.proofOfAddressMaxAgeMonths) {
           setMaxAgeMonths(data.data.proofOfAddressMaxAgeMonths);
         }
@@ -363,7 +376,23 @@ export default function VerificationPage() {
         </div>
       </motion.div>
 
-      {complete ? (
+      {!canUpload ? (
+        <div className="flex gap-3 p-5 rounded-2xl bg-gray-50 border border-gray-200">
+          <Info className="w-5 h-5 text-gray-500 shrink-0 mt-0.5" />
+          <div className="text-sm text-gray-800">
+            <p className="font-medium">
+              {kycStatus === 'Approved'
+                ? 'Your account is verified — there is nothing to upload'
+                : 'This step is closed for your account'}
+            </p>
+            <p className="mt-1">
+              {kycStatus === 'Approved'
+                ? 'Your verification has been completed, so we are no longer collecting documents here. Anything already on file stays in your My Documents page. If you need to update an identity document, please contact support.'
+                : 'A decision has already been recorded on your application, so documents can no longer be added here. Please contact support if you think this is wrong.'}
+            </p>
+          </div>
+        </div>
+      ) : complete ? (
         <div className="flex gap-3 p-5 rounded-2xl bg-emerald-50 border border-emerald-100">
           <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           <div className="text-sm text-emerald-900">
@@ -399,6 +428,7 @@ export default function VerificationPage() {
             maxAgeMonths={maxAgeMonths}
             onUpload={handleUpload}
             busy={uploadingType === requirement.type}
+            canUpload={canUpload}
           />
         ))}
       </div>

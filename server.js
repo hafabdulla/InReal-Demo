@@ -4515,6 +4515,23 @@ app.get('/api/user/kyc-documents', async (req, res) => {
 
     const state = await getOnboardingDocumentState(userId);
 
+    // The upload endpoint refuses anything other than a Pending account, so the
+    // page has to be told that — otherwise it renders a file picker and an
+    // Upload button that can only ever produce a 409. That is the "convincing
+    // placeholder wired to nothing" shape this project has now shipped three
+    // times (D.17's dead password form, D.19's badge on the wrong column, the
+    // recovery codes no endpoint accepted). Sending the status rather than
+    // letting the client infer it keeps the two in step.
+    const owner = await q(
+      `SELECT kyc_status FROM users
+       WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+      [userId]
+    );
+    if (owner.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    const kycStatus = owner[0].kyc_status;
+
     // Rebuilt field by field rather than passed through, so an operator's
     // internal note cannot reach the investor by being added to the shared
     // shape later and forgotten here. The investor sees the fixed, disclosable
@@ -4544,6 +4561,10 @@ app.get('/api/user/kyc-documents', async (req, res) => {
         requirements,
         complete: state.complete,
         proofOfAddressMaxAgeMonths: PROOF_OF_ADDRESS_MAX_AGE_MONTHS,
+        kycStatus,
+        // Single source of truth for "can this person upload right now",
+        // matching the upload endpoint's own guard exactly.
+        canUpload: kycStatus === 'Pending',
       },
     });
   } catch (error) {
