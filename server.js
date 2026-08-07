@@ -232,6 +232,25 @@ const generalLimiter = rateLimit({
   keyGenerator: getClientIp,
   validate: { trustProxy: false, xForwardedForHeader: false },
   message: { success: false, error: 'Too many requests — please try again later.' },
+
+  // The platform's own health check must never be rate-limited.
+  //
+  // `healthCheckPath: /api/health` in render.yaml, and this limiter was mounted
+  // on all of `/api`, so Render's prober was competing for the same 200-per-15-
+  // minutes budget as everything else. When it lost, Render read the 429 as the
+  // instance being unhealthy and cycled it — which is what produced the long
+  // run of "Instance failed … Service recovered" pairs in the Render log
+  // through 4–6 August. A self-inflicted restart loop: the protection was
+  // taking down the thing it was protecting.
+  //
+  // It also destroyed the signal. Once health-check failures are routine noise,
+  // a genuine outage looks exactly like the noise, and nobody investigates.
+  //
+  // Exempting it costs nothing. The endpoint returns `{status, database}` and
+  // no user data, it is unauthenticated by design, and the per-account login
+  // lockout and the tighter per-route limiters are untouched — this is the
+  // broad anti-scraping limiter only.
+  skip: (req) => `/api${req.path}` === '/api/health',
 });
 
 app.use('/api', generalLimiter);
