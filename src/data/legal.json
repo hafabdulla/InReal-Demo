@@ -1,0 +1,1812 @@
+{
+  "terms": {
+    "title": "Terms & Conditions",
+    "version": "v1.0",
+    "effectiveDate": "7 August 2026",
+    "preamble": "These InReal Terms & Conditions (these \"Terms\" ) govern access to and use of the InReal platform, website, portal, applications, dashboards, communications interfaces, and related digital services (together, the \"Platform\" ). By accessing or using the Platform, you agree to be bound by these Terms. If you do not agree, you must not access or use the Platform.",
+    "sections": [
+      {
+        "number": "1",
+        "heading": "Parties and Scope",
+        "clauses": [
+          {
+            "number": "1.1",
+            "title": null,
+            "text": "These Terms form a legally binding agreement between InReal Holdings Ltd , a BVI Business Company incorporated under the BVI Business Companies Act 2004 (company number 2205311), which currently operates the Platform ( \"InReal\" , \"we\" , \"us\" , or \"our\" ), and the person or entity accessing or using the Platform ( \"you\" or \"User\" ).",
+            "items": []
+          },
+          {
+            "number": "1.2",
+            "title": null,
+            "text": "InReal may designate a separate entity within the InReal group to own and operate the Platform (the \"Platform Operator\" ). On such designation, these Terms transfer to the Platform Operator in accordance with Section 21.3, InReal will notify you through the Platform, and references in these Terms to InReal are read as references to the Platform Operator. Such a designation does not affect your Master Framework Agreement, which remains with InReal Holdings Ltd as the holder of each Relevant Property.",
+            "items": []
+          },
+          {
+            "number": "1.3",
+            "title": null,
+            "text": "These Terms govern Platform access and use only. Any participation in a property opportunity made through the Platform is governed exclusively by the Master Framework Agreement (the \"MFA\" ) between you and InReal Holdings Ltd, each Addendum issued under it, and the InReal Policies (the \"Policies\" ), in each case as then in effect.",
+            "items": []
+          },
+          {
+            "number": "1.4",
+            "title": null,
+            "text": "In these Terms:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "\"Affiliate\" means any entity that directly or indirectly Controls, is Controlled by, or is under common Control with InReal, and \"Control\" means direct or indirect ownership of more than 50% of the voting rights of an entity, or the ability to direct its management and policies."
+              },
+              {
+                "label": "(b)",
+                "text": "\"Property Opportunity\" means a specific property made available for participation through the Platform, together with the information published on the Platform in relation to it."
+              },
+              {
+                "label": "(c)",
+                "text": "\"Business Day\" means a day, other than a Saturday, Sunday, or gazetted public holiday, on which banks are open for general business in the Dubai International Financial Centre and the United Arab Emirates and the British Virgin Islands."
+              },
+              {
+                "label": "(d)",
+                "text": "Capitalised terms not defined in these Terms have the meaning given in the MFA."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "2",
+        "heading": "Acceptance and Digital Execution",
+        "clauses": [
+          {
+            "number": "2.1",
+            "title": null,
+            "text": "By creating an account, clicking \"I Accept\" or equivalent, electronically signing, accessing the Platform, or using any Platform feature, you acknowledge that you have read, understood, and agreed to these Terms.",
+            "items": []
+          },
+          {
+            "number": "2.2",
+            "title": null,
+            "text": "You acknowledge and agree that:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "electronic acceptance through the Platform constitutes a valid and binding agreement under the DIFC Electronic Transactions Law (DIFC Law No. 2 of 2017) and applicable law;"
+              },
+              {
+                "label": "(b)",
+                "text": "Platform records, including timestamps, IP addresses, device identifiers, and acceptance logs, constitute admissible evidence of your acceptance; and"
+              },
+              {
+                "label": "(c)",
+                "text": "electronic signatures and click - through acceptance carry the same legal effect as a handwritten signature to the fullest extent permitted by law."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "3",
+        "heading": "Incorporated Documents and Order of Precedence",
+        "clauses": [
+          {
+            "number": "3.1",
+            "title": null,
+            "text": "These Terms incorporate by reference:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "the InReal Policies;"
+              },
+              {
+                "label": "(b)",
+                "text": "the Master Framework Agreement and each Addendum issued under it, in each case once executed or accepted by you; and"
+              },
+              {
+                "label": "(c)",
+                "text": "the Privacy Policy and other expressly incorporated notices or disclosures published by InReal from time to time."
+              }
+            ]
+          },
+          {
+            "number": "3.2",
+            "title": null,
+            "text": "In the event of any conflict or inconsistency, the order of precedence is:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "first, the Master Framework Agreement and any Addendum issued under it (an Addendum prevails over the main body of the MFA, but only for the property to which it relates);"
+              },
+              {
+                "label": "(b)",
+                "text": "second, the Policies; and"
+              },
+              {
+                "label": "(c)",
+                "text": "third, these Terms."
+              }
+            ]
+          },
+          {
+            "number": "3.3",
+            "title": null,
+            "text": "These Terms do not amend, replace, or override the Core Economic Rights under an executed Master Framework Agreement, as those rights are described in Section 26.2 of the MFA and Section 2 of the Policies.",
+            "items": []
+          },
+          {
+            "number": "3.4",
+            "title": null,
+            "text": "These Terms are the “Terms” incorporated into the MFA (defined there as the InReal Platform Terms & Conditions), and the Policies are the “Policies” incorporated into the MFA (defined there as the InReal Consolidated Platform Policies). The MFA was previou sly issued under the name Beneficial Ownership Agreement, and a reference in any InReal document to the “Beneficial Ownership Agreement” or “BOA” is a reference to the MFA. A change in the title of any of these documents does not affect its incorporation i nto, or its status under, the MFA.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "4",
+        "heading": "Eligibility and Lawful Use",
+        "clauses": [
+          {
+            "number": "4.1",
+            "title": null,
+            "text": "You may use the Platform only if:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "you have full legal capacity and authority to enter into binding agreements;"
+              },
+              {
+                "label": "(b)",
+                "text": "your access to and use of the Platform is lawful in each jurisdiction applicable to you;"
+              },
+              {
+                "label": "(c)",
+                "text": "you comply with all applicable laws, regulations, sanctions requirements, and tax obligations; and"
+              },
+              {
+                "label": "(d)",
+                "text": "you satisfy InReal’s onboarding, KYC/AML, sanctions, source - of - funds, and eligibility requirements as set out in the Policies."
+              }
+            ]
+          },
+          {
+            "number": "4.2",
+            "title": null,
+            "text": "Access to participation features may be restricted to Users who satisfy investor eligibility, accreditation, sophistication, or similar requirements under applicable law, as determined by InReal in accordance with the Policies.",
+            "items": []
+          },
+          {
+            "number": "4.3",
+            "title": null,
+            "text": "United States persons are not eligible to participate in any Property Opportunity. InReal may restrict access from other jurisdictions where participation would be unlawful or would expose InReal to regulatory, sanctions, or licensing risk.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "5",
+        "heading": "Platform Nature and No Investment Advice",
+        "clauses": [
+          {
+            "number": "5.1",
+            "title": null,
+            "text": "The Platform is digital infrastructure and an administration interface through which Users may review Property Opportunities and, if approved, enter into separate contractual arrangements relating to specific properties.",
+            "items": []
+          },
+          {
+            "number": "5.2",
+            "title": null,
+            "text": "InReal does not, through the Platform, provide investment advice, tax advice, legal advice, or personal financial recommendations. No content on the Platform constitutes a recommendation to enter into any transaction. You remain solely responsible for your own decisions and should obtain independent professional advice as you consider appropriate.",
+            "items": []
+          },
+          {
+            "number": "5.3",
+            "title": null,
+            "text": "Nothing in these Terms creates any fiduciary duty owed by InReal to you in relation to your use of the Platform, except to the extent such duty cannot lawfully be excluded.",
+            "items": []
+          },
+          {
+            "number": "5.4",
+            "title": null,
+            "text": "Property Opportunities involve risk, including the risk of total loss of your Contribution. Any performance information, projection, estimate, target, or illustrative scenario shown on the Platform is indicative only and does not guarantee future results.",
+            "items": []
+          },
+          {
+            "number": "5.5",
+            "title": null,
+            "text": "Participation is closed - ended and intended to be held on a buy - and - hold basis. You have no right to require redemption, repurchase, or buy - back of your interest. See Section 3.6 of the MFA and Section 10 of the Policies.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "6",
+        "heading": "Account Registration and Security",
+        "clauses": [
+          {
+            "number": "6.1",
+            "title": null,
+            "text": "To access certain features you must create an account and provide accurate, complete, and current information.",
+            "items": []
+          },
+          {
+            "number": "6.2",
+            "title": null,
+            "text": "You shall:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "maintain the confidentiality of your login credentials and security devices;"
+              },
+              {
+                "label": "(b)",
+                "text": "ensure that all information provided to InReal remains accurate and up to date;"
+              },
+              {
+                "label": "(c)",
+                "text": "notify InReal within two (2) Business Days of any suspected unauthorised access, breach, compromise, or misuse of your account; and"
+              },
+              {
+                "label": "(d)",
+                "text": "remain responsible for activity conducted through your account, unless caused solely by InReal’s gross negligence, fraud, or wilful misconduct."
+              }
+            ]
+          },
+          {
+            "number": "6.3",
+            "title": null,
+            "text": "InReal may require enhanced authentication, additional identity verification, or periodic re - verification as a condition of continued access.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "7",
+        "heading": "Compliance Obligations",
+        "clauses": [
+          {
+            "number": "7.1",
+            "title": null,
+            "text": "Your use of the Platform is subject to all onboarding, KYC/AML, sanctions screening, source - of - funds, source - of - wealth, tax documentation, and compliance monitoring procedures described in the Policies.",
+            "items": []
+          },
+          {
+            "number": "7.2",
+            "title": null,
+            "text": "InReal may suspend, restrict, delay, or refuse Platform access, account functionality, funding, distributions, Transfers, or other actions where required for compliance, legal, risk, fraud, sanctions, regulatory, or operational reasons.",
+            "items": []
+          },
+          {
+            "number": "7.3",
+            "title": null,
+            "text": "InReal is not required to disclose the specific reason for any compliance - related suspension or restriction where disclosure is prohibited or would compromise a compliance process.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "8",
+        "heading": "Participation Is Governed Separately",
+        "clauses": [
+          {
+            "number": "8.1",
+            "title": null,
+            "text": "Participation in a Property Opportunity is not effected by these Terms. It is effected through the Master Framework Agreement, which you execute once, together with a numbered Addendum for each property in which you participate, and completion of all requi red Platform procedures under the Policies.",
+            "items": []
+          },
+          {
+            "number": "8.2",
+            "title": null,
+            "text": "Neither execution of the MFA, nor acceptance of an Addendum, nor submission of funds through the Platform confers beneficial participation in any property. Under Section 6 of the MFA, beneficial participation arises only on the later of receipt by InReal H oldings Ltd of your full contribution in cleared funds and issuance of a Certificate of Beneficial Ownership.",
+            "items": []
+          },
+          {
+            "number": "8.3",
+            "title": null,
+            "text": "Nothing in these Terms grants you:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "shares or equity in InReal or any Affiliate;"
+              },
+              {
+                "label": "(b)",
+                "text": "shares or equity in any SPV, segregated portfolio, or holding vehicle, other than the Class B Shares issued under the MFA;"
+              },
+              {
+                "label": "(c)",
+                "text": "legal or equitable title to any property; or"
+              },
+              {
+                "label": "(d)",
+                "text": "voting, governance, management, board, consent, or control rights over InReal, any property, or any property - holding structure."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "9",
+        "heading": "Transfer Features",
+        "clauses": [
+          {
+            "number": "9.1",
+            "title": null,
+            "text": "The Platform may from time to time permit Users to request, list, seek, or complete Transfers of property - specific contractual interests, subject to the MFA and the Policies.",
+            "items": []
+          },
+          {
+            "number": "9.2",
+            "title": null,
+            "text": "InReal does not guarantee the existence of an active market, matching, liquidity, pricing, or the availability of any transferee. Any Transfer facility is discretionary and may be limited, suspended, or withdrawn at any time, and does not constitute a redemption or liquidity right.",
+            "items": []
+          },
+          {
+            "number": "9.3",
+            "title": null,
+            "text": "InReal is not a counterparty to any Transfer merely by administering or facilitating a Platform process. Where InReal itself acquires an interest under Section 10.6 of the Policies, it acts as principal and the conflict of interest disclosed in Section 16 of the Policies applies.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "10",
+        "heading": "Permitted and Prohibited Use",
+        "clauses": [
+          {
+            "number": "10.1",
+            "title": null,
+            "text": "You may use the Platform solely for lawful personal or internal business purposes connected with your review and administration of opportunities made available by InReal.",
+            "items": []
+          },
+          {
+            "number": "10.2",
+            "title": null,
+            "text": "You shall not:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "use the Platform for unlawful, fraudulent, deceptive, manipulative, abusive, or unauthorised purposes;"
+              },
+              {
+                "label": "(b)",
+                "text": "attempt to gain unauthorised access to any system, account, database, source code, or security feature;"
+              },
+              {
+                "label": "(c)",
+                "text": "interfere with Platform integrity, availability, or performance;"
+              },
+              {
+                "label": "(d)",
+                "text": "scrape, crawl, mirror, harvest, extract, or republish Platform data except as expressly permitted;"
+              },
+              {
+                "label": "(e)",
+                "text": "upload malicious code or harmful content;"
+              },
+              {
+                "label": "(f)",
+                "text": "misrepresent your identity, authority, investor status, source of funds, or eligibility;"
+              },
+              {
+                "label": "(g)",
+                "text": "use the Platform to market, broker, or solicit third - party products or services without prior written consent; or"
+              },
+              {
+                "label": "(h)",
+                "text": "circumvent or attempt to circumvent any compliance, eligibility, or access control."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "11",
+        "heading": "Intellectual Property",
+        "clauses": [
+          {
+            "number": "11.1",
+            "title": null,
+            "text": "The Platform, including all software, interfaces, content, branding, designs, trade marks, logos, compilations, workflows, reports, and data structures made available by InReal, is owned by or licensed to InReal and protected by applicable intellectual pro perty laws.",
+            "items": []
+          },
+          {
+            "number": "11.2",
+            "title": null,
+            "text": "Subject to these Terms, InReal grants you a limited, revocable, non - exclusive, non - transferable, non - sublicensable right to access and use the Platform for its intended purpose. This licence terminates automatically on termination of your account or these Terms.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "12",
+        "heading": "Privacy and Data Protection",
+        "clauses": [
+          {
+            "number": "12.1",
+            "title": null,
+            "text": "InReal processes personal data in accordance with its Privacy Policy and applicable law, including the DIFC Data Protection Law (DIFC Law No. 5 of 2020).",
+            "items": []
+          },
+          {
+            "number": "12.2",
+            "title": null,
+            "text": "By using the Platform you consent to the collection, use, disclosure, and transfer of your personal data by InReal and its Affiliates for onboarding, compliance, operations, administration, security, reporting, communications, and legal purposes, as further described in the Privacy Policy and Section 17 of the Policies.",
+            "items": []
+          },
+          {
+            "number": "12.3",
+            "title": null,
+            "text": "You may withdraw consent for non - essential data processing at any time by contacting InReal, subject to InReal’s right to retain data required by law, regulation, or legitimate operational necessity. InReal will inform you of the consequences of any withdr awal.",
+            "items": []
+          },
+          {
+            "number": "12.4",
+            "title": null,
+            "text": "InReal may transfer personal data outside the Dubai International Financial Centre where the receiving party provides a standard of protection comparable to the DIFC Data Protection Law, through contractual arrangements or other transfer mechanisms permitt ed under applicable law.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "13",
+        "heading": "Third-Party Services",
+        "clauses": [
+          {
+            "number": "13.1",
+            "title": null,
+            "text": "The Platform may rely on third - party service providers, including custodians, banks, payment processors, KYC vendors, sanctions screening providers, communications vendors, hosting providers, property managers, valuers, and professional advisers.",
+            "items": []
+          },
+          {
+            "number": "13.2",
+            "title": null,
+            "text": "InReal is not responsible for delays, interruptions, or failures caused by third - party systems beyond its reasonable control, except to the extent resulting from InReal’s own gross negligence, fraud, or wilful misconduct in selecting or managing such provi der.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "14",
+        "heading": "Suspension, Restriction, and Termination",
+        "clauses": [
+          {
+            "number": "14.1",
+            "title": null,
+            "text": "InReal may suspend, restrict, or terminate your account or Platform access, with or without prior notice, where:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "required by law, regulation, court order, sanctions, or government request;"
+              },
+              {
+                "label": "(b)",
+                "text": "you fail any compliance or verification requirement;"
+              },
+              {
+                "label": "(c)",
+                "text": "InReal reasonably suspects fraud, illegality, security compromise, or prohibited conduct;"
+              },
+              {
+                "label": "(d)",
+                "text": "you breach these Terms, the Policies, or the MFA; or"
+              },
+              {
+                "label": "(e)",
+                "text": "continued access would expose InReal or any User to material legal, reputational, compliance, operational, or security risk."
+              }
+            ]
+          },
+          {
+            "number": "14.2",
+            "title": null,
+            "text": "InReal shall use reasonable efforts to give notice before, or promptly after, any suspension or termination, except where notice is prohibited by law or would compromise a compliance process.",
+            "items": []
+          },
+          {
+            "number": "14.3",
+            "title": null,
+            "text": "Termination or suspension of Platform access does not by itself terminate any existing property - specific contractual right or obligation, which continues to be governed by the MFA, the applicable Addendum, and the Policies. Where Platform access is unavail able, InReal will administer your economic interests offline and will continue to issue statements and distributions in accordance with the MFA.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "15",
+        "heading": "Disclaimers",
+        "clauses": [
+          {
+            "number": "15.1",
+            "title": null,
+            "text": "The Platform is provided on an \"as is\" and \"as available\" basis, subject to applicable law. To the maximum extent permitted by law, InReal does not guarantee uninterrupted availability, error - free functionality, continuous access, or the completeness, accu racy, or timeliness of Platform content.",
+            "items": []
+          },
+          {
+            "number": "15.2",
+            "title": null,
+            "text": "Nothing in this Section 15 excludes or limits any liability that cannot lawfully be excluded under the DIFC Law of Obligations (DIFC Law No. 5 of 2005), the DIFC Contract Law (DIFC Law No. 6 of 2004), or other applicable law, or under any mandatory consume r protection law applicable in your country of residence.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "16",
+        "heading": "Limitation of Liability",
+        "clauses": [
+          {
+            "number": "16.1",
+            "title": null,
+            "text": "To the maximum extent permitted by law, InReal is not liable under or in connection with these Terms for any indirect, incidental, consequential, exemplary, special, punitive, or speculative loss, or for any loss of profits, revenue, opportunity, goodwill, or data.",
+            "items": []
+          },
+          {
+            "number": "16.2",
+            "title": null,
+            "text": "InReal’s aggregate liability under or in connection with these Terms does not exceed the greater of:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "the total Platform - specific fees paid directly by you to InReal during the twelve (12) months preceding the event giving rise to the claim; or"
+              },
+              {
+                "label": "(b)",
+                "text": "one thousand United States dollars (US$1,000)."
+              }
+            ]
+          },
+          {
+            "number": "16.3",
+            "title": null,
+            "text": "This Section 16 applies to your use of the Platform only. It does not limit InReal Holdings Ltd’s obligations under the MFA, which are governed by Section 25 of the MFA.",
+            "items": []
+          },
+          {
+            "number": "16.4",
+            "title": null,
+            "text": "Nothing in these Terms excludes or limits liability for:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "fraud or fraudulent misrepresentation;"
+              },
+              {
+                "label": "(b)",
+                "text": "wilful misconduct;"
+              },
+              {
+                "label": "(c)",
+                "text": "death or personal injury caused by negligence; or"
+              },
+              {
+                "label": "(d)",
+                "text": "any liability that cannot lawfully be excluded."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "17",
+        "heading": "Indemnity",
+        "clauses": [
+          {
+            "number": "17.1",
+            "title": null,
+            "text": "You shall indemnify and hold harmless InReal and its directors, officers, employees, Affiliates, and agents from and against losses, claims, damages, liabilities, costs, and expenses (including reasonable legal fees) arising out of or in connection with:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "your breach of these Terms;"
+              },
+              {
+                "label": "(b)",
+                "text": "your misuse of the Platform;"
+              },
+              {
+                "label": "(c)",
+                "text": "your violation of applicable law; or"
+              },
+              {
+                "label": "(d)",
+                "text": "false, misleading, incomplete, or fraudulent information supplied by you, except to the extent caused by the gross negligence, fraud, or wilful misconduct of InReal."
+              }
+            ]
+          },
+          {
+            "number": "17.2",
+            "title": null,
+            "text": "Your aggregate liability under this Section 17 does not exceed the greater of:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "the total Contributions you have made through the Platform in the twelve (12) months preceding the event giving rise to the claim; or"
+              },
+              {
+                "label": "(b)",
+                "text": "ten thousand United States dollars (US$10,000). This cap does not apply to liability arising from your fraud or wilful misconduct."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "18",
+        "heading": "Amendments",
+        "clauses": [
+          {
+            "number": "18.1",
+            "title": null,
+            "text": "InReal may amend these Terms from time to time. Material amendments will be notified through the Platform, by email, or by other reasonable means not less than thirty (30) days before the effective date.",
+            "items": []
+          },
+          {
+            "number": "18.2",
+            "title": null,
+            "text": "Where a proposed amendment would materially reduce the Platform functionality available to Users with existing participations, InReal shall consider in good faith any objection received during the notice period, but retains the right to implement amendment s required by law, regulation, or operational necessity.",
+            "items": []
+          },
+          {
+            "number": "18.3",
+            "title": null,
+            "text": "Continued use of the Platform after the effective date constitutes acceptance of the amended Terms. If you do not agree with a material amendment, you may cease using the Platform, and your economic interests will be administered offline in accordance with Section 14.3.",
+            "items": []
+          },
+          {
+            "number": "18.4",
+            "title": null,
+            "text": "No amendment to these Terms by itself amends the Core Economic Rights under an executed Master Framework Agreement.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "19",
+        "heading": "Notices",
+        "clauses": [
+          {
+            "number": "19.1",
+            "title": null,
+            "text": "Notices to you may be sent through the Platform, by email, or to any contact details associated with your account. A Platform or email notice is deemed received on the next Business Day after transmission.",
+            "items": []
+          },
+          {
+            "number": "19.2",
+            "title": null,
+            "text": "Formal notices to InReal shall be sent to legal@inreal.io, with a copy to: InReal Holdings Ltd, c/o FIDESTA Ltd., Charles Court, 1st Floor, 189 Main Street, PO Box 4406, Road Town, Tortola VG1110, British Virgin Islands.",
+            "items": []
+          },
+          {
+            "number": "19.3",
+            "title": null,
+            "text": "Each party may update its notice details by written notice to the other.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "20",
+        "heading": "Governing Law and Dispute Resolution",
+        "clauses": [
+          {
+            "number": "20.1",
+            "title": null,
+            "text": "These Terms and any non - contractual obligations arising out of or in connection with them are governed by the laws of the Dubai International Financial Centre.",
+            "items": []
+          },
+          {
+            "number": "20.2",
+            "title": null,
+            "text": "Any dispute, controversy, or claim arising out of or in connection with these Terms, including any question regarding their existence, validity, termination, or non - contractual obligations, shall be finally resolved by arbitration under the Arbitration Rul es of the Dubai International Arbitration Centre (DIAC). The seat of arbitration is the Dubai International Financial Centre. The language of the arbitration is English. The tribunal shall consist of one arbitrator unless DIAC determines otherwise.",
+            "items": []
+          },
+          {
+            "number": "20.3",
+            "title": null,
+            "text": "To the fullest extent permitted by law, each party waives any right to bring claims in a class, collective, consolidated, or representative capacity.",
+            "items": []
+          },
+          {
+            "number": "20.4",
+            "title": null,
+            "text": "Nothing in this Section 20 prevents either party from seeking urgent interim or conservatory relief from a court of competent jurisdiction.",
+            "items": []
+          },
+          {
+            "number": "20.5",
+            "title": null,
+            "text": "Nothing in this Section 20 limits any mandatory right you may have under the law of your country of residence.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "21",
+        "heading": "Miscellaneous",
+        "clauses": [
+          {
+            "number": "21.1",
+            "title": null,
+            "text": "If any provision of these Terms is invalid or unenforceable, the remaining provisions continue in full force, and the parties shall interpret these Terms to give maximum lawful effect to the intended commercial result.",
+            "items": []
+          },
+          {
+            "number": "21.2",
+            "title": null,
+            "text": "These Terms do not create any partnership, agency, joint venture, trust, or fiduciary relationship between you and InReal.",
+            "items": []
+          },
+          {
+            "number": "21.3",
+            "title": null,
+            "text": "InReal may assign or transfer these Terms in connection with a corporate reorganisation, merger, financing, asset transfer, designation of a Platform Operator under Section 1.2, or regulatory restructuring, provided such assignment does not unlawfully prej udice your rights. You may not assign your rights under these Terms without InReal’s prior written consent.",
+            "items": []
+          },
+          {
+            "number": "21.4",
+            "title": null,
+            "text": "A failure or delay by InReal in exercising any right under these Terms does not constitute a waiver of that right.",
+            "items": []
+          },
+          {
+            "number": "21.5",
+            "title": null,
+            "text": "These Terms may be accepted and executed electronically and in counterparts.",
+            "items": []
+          },
+          {
+            "number": "21.6",
+            "title": null,
+            "text": "Regulatory status disclosure. InReal is not currently licensed or regulated by the Dubai Financial Services Authority, the BVI Financial Services Commission, or any other financial services regulator, as a fund manager, securities dealer, crowdfunding operator, or financial adviser. I nReal structures each Property Opportunity as a bilateral contractual arrangement and not as a security, capital markets product, collective investment fund, or pooled investment vehicle, consistent with Section 3.3 of the MFA. Neither InReal nor any User has received any assurance from any court, regulator, or authority that this characterisation will be confirmed. If InReal obtains any licence or regulatory authorisation in the future, it will update these Terms accordingly.",
+            "items": []
+          },
+          {
+            "number": "21.7",
+            "title": null,
+            "text": "Nothing on the Platform or in these Terms constitutes an offer of securities, units in a collective investment scheme, or interests in any fund, in any jurisdiction in which such an offer would be unlawful.",
+            "items": []
+          }
+        ]
+      }
+    ]
+  },
+  "policies": {
+    "title": "Policies",
+    "version": "v1.0",
+    "effectiveDate": "7 August 2026",
+    "preamble": "These InReal Policies (the \"Policies\" ) explain how InReal works in practice — from signing up, through funding a property, to receiving distributions and exiting. These Policies form part of the InReal legal framework alongside the Master Framework Agreement (the \"MFA\" ) and each Addendum issued under it, and the InReal Terms & Conditions (the \"Terms\" ). If anything in these Policies conflicts with your MFA, the MFA takes priority. Your Core Economic Rights are protected in the MFA and cannot be changed by updating these Policies.",
+    "sections": [
+      {
+        "number": "1",
+        "heading": "How These Policies Fit Together",
+        "clauses": [
+          {
+            "number": "1.1",
+            "title": null,
+            "text": "These Policies are incorporated by reference into the Terms and into the MFA. They set out the operational detail that both documents refer to.",
+            "items": []
+          },
+          {
+            "number": "1.2",
+            "title": null,
+            "text": "InReal may update these Policies from time to time (see Section 15). Updates to these Policies do not change the Core Economic Rights under your MFA.",
+            "items": []
+          },
+          {
+            "number": "1.3",
+            "title": null,
+            "text": "If there is a conflict, the order of precedence is:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "first, your Master Framework Agreement and any Addendum issued under it (an Addendum prevails over the main body of the MFA, but only for the property to which it relates);"
+              },
+              {
+                "label": "(b)",
+                "text": "second, these Policies; and"
+              },
+              {
+                "label": "(c)",
+                "text": "third, the Terms & Conditions."
+              }
+            ]
+          },
+          {
+            "number": "1.4",
+            "title": null,
+            "text": "These Policies are operational. They do not create economic entitlements. Every economic right you hold arises under the MFA and the applicable Addendum, and is evidenced by your Certificate of Beneficial Ownership.",
+            "items": []
+          },
+          {
+            "number": "1.5",
+            "title": null,
+            "text": "These Policies are the “Policies” incorporated into the MFA (defined there as the InReal Consolidated Platform Policies), and the Terms are the “Terms” incorporated into the MFA (defined there as the InReal Platform Terms & Conditions). The MFA was previou sly issued under the name Beneficial Ownership Agreement, and a reference in any InReal document to the “Beneficial Ownership Agreement” or “BOA” is a reference to the MFA. A change in the title of any of these documents does not affect its incorporation i nto, or its status under, the MFA.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "2",
+        "heading": "Definitions",
+        "clauses": [
+          {
+            "number": null,
+            "text": "These Policies use the same defined terms as the MFA. The following additional terms are used in these Policies: \"Company\" means InReal Holdings Ltd, a BVI Business Company (company number 2205311), which holds each Relevant Property within a dedicated Segregated Portfolio and is the counterparty to your MFA. \"Core Economic Rights\" means, for the purposes of Section 15 of these Policies and Section 26.2 of the MFA:",
+            "title": null,
+            "items": [
+              {
+                "label": "(a)",
+                "text": "your Beneficial Participation Percentage as recorded in the applicable Certificate of Beneficial Ownership;"
+              },
+              {
+                "label": "(b)",
+                "text": "your entitlement to distributions pro rata to that per centage;"
+              },
+              {
+                "label": "(c)",
+                "text": "the waterfall priority in Section 13 of the MFA;"
+              },
+              {
+                "label": "(d)",
+                "text": "the no - encumbrance covenant in Section 9 of the MFA;"
+              },
+              {
+                "label": "(e)",
+                "text": "the ring - fencing and limited - recourse principles in Section 10 of the MFA;"
+              },
+              {
+                "label": "(f)",
+                "text": "the Property Liquidator mechanism in Section 19 of the MFA; and"
+              },
+              {
+                "label": "(g)",
+                "text": "the dispute resolution mechanism in Section 29 of the MFA. \"Custody Account\" means any segregated bank account, escrow account, or settlement account designated for a specific Relevant Property or Segregated Portfolio. \"Ongoing Property Costs\" has the meaning given in Section 12.5. \"Personal Use Election\" means a written election submitted by a Sole Beneficial Owner through the Platform to occupy the Relevant Property for personal use. \"Sole Beneficial Owner\" means a User holding a Beneficial Participation Percentage of 100% in respect of a Relevant Property. \"Tenant Nomination\" means a written nomination submitted by a Sole Beneficial Owner through the Platform specifying a proposed tenant and rental price."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "3",
+        "heading": "Getting Started: Onboarding and Verification",
+        "clauses": [
+          {
+            "number": null,
+            "text": "Before you can participate in any property opportunity, you need to complete our verification process. This protects you, other Users, and the integrity of the Platform.",
+            "title": null,
+            "items": []
+          },
+          {
+            "number": "3.1",
+            "title": null,
+            "text": "What we need from you:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "Proof of identity : a valid government - issued photo ID (passport, national ID card, or driving licence)."
+              },
+              {
+                "label": "(b)",
+                "text": "Proof of address : a recent utility bill, bank statement, or government - issued document showing your current residential address, dated within the last three months."
+              },
+              {
+                "label": "(c)",
+                "text": "Tax residency information : your tax identification number and country of tax residence."
+              },
+              {
+                "label": "(d)",
+                "text": "Source of funds : information on the origin of the funds you intend to contribute. The level of documentary evidence required depends on your risk tier and the size of your contribution, as set out in our internal compliance framework."
+              }
+            ]
+          },
+          {
+            "number": "3.2",
+            "title": null,
+            "text": "For entity Users (companies, trusts, foundations, and similar), we may also require constitutional documents, a certificate of incorporation or registration, beneficial ownership information for any person holding more than 25% ownership or control, and a board resolution or equivalent authorisation.",
+            "items": []
+          },
+          {
+            "number": "3.3",
+            "title": null,
+            "text": "InReal may reject, pause, or terminate onboarding at its discretion where required by law, regulation, internal policy, or risk management. Completing verification does not guarantee access to any particular property opportunity.",
+            "items": []
+          },
+          {
+            "number": "3.4",
+            "title": null,
+            "text": "We may ask you to re - verify your information periodically, or if your circumstances change. Please keep your details up to date through the Platform.",
+            "items": []
+          },
+          {
+            "number": "3.5",
+            "title": null,
+            "text": "Eligibility is assessed by reference to your jurisdiction of residence and your nationality. Where these differ, the more restrictive treatment applies. United States persons are excluded from participation.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "4",
+        "heading": "Compliance: KYC, AML, and Sanctions",
+        "clauses": [
+          {
+            "number": "4.1",
+            "title": null,
+            "text": "All Users are subject to ongoing identity verification, sanctions screening, and anti - fraud monitoring. We may use third - party providers to assist with these checks.",
+            "items": []
+          },
+          {
+            "number": "4.2",
+            "title": null,
+            "text": "InReal may freeze, suspend, refuse, reverse, or delay any transaction, distribution, or Transfer where it reasonably considers such action necessary for compliance, risk, or legal purposes.",
+            "items": []
+          },
+          {
+            "number": "4.3",
+            "title": null,
+            "text": "If we are legally required to file a report with any regulatory authority, we may not be able to tell you about it. This is a legal obligation, not a choice.",
+            "items": []
+          },
+          {
+            "number": "4.4",
+            "title": null,
+            "text": "We retain compliance records for at least five (5) years after the end of the business relationship, or such longer period as required by law.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "5",
+        "heading": "Funding Your Participation",
+        "clauses": [
+          {
+            "number": "5.1",
+            "title": null,
+            "text": "Each participation is documented by a numbered Addendum to your MFA, issued under Section 2 of the MFA. The Addendum identifies the property, your contribution, the applicable fees, and the funding deadline. You sign the MFA once; each subsequent participation requires only acceptance of a new Addendum.",
+            "items": []
+          },
+          {
+            "number": "5.2",
+            "title": null,
+            "text": "All contributions must be made in cleared funds through the payment methods available on the Platform and in the currency specified in the applicable Addendum.",
+            "items": []
+          },
+          {
+            "number": "5.3",
+            "title": null,
+            "text": "When you become a beneficial owner. Signing the MFA, accepting an Addendum, or sending funds does not by itself make you a beneficial owner. Under Section 6 of the MFA, beneficial participation is conferred only upon the later of",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "the Company receiving your full contribution in cleared f unds, and"
+              },
+              {
+                "label": "(b)",
+                "text": "the Company issuing a Certificate of Beneficial Ownership signed or stamped by a director."
+              }
+            ]
+          },
+          {
+            "number": "5.4",
+            "title": null,
+            "text": "Until conferral occurs, any amount received from you is held as a contractual prepayment. It does not earn interest and does not represent an interest in any property. If your participation does not proceed to conferral, the relevant amounts are returned t o you, net of third - party transaction costs reasonably incurred, without interest and within a reasonable period.",
+            "items": []
+          },
+          {
+            "number": "5.5",
+            "title": null,
+            "text": "We may reject:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "payments from third parties — funds must come from an account in your own name;"
+              },
+              {
+                "label": "(b)",
+                "text": "cash payments;"
+              },
+              {
+                "label": "(c)",
+                "text": "payments from banks or jurisdictions subject to sanctions or enhanced restrictions; and"
+              },
+              {
+                "label": "(d)",
+                "text": "payments that raise compliance concerns."
+              }
+            ]
+          },
+          {
+            "number": "5.6",
+            "title": null,
+            "text": "If a payment fails, is recalled, reversed, or blocked, we may suspend or unwind your participation in the relevant property, subject to applicable law and your MFA.",
+            "items": []
+          },
+          {
+            "number": "5.7",
+            "title": null,
+            "text": "If you miss a funding deadline. Section 5.3 of the MFA allows the Company to cancel, resize, delay, or reject your participation if you do not fund within five (5) Business Days of the stated deadline. In selecting between those outcomes, the Company will act in good faith and will give you a reasonable opportunity to confirm or decline the proposed outcome before it takes effect — except where the property closing timeline does not reasonably permit it, in which case we will tell you what has been done and why.",
+            "items": []
+          },
+          {
+            "number": "5.8",
+            "title": null,
+            "text": "InReal does not hold User funds in any e - money or stored value account. All contributions are directed to designated bank accounts or Custody Accounts for the benefit of the applicable Segregated Portfolio.",
+            "items": []
+          },
+          {
+            "number": "5.9",
+            "title": null,
+            "text": "Funding account details. The bank name, account name, account details, and payment reference for each property opportunity are published on the Platform funding page for that opportunity and confirmed in the applicable Addendum. Send funds only to the account details published thr ough the Platform. InReal will not notify you of a change to those details by email alone; if you receive any communication purporting to change them, contact legal@inreal.io to verify before sending funds.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "6",
+        "heading": "Custody and Segregation",
+        "clauses": [
+          {
+            "number": "6.1",
+            "title": null,
+            "text": "Each Relevant Property is held within its own Segregated Portfolio, with its own ledger and, where reasonably practicable, its own Custody Account.",
+            "items": []
+          },
+          {
+            "number": "6.2",
+            "title": null,
+            "text": "Under Section 3.5 of the MFA, each Segregated Portfolio holds a single Relevant Property. Assets, proceeds, and liabilities of one Segregated Portfolio are not pooled, aggregated, or co - mingled with those of any other.",
+            "items": []
+          },
+          {
+            "number": "6.3",
+            "title": null,
+            "text": "Where separate bank accounts are not yet available for a Segregated Portfolio, the Company maintains ledger - level segregation sufficient to identify at all times the amounts, assets, and liabilities attributable to that portfolio. This is the interim stand ard permitted by Section 10.1 of the MFA.",
+            "items": []
+          },
+          {
+            "number": "6.4",
+            "title": null,
+            "text": "Where the Company is structured as a BVI Segregated Portfolio Company, the statutory ring - fencing provisions of Part XIV of the BVI Business Companies Act 2004 provide legal protection in addition to the contractual protections in the MFA.",
+            "items": []
+          },
+          {
+            "number": "6.5",
+            "title": null,
+            "text": "No leverage. Under Section 9 of the MFA, the Company does not take out mortgages, financing facilities, or any other form of leverage against a Relevant Property in which Users hold a Beneficial Participation Percentage, without the prior written consent of all such U sers.",
+            "items": []
+          },
+          {
+            "number": "6.6",
+            "title": null,
+            "text": "InReal may appoint custodians, banks, escrow agents, or payment service providers to support the custody and settlement framework.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "7",
+        "heading": "Fees",
+        "clauses": [
+          {
+            "number": "7.1",
+            "title": null,
+            "text": "All fees applicable to the Platform and to each property opportunity are published on the Platform and described in the Fee Schedule. The fees that apply to your participation are confirmed in your Addendum and shown on your dashboard.",
+            "items": []
+          },
+          {
+            "number": "7.2",
+            "title": null,
+            "text": "The rate or amount of each fee applicable to a property opportunity is set out in the Fee Schedule for that opportunity, published on the Platform before you commit and confirmed in your Addendum. Fees may include:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "Acquisition fee : a percentage of the property acquisition cost, charged once at acquisition."
+              },
+              {
+                "label": "(b)",
+                "text": "Management fee : a percentage per annum of property value, charged quarterly and deducted before distributions."
+              },
+              {
+                "label": "(c)",
+                "text": "Performance fee : a percentage of net profits above a stated hurdle, charged on sale or liquidation."
+              },
+              {
+                "label": "(d)",
+                "text": "Disposition fee : a percentage of gross sale proceeds, charged on sale."
+              },
+              {
+                "label": "(e)",
+                "text": "Transfer fee : a fixed amount or percentage per Transfer, charged to the transferor."
+              },
+              {
+                "label": "(f)",
+                "text": "Banking and payment fees : actual costs, passed through at cost."
+              },
+              {
+                "label": "(g)",
+                "text": "Property - level costs : insurance, maintenance, property management, taxes, and other costs attributable to the property, passed through at cost."
+              }
+            ]
+          },
+          {
+            "number": "7.3",
+            "title": null,
+            "text": "Fees are applied in accordance with the waterfall in Section 13 of the MFA, and are subject to any aggregate fee cap specified in the Fee Schedule.",
+            "items": []
+          },
+          {
+            "number": "7.4",
+            "title": null,
+            "text": "InReal may update fee structures for future property opportunities. Fee changes do not apply retroactively to your existing participations.",
+            "items": []
+          },
+          {
+            "number": "7.5",
+            "title": null,
+            "text": "You can view all fees applicable to each of your properties on your Platform dashboard at any time.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "8",
+        "heading": "How Your Beneficial Participation Percentage Is Calculated",
+        "clauses": [
+          {
+            "number": "8.1",
+            "title": null,
+            "text": "Your Beneficial Participation Percentage is your Net Property Contribution divided by the total Net Property Contributions of all Users in that property. Your Net Property Contribution is your gross contribution less applicable fees and charges.",
+            "items": []
+          },
+          {
+            "number": "8.2",
+            "title": null,
+            "text": "The percentage is property - specific. If you participate in three properties, you hold three separate and independent Beneficial Participation Percentages.",
+            "items": []
+          },
+          {
+            "number": "8.3",
+            "title": null,
+            "text": "Your percentage is recorded in the Platform Records and confirmed in your Certificate of Beneficial Ownership for each property.",
+            "items": []
+          },
+          {
+            "number": "8.4",
+            "title": null,
+            "text": "If you believe there is an error, notify us within fourteen (14) Business Days of the record becoming available on your dashboard. If you do not, the recorded information is treated as accepted, absent manifest error or fraud.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "9",
+        "heading": "Distributions",
+        "clauses": [
+          {
+            "number": "9.1",
+            "title": null,
+            "text": "Distributions for each property are made solely from the cash flows and proceeds attributable to that property, after applying the waterfall in Section 13 of the MFA (property - level costs and liabilities first, then fees, then reserves, then distributions to Users).",
+            "items": []
+          },
+          {
+            "number": "9.2",
+            "title": null,
+            "text": "Reserves are capped at twenty percent (20%) of gross property income in any calendar year, unless the Company approves a higher amount with written justification to Users.",
+            "items": []
+          },
+          {
+            "number": "9.3",
+            "title": null,
+            "text": "Distributions are made in the currency shown for the property, by transfer to the bank account you have registered with us and which we have accepted.",
+            "items": []
+          },
+          {
+            "number": "9.4",
+            "title": null,
+            "text": "Distribution frequency is set on a property - by - property basis and communicated through the Platform. Unless otherwise indicated, distributions are processed quarterly.",
+            "items": []
+          },
+          {
+            "number": "9.5",
+            "title": null,
+            "text": "We may defer a distribution where:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "reserves are reasonably required for anticipated property expenses;"
+              },
+              {
+                "label": "(b)",
+                "text": "compliance checks are pending;"
+              },
+              {
+                "label": "(c)",
+                "text": "your bank details are incomplete or invalid;"
+              },
+              {
+                "label": "(d)",
+                "text": "tax determinations remain unresolved; or"
+              },
+              {
+                "label": "(e)",
+                "text": "legal, regulatory, sanctions, banking, or operational restrictions apply."
+              }
+            ]
+          },
+          {
+            "number": "9.6",
+            "title": null,
+            "text": "Where a distribution is deferred, we will provide a written explanation within ten (10) Business Days, except where disclosure is prohibited by law or by the tipping - off prohibition.",
+            "items": []
+          },
+          {
+            "number": "9.7",
+            "title": null,
+            "text": "You will receive a distribution statement for each distribution through your dashboard, showing the gross amount, deductions, withholdings, and the net amount distributed.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "10",
+        "heading": "Exit: Transfers and the Secondary Market",
+        "clauses": [
+          {
+            "number": "10.1",
+            "title": null,
+            "text": "This is a closed - ended, buy - and - hold arrangement. Under Section 3.6 of the MFA you have no right to require the Company to redeem, repurchase, or buy back your interest. Your routes to exit are",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "a Transfer permitted under Section 15 of the MFA and this Section 10, or"
+              },
+              {
+                "label": "(b)",
+                "text": "the sale or liquidation of the property itself. Any facility InReal makes available to help Users exit is discretionary and may be limited, suspended, or withdrawn at any time."
+              }
+            ]
+          },
+          {
+            "number": "10.2",
+            "title": null,
+            "text": "Transfers are permitted only where:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "the MFA permits the Transfer;"
+              },
+              {
+                "label": "(b)",
+                "text": "the Transfer is processed through the Platform;"
+              },
+              {
+                "label": "(c)",
+                "text": "both transferor and transferee satisfy compliance requirements;"
+              },
+              {
+                "label": "(d)",
+                "text": "the Transfer does not violate any law, sanctions, or contractual restriction; and"
+              },
+              {
+                "label": "(e)",
+                "text": "InReal approves the Transfer (approval not to be unreasonably withheld)."
+              }
+            ]
+          },
+          {
+            "number": "10.3",
+            "title": null,
+            "text": "InReal may facilitate a secondary marketplace on the Platform but does not guarantee liquidity, pricing, counterparty availability, or execution.",
+            "items": []
+          },
+          {
+            "number": "10.4",
+            "title": null,
+            "text": "InReal may reject a proposed Transfer where the price, counterparty, structure, or terms present compliance, regulatory, reputational, or operational concerns.",
+            "items": []
+          },
+          {
+            "number": "10.5",
+            "title": "Transfer process",
+            "text": "When you want to transfer some or all of your beneficial interest in a property:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "Submit a Transfer request through the Platform, specifying the property, the portion of your Beneficial Participation Percentage, and either the proposed buyer’s details or your asking price if listing on the secondary market."
+              },
+              {
+                "label": "(b)",
+                "text": "The buyer must be a registered User with an executed MFA and completed onboarding. If not yet registered, they must sign up and complete verification first."
+              },
+              {
+                "label": "(c)",
+                "text": "InReal screens the buyer. We may reject a Transfer if the buyer does not pass compliance checks."
+              },
+              {
+                "label": "(d)",
+                "text": "Once the buyer is verified, InReal confirms the transfer fee, any tax withholding, and settlement details to both parties through the Platform."
+              },
+              {
+                "label": "(e)",
+                "text": "On receipt of cleared funds and completion of all checks, we update the Platform Records and issue updated Certificates of Beneficial Ownership. If you transferred your entire interest, your Certificate for that property is cancelled."
+              },
+              {
+                "label": "(f)",
+                "text": "The Transfer takes effect when the Platform Records are updated. Until then you remain the holder of record and are entitled to any distributions declared."
+              },
+              {
+                "label": "(g)",
+                "text": "We aim to complete the process within fifteen (15) Business Days of receiving everything we need, subject to compliance requirements and any holding period applicable to the property."
+              },
+              {
+                "label": "(h)",
+                "text": "Once complete, the transferor has no further right to distributions, proceeds, information, or any other entitlement in respect of the transferred interest, consistent with Section 15.5 of the MFA."
+              }
+            ]
+          },
+          {
+            "number": "10.6",
+            "title": "InReal direct buyback",
+            "text": "",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "InReal may, at its sole discretion, offer to purchase your Beneficial Participation Percentage directly. This is not always available and may be offered, paused, or withdrawn at any time. It is not a redemption right, a put option, or a guarantee of li quidity, and nothing in this Section 10.6 obliges InReal to make any offer."
+              },
+              {
+                "label": "(b)",
+                "text": "To request a buyback, submit a request through the Platform. InReal will respond within ten (10) Business Days with an offer showing the buyback price, the Instant Liquidity Fee, and the expected settlement timeline."
+              },
+              {
+                "label": "(c)",
+                "text": "The Instant Liquidity Fee is what InReal charges for providing immediate liquidity. It is five percent (5%) of the buyback price and is deducted before payment to you. The current rate is published on the Platform."
+              },
+              {
+                "label": "(d)",
+                "text": "If you accept through the Platform, InReal settles within five (5) Business Days by transferring the net proceeds to your registered bank account."
+              },
+              {
+                "label": "(e)",
+                "text": "On settlement, your Beneficial Participation Percentage transfers to InReal or its designated Affiliate, your Certificate of Beneficial Ownership is cancelled, and the Platform Records are updated."
+              },
+              {
+                "label": "(f)",
+                "text": "The buyback price may be below what you originally contributed. You are never obliged to accept. You may always use the secondary market instead."
+              }
+            ]
+          },
+          {
+            "number": "10.7",
+            "title": "If a User passes away",
+            "text": "If a User dies, their beneficial interests do not disappear. Under Section 15.6 of the MFA they pass to the User’s estate or legal successor (the \"Successor\" ). This section sets out the process.",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "The Successor should contact InReal at legal@inreal.io or through the Platform, providing: a certified copy of the death certificate; a certified copy of the grant of probate, letters of administration, or equivalent; identification of the Successor an d the basis of entitlement; and, where there are multiple Successors, written instructions signed by all of them (or by the personal representative) specifying how the interests are to be divided."
+              },
+              {
+                "label": "(b)",
+                "text": "Each Successor must register on the Platform, execute the MFA, and complete onboarding and verification in the same way as any new User."
+              },
+              {
+                "label": "(c)",
+                "text": "InReal will acknowledge receipt of a notification of death within ten (10) Business Days and confirm in writing what documentation is outstanding."
+              },
+              {
+                "label": "(d)",
+                "text": "InReal will use commercially reasonable efforts to complete the transmission within sixty (60) days of receiving all required documentation, and will keep the Successor informed in writing of the status and any outstanding requirements."
+              },
+              {
+                "label": "(e)",
+                "text": "Once documentation and onboarding are complete, InReal updates the Platform Records and issues new Certificates of Beneficial Ownership. The deceased User’s Certificates are cancelled."
+              },
+              {
+                "label": "(f)",
+                "text": "Distributions that accrued but were unpaid at the date of death are released to the Successor once transmission is complete. While transmission is in progress, distributions are held in suspense."
+              },
+              {
+                "label": "(g)",
+                "text": "If no Successor comes forward within twelve (12) months of InReal becoming aware of the death, InReal may treat the interest as dormant and hold distributions in suspense until a valid claim is received or a court directs otherwise."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "11",
+        "heading": "Valuations",
+        "clauses": [
+          {
+            "number": "11.1",
+            "title": null,
+            "text": "Where a valuation is required — for Transfers, reporting, or dashboard display — InReal may use one or more of: acquisition cost adjusted for known events; third - party appraisal; broker opinion of value; discounted cash flow analysis; market comparable ana lysis; or other reasonable methodologies.",
+            "items": []
+          },
+          {
+            "number": "11.2",
+            "title": null,
+            "text": "Any valuation shown on the Platform is indicative unless expressly stated otherwise. It is not a guaranteed sale price or liquidation value, and it is not a representation that an interest can be sold at that price.",
+            "items": []
+          },
+          {
+            "number": "11.3",
+            "title": null,
+            "text": "The methodology used for a given property is disclosed on the Platform alongside the valuation.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "12",
+        "heading": "Sole Beneficial Owner Protocol",
+        "clauses": [
+          {
+            "number": "12.1",
+            "title": null,
+            "text": "If you hold 100% of the beneficial interest in a single property, the enhanced rights set out in this Section 12 are available to you in accordance with Section 12 of the MFA. This section explains how they work in practice. These rights are conferred by t hese Policies and may be varied or withdrawn for future participations in accordance with Section 15.",
+            "items": []
+          },
+          {
+            "number": "12.2",
+            "title": "Personal use",
+            "text": "",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "You may elect to occupy or personally use the Relevant Property by submitting a Personal Use Election through the Platform, specifying the start date and expected duration."
+              },
+              {
+                "label": "(b)",
+                "text": "Minimum notice: thirty (30) days before the proposed start date. Elections operate on a quarterly cycle and may be revoked or modified on thirty (30) days’ notice."
+              },
+              {
+                "label": "(c)",
+                "text": "Before personal use begins, InReal’s local property manager will conduct a pre - use condition assessment. A post - use assessment is conducted when personal use ends."
+              },
+              {
+                "label": "(d)",
+                "text": "During personal use, no rental income is generated. You are responsible for the condition of the property, fair wear and tear excepted."
+              },
+              {
+                "label": "(e)",
+                "text": "Ongoing Property Costs continue during personal use and are payable by you under Section 12.5."
+              },
+              {
+                "label": "(f)",
+                "text": "Availability is subject to local law. Personal use is only available where occupation by a beneficial owner is permitted under the law of the jurisdiction in which the property is located and does not give rise to adverse ownership, immigration, licensing, or tax consequences for you, the Com pany, or the Segregated Portfolio. InReal may decline a Personal Use Election on those grounds, and will explain the basis in writing."
+              }
+            ]
+          },
+          {
+            "number": "12.3",
+            "title": "Tenant nomination",
+            "text": "",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "You may nominate a specific tenant and propose the rental price by submitting a Tenant Nomination through the Platform, specifying the proposed tenant’s name and contact details, the proposed rental price, and the proposed lease term."
+              },
+              {
+                "label": "(b)",
+                "text": "InReal will process the nomination within fifteen (15) Business Days."
+              },
+              {
+                "label": "(c)",
+                "text": "InReal remains the lessor. The lease is executed by the Company, or by the local holding entity, on InReal’s standard lease template. You are not a party to the lease."
+              },
+              {
+                "label": "(d)",
+                "text": "For the avoidance of doubt, a Tenant Nomination is a right conferred by these Policies. It does not confer any voting, board, management, or control right over the Company or any Property Structure, and does not alter Section 4 of the MFA."
+              }
+            ]
+          },
+          {
+            "number": "12.4",
+            "title": "Grounds for rejection",
+            "text": "InReal may reject a Tenant Nomination on reasonable grounds, including:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "the proposed tenant fails KYC, AML, or sanctions screening;"
+              },
+              {
+                "label": "(b)",
+                "text": "material creditworthiness concerns;"
+              },
+              {
+                "label": "(c)",
+                "text": "the proposed rental price is materially below fair market value, as determined by InReal acting reasonably; or"
+              },
+              {
+                "label": "(d)",
+                "text": "acceptance would expose InReal, the Segregated Portfolio, or the local holding entity to legal, regulatory, or tax liability. If a nomination is rejected, InReal will provide a written explanation and you may submit a revised nomination."
+              }
+            ]
+          },
+          {
+            "number": "12.5",
+            "title": "Indemnity, holdback, and ongoing costs",
+            "text": "",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "Because you are directing the tenancy, you indemnify InReal and the Company against losses arising from a tenancy entered into pursuant to your Tenant Nomination, including tenant default, property damage, early termination, and third - party claims."
+              },
+              {
+                "label": "(b)",
+                "text": "InReal may retain up to fifteen percent (15%) of rental proceeds in a holdback reserve until the tenancy concludes without incident. The amount and release conditions are confirmed on your dashboard when the tenancy begins."
+              },
+              {
+                "label": "(c)",
+                "text": "If the holdback is insufficient to cover a loss, InReal may deduct the shortfall from future rental proceeds or invoice you directly."
+              },
+              {
+                "label": "(d)",
+                "text": "Ongoing Property Costs means management fees, property insurance, local property management fees, maintenance and repair costs, property - level taxes and statutory charges, and other recurring or ad hoc costs attributable to the property as shown on your dashboard."
+              },
+              {
+                "label": "(e)",
+                "text": "Where the property generates rental income, Ongoing Property Costs are deducted from rental proceeds before distribution, in accordance with the waterfall in Section 13 of the MFA."
+              },
+              {
+                "label": "(f)",
+                "text": "Where the property does not generate rental income, including during personal use, InReal will invoice you for Ongoing Property Costs quarterly. Payment is due within fourteen (14) days of the invoice date. Failure to pay within thirty (30) days of the due date constitutes a material breach of the MFA for the purposes of Section 18.1(b)."
+              }
+            ]
+          },
+          {
+            "number": "12.6",
+            "title": "Fees unaffected",
+            "text": "The rights in this Section 12 do not affect InReal’s entitlement to performance fees, disposition fees, or any other fees payable on the sale or liquidation of the property. These apply in full regardless of whether the property was subject to personal use or a directed tenancy.",
+            "items": []
+          },
+          {
+            "number": "12.7",
+            "title": "Deactivation",
+            "text": "The rights in this Section 12 terminate automatically if your Beneficial Participation Percentage falls below 100%. InReal will notify you through the Platform, and any active Personal Use Election or Tenant Nomination will be managed as follows:",
+            "items": [
+              {
+                "label": "(a)",
+                "text": "Personal use : you will be given sixty (60) days to vacate, after which InReal resumes standard rental management."
+              },
+              {
+                "label": "(b)",
+                "text": "Directed tenancy : the existing lease continues to its natural expiry. InReal resumes standard management for any renewal or new tenancy."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "number": "13",
+        "heading": "Tax Information",
+        "clauses": [
+          {
+            "number": "13.1",
+            "title": null,
+            "text": "InReal is not a tax adviser. You must provide all tax forms, declarations, and residency information we reasonably request, including (as applicable) W - 8, W - 9, CRS/FATCA self - certifications, or equivalents.",
+            "items": []
+          },
+          {
+            "number": "13.2",
+            "title": null,
+            "text": "InReal may withhold taxes where required by law, or where reasonably necessary pending clarification of your tax status. Amounts withheld are treated as distributed for your benefit to the extent required by law.",
+            "items": []
+          },
+          {
+            "number": "13.3",
+            "title": null,
+            "text": "We may provide annual summaries or tax - supporting documents through the Platform, but you are solely responsible for your own tax obligations, reporting, and compliance in every jurisdiction applicable to you.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "14",
+        "heading": "Records, Statements, and Your Dashboard",
+        "clauses": [
+          {
+            "number": "14.1",
+            "title": null,
+            "text": "InReal maintains Platform Records for each property, including contribution records, Net Property Contribution calculations, Beneficial Participation Percentages, distributions and withheld amounts, Transfer history, fees and cost allocations, Addenda, and Certificates of Beneficial Ownership.",
+            "items": []
+          },
+          {
+            "number": "14.2",
+            "title": null,
+            "text": "Through the Platform you have access to summary statements, distribution statements, Certificates of Beneficial Ownership, annual summary reports, and a current view of your holdings and transaction history.",
+            "items": []
+          },
+          {
+            "number": "14.3",
+            "title": null,
+            "text": "Your information rights relate only to properties in which you hold a Beneficial Participation Percentage. They do not extend to other properties or to InReal’s internal operations.",
+            "items": []
+          },
+          {
+            "number": "14.4",
+            "title": null,
+            "text": "If we identify a minor clerical or reconciliation error, we may correct it in good faith and will notify you.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "15",
+        "heading": "Changes to These Policies",
+        "clauses": [
+          {
+            "number": "15.1",
+            "title": null,
+            "text": "Material changes will be notified through the Platform, by email, or by other reasonable means on or before the effective date.",
+            "items": []
+          },
+          {
+            "number": "15.2",
+            "title": null,
+            "text": "Where a proposed change would materially affect distribution timing, fee calculation methodology, Transfer procedures, valuation methodology, or the rights in Section 12, we will provide a summary of the key changes in the notice.",
+            "items": []
+          },
+          {
+            "number": "15.3",
+            "title": null,
+            "text": "No change to these Policies reduces, rewrites, or overrides the Core Economic Rights under your MFA, consistent with Section 26.2 of the MFA.",
+            "items": []
+          },
+          {
+            "number": "15.4",
+            "title": null,
+            "text": "Changes to these Policies apply prospectively. They do not retroactively alter the terms on which an existing participation was confirmed in an Addendum or Certificate of Beneficial Ownership.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "16",
+        "heading": "Conflicts of Interest",
+        "clauses": [
+          {
+            "number": "16.1",
+            "title": null,
+            "text": "InReal and its Affiliates may act in multiple capacities — platform operator, property manager, service provider, fee recipient, and, where Section 10.6 applies, buyer of beneficial interests. These roles may give rise to conflicts of interest.",
+            "items": []
+          },
+          {
+            "number": "16.2",
+            "title": null,
+            "text": "We manage conflicts by disclosing material conflicts in the applicable Addendum or property documentation; maintaining property - specific ledger segregation; applying the waterfall and fee structures disclosed on the Platform; and exercising discretionary d ecisions, including valuation, reserve, and distribution decisions, in good faith.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "17",
+        "heading": "Privacy and Data Protection",
+        "clauses": [
+          {
+            "number": "17.1",
+            "title": null,
+            "text": "InReal processes personal data in accordance with its Privacy Policy and the DIFC Data Protection Law (DIFC Law No. 5 of 2020), consistent with Section 24 of the MFA.",
+            "items": []
+          },
+          {
+            "number": "17.2",
+            "title": null,
+            "text": "We collect and use your personal data for onboarding and identity verification; compliance; administration of your participations; distribution processing and tax reporting; Transfer facilitation; communications and Platform operations; regulatory and lega l compliance; and fraud prevention.",
+            "items": []
+          },
+          {
+            "number": "17.3",
+            "title": null,
+            "text": "We may share your personal data with Affiliates; banks and payment processors; identity verification providers; professional advisers; property managers; regulatory and tax authorities; and any person to whom disclosure is required by law.",
+            "items": []
+          },
+          {
+            "number": "17.4",
+            "title": null,
+            "text": "Personal data may be transferred outside the Dubai International Financial Centre to Affiliates, service providers, and regulatory authorities in jurisdictions where a Relevant Property is located or where InReal operates, subject to contractual protection s providing a comparable standard to the DIFC Data Protection Law.",
+            "items": []
+          },
+          {
+            "number": "17.5",
+            "title": null,
+            "text": "We retain personal data for at least five (5) years after the end of the business relationship, or such longer period as required by law.",
+            "items": []
+          },
+          {
+            "number": "17.6",
+            "title": null,
+            "text": "You may request access to or correction of your personal data by contacting privacy@inreal.io.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "18",
+        "heading": "Service Providers",
+        "clauses": [
+          {
+            "number": "18.1",
+            "title": null,
+            "text": "InReal may rely on administrators, custodians, banks, valuers, legal counsel, compliance providers, accountants, tax advisers, property managers, and other service providers to operate the Platform and administer property opportunities.",
+            "items": []
+          },
+          {
+            "number": "18.2",
+            "title": null,
+            "text": "InReal may act on information and determinations supplied by such providers unless it has actual knowledge that such reliance would be clearly improper.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "19",
+        "heading": "Notices",
+        "clauses": [
+          {
+            "number": "19.1",
+            "title": null,
+            "text": "Operational notices may be provided through the Platform, dashboard notifications, email, or such other means as InReal may designate. An operational notice is deemed received on the next Business Day after transmission.",
+            "items": []
+          },
+          {
+            "number": "19.2",
+            "title": null,
+            "text": "Formal notices to InReal shall be sent to legal@inreal.io, with a copy to: InReal Holdings Ltd, c/o FIDESTA Ltd., Charles Court, 1st Floor, 189 Main Street, PO Box 4406, Road Town, Tortola VG1110, British Virgin Islands.",
+            "items": []
+          },
+          {
+            "number": "19.3",
+            "title": null,
+            "text": "In these Policies, \"Business Day\" has the meaning given in the MFA: a day, other than a Saturday, Sunday, or gazetted public holiday, on which banks are open for general business in the Dubai International Financial Centre and the United Arab Emirates and the British Virgin Islands.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "20",
+        "heading": "Governing Law and Dispute Resolution",
+        "clauses": [
+          {
+            "number": "20.1",
+            "title": null,
+            "text": "These Policies and any non - contractual obligations arising out of or in connection with them are governed by the laws of the Dubai International Financial Centre.",
+            "items": []
+          },
+          {
+            "number": "20.2",
+            "title": null,
+            "text": "Any dispute, controversy, or claim arising out of or in connection with these Policies, including any question regarding their existence, validity, or termination, shall be finally resolved by arbitration under the Arbitration Rules of the Dubai Internatio nal Arbitration Centre (DIAC). The seat of arbitration is the Dubai International Financial Centre. The language of the arbitration is English. The tribunal shall consist of one arbitrator unless DIAC determines otherwise.",
+            "items": []
+          },
+          {
+            "number": "20.3",
+            "title": null,
+            "text": "To the fullest extent permitted by law, the parties waive any right to bring claims in a class, collective, consolidated, or representative capacity.",
+            "items": []
+          },
+          {
+            "number": "20.4",
+            "title": null,
+            "text": "Nothing in this Section 20 prevents either party from seeking urgent interim or conservatory relief from a court of competent jurisdiction.",
+            "items": []
+          },
+          {
+            "number": "20.5",
+            "title": null,
+            "text": "Nothing in this Section 20 limits any mandatory right you may have under the law of your country of residence.",
+            "items": []
+          }
+        ]
+      },
+      {
+        "number": "21",
+        "heading": "Contact Us",
+        "clauses": [
+          {
+            "number": null,
+            "text": "General enquiries: support@inreal.io Legal and compliance: legal@inreal.io Privacy: privacy@inreal.io Registered office: InReal Holdings Ltd, c/o FIDESTA Ltd., Charles Court, 1st Floor, 189 Main Street, PO Box 4406, Road Town, Tortola VG1110, British Virgin Islands.",
+            "title": null,
+            "items": []
+          }
+        ]
+      }
+    ]
+  }
+}

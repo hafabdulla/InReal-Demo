@@ -10,6 +10,7 @@ import PropertyDetailPage from '@/pages/portal/PropertyDetailPage';
 import InvestmentsPage from '@/pages/portal/InvestmentsPage';
 import DocumentsPage from '@/pages/portal/DocumentsPage';
 import VerificationPage from '@/pages/portal/VerificationPage';
+import LegalPage from '@/pages/LegalPage';
 import SettingsPage from '@/pages/portal/SettingsPage';
 import { AuthProvider } from '@/contexts/SQLServerAuthContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -35,6 +36,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             alias costs one line. Note there is still no catch-all route, so any
             other unmatched path renders a blank page — worth fixing separately. */}
         <Route path="/dashboard" element={<Navigate to="/portal" replace />} />
+
+        {/* Legal documents. Public and unauthenticated on purpose — the Terms
+            bind anyone who accesses the Platform, so they have to be readable
+            before anyone signs up or signs in. */}
+        <Route path="/terms" element={<LegalPage docKey="terms" />} />
+        <Route path="/policies" element={<LegalPage docKey="policies" />} />
 
         {/* Protected Portal Routes */}
         <Route
