@@ -35,9 +35,18 @@ const STATS = [
 export default function Hero() {
   return (
     <section className="relative lg:min-h-[calc(100vh-56px)] flex flex-col justify-center overflow-hidden bg-ir-white pt-14">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute -top-[20%] -right-[10%] w-[500px] lg:w-[700px] h-[500px] lg:h-[700px] rounded-full bg-ir-teal/[0.05] blur-[180px]" />
-        <div className="absolute -bottom-[20%] -left-[15%] w-[400px] lg:w-[600px] h-[400px] lg:h-[600px] rounded-full bg-ir-teal/[0.03] blur-[140px]" />
+      {/* Background. The previous version was flat white with two blurs at 3–5%
+          opacity, which is invisible in practice — the section read as blank.
+          This is a gradient mesh: a cool wash top-left so the headline stays
+          crisp, teal blooming behind the device cluster, and a warm accent
+          bottom-right. The warm note is what stops an all-teal page feeling
+          clinical, and it is why the reference site does the same thing. */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute inset-0 bg-[linear-gradient(158deg,#ffffff_0%,#f8fdfd_34%,#edfaf8_60%,#fef7ee_100%)]" />
+        <div className="absolute -left-[14%] -top-[18%] h-[420px] w-[420px] rounded-full bg-[#cfeeff]/50 blur-[120px] lg:h-[560px] lg:w-[560px]" />
+        <div className="absolute -right-[8%] top-[2%] h-[460px] w-[460px] rounded-full bg-ir-teal/[0.16] blur-[130px] lg:h-[640px] lg:w-[640px]" />
+        <div className="absolute left-[38%] top-[44%] h-[360px] w-[360px] rounded-full bg-[#7de3d0]/25 blur-[120px] lg:h-[480px] lg:w-[480px]" />
+        <div className="absolute -bottom-[12%] right-[6%] h-[320px] w-[320px] rounded-full bg-[#ffd9a3]/45 blur-[110px] lg:h-[440px] lg:w-[440px]" />
       </div>
 
       <div className="ir-container relative z-10 pt-8 md:pt-12 lg:pt-16 pb-10 md:pb-12">
