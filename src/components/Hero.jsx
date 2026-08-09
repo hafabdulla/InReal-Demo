@@ -6,30 +6,22 @@ import HeroPhones from './HeroPhones'
 
 const PORTAL_URL = '#register'
 
-// ⚠️ THESE FOUR FIGURES ARE NOT ALL REAL, AND THREE OF THEM ARE THE SAME CLASS
-// OF CLAIM THE PRODUCT OWNER ORDERED REMOVED FROM THE LOGIN PAGE ON 31 JULY.
+// Three figures were removed from here on 07 Aug 2026 on the product owner's
+// instruction: "1,200+ Registered Users", "$82,500 Property Transactions" and
+// "7.6% Avg. APY". None was real — InReal is pre-launch, no transaction has
+// settled, and there is no track record to average — and the APY one was an
+// unqualified return claim on a public financial page, which is a compliance
+// matter rather than a copy decision.
 //
-// PO-9: take down the "$2.5M invested / 750 investors / 15% average returns"
-// tiles — "We will put them back after our pilots." The instruction named the
-// login page, but the reason was that none of the numbers were real, and that
-// reason applies here identically:
+// This completes PO-9 (31 July), which took the equivalent tiles off the login
+// page: "We will put them back after our pilots." The same applies here — when
+// figures return to this slot they must be real and carry risk disclosure.
 //
-//   • Minimum Investment $500  — real, matches the product and the copy above.
-//   • Registered Users 1,200+  — InReal is pre-launch. Not real.
-//   • Property Transactions    — no transaction has been settled. Not real.
-//   • Avg. APY 7.6%            — no track record exists to average. Not real,
-//                                AND an unqualified return claim on a public
-//                                financial page, which is a compliance matter
-//                                rather than a copy decision.
-//
-// Left in place rather than deleted here because the PO has explicitly said
-// they want figures in this slot once the pilots produce them — replacing them
-// is their call, not a silent edit. Raised for a decision; see the tracker.
+// The minimum is kept because it is true and matches the product and the
+// paragraph above it. DO NOT add a figure here that the pilots have not
+// actually produced.
 const STATS = [
   { value: 500, prefix: '$', suffix: '', label: 'Minimum Investment' },
-  { value: 1200, prefix: '', suffix: '+', label: 'Registered Users' },
-  { value: 82500, prefix: '$', suffix: '', label: 'Property Transactions' },
-  { value: 7.6, suffix: '%', label: 'Avg. APY', decimals: 1 },
 ]
 
 export default function Hero() {
@@ -98,7 +90,9 @@ export default function Hero() {
 
         <motion.div variants={lineGrow} initial="hidden" animate="visible" className="mt-12 md:mt-16 h-[1px] ir-depth-line origin-left" />
 
-        <motion.div variants={staggerContainer(0.1)} initial="hidden" whileInView="visible" viewport={sectionViewport} className="mt-8 md:mt-10 grid grid-cols-2 md:grid-cols-4 gap-y-7 gap-x-4 justify-center text-center">
+        {/* One real figure, centred. A lone tile left in a four-column grid
+            reads as three that failed to load. */}
+        <motion.div variants={staggerContainer(0.1)} initial="hidden" whileInView="visible" viewport={sectionViewport} className="mt-8 md:mt-10 flex flex-wrap items-start justify-center gap-x-14 gap-y-7 text-center">
           {STATS.map((s, i) => (
             <motion.div key={i} variants={staggerItem} className="group">
               <div className="text-[clamp(1.75rem,7vw,3rem)] font-bold text-ir-teal leading-none tracking-tight font-mono"><AnimatedCounter target={s.value} prefix={s.prefix} suffix={s.suffix} decimals={s.decimals || 0} /></div>

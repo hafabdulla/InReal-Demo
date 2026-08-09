@@ -65,29 +65,56 @@ function Phone({ className, style, delay, children, screenClass = 'bg-white' }) 
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 1.1, ease: EASE_PREMIUM, delay }}
       style={{ transformPerspective: 1600, ...style }}
-      className={`absolute rounded-[2.1rem] bg-gradient-to-br from-[#4a4e55] via-[#15171a] to-[#33373d] p-[2px] shadow-[0_45px_90px_-25px_rgba(10,20,30,0.45),0_25px_50px_-30px_rgba(10,20,30,0.4)] lg:rounded-[2.8rem] ${className}`}
+      // The frame gradient runs light → dark → light rather than simply dark.
+      // A real metal edge catches the light on BOTH rims and goes dark across
+      // the middle face; a single dark gradient reads as a printed border, which
+      // is what the first version looked like.
+      className={`absolute rounded-[2.1rem] p-[2px] shadow-[0_50px_90px_-28px_rgba(12,25,35,0.42),0_28px_45px_-30px_rgba(12,25,35,0.4)] lg:rounded-[2.8rem] ${className}`}
+      // eslint-disable-next-line
+      data-frame=""
     >
+      <div className="absolute inset-0 rounded-[2.1rem] bg-[linear-gradient(142deg,#a2a8b0_0%,#454a52_14%,#111316_46%,#23262b_74%,#868d96_100%)] lg:rounded-[2.8rem]" />
+
       {/* Black bezel */}
-      <div className="relative h-full w-full rounded-[2rem] bg-[#0a0b0d] p-[5px] lg:rounded-[2.65rem] lg:p-[8px]">
-        {/* Side buttons */}
-        <span className="absolute -left-[2px] top-[19%] h-[26px] w-[2px] rounded-l bg-[#2c3037] lg:h-[34px]" />
-        <span className="absolute -left-[2px] top-[30%] h-[40px] w-[2px] rounded-l bg-[#2c3037] lg:h-[52px]" />
-        <span className="absolute -right-[2px] top-[26%] h-[46px] w-[2px] rounded-r bg-[#2c3037] lg:h-[60px]" />
+      <div className="relative h-full w-full rounded-[2rem] bg-[#08090b] p-[5px] lg:rounded-[2.65rem] lg:p-[8px]">
+        {/* Hairline highlight where the bezel meets the frame. Tiny, and the
+            thing that stops the two blacks reading as one flat shape. */}
+        <div className="pointer-events-none absolute inset-0 rounded-[2rem] ring-1 ring-inset ring-white/[0.09] lg:rounded-[2.65rem]" />
+
+        {/* Side buttons, raised off the frame with their own highlight */}
+        <span className="absolute -left-[3px] top-[18%] h-[24px] w-[3px] rounded-l-sm bg-gradient-to-r from-[#8f959d] to-[#33373d] lg:h-[32px]" />
+        <span className="absolute -left-[3px] top-[29%] h-[38px] w-[3px] rounded-l-sm bg-gradient-to-r from-[#8f959d] to-[#33373d] lg:h-[50px]" />
+        <span className="absolute -right-[3px] top-[25%] h-[44px] w-[3px] rounded-r-sm bg-gradient-to-l from-[#8f959d] to-[#33373d] lg:h-[58px]" />
 
         <div className={`relative h-full w-full overflow-hidden rounded-[1.7rem] lg:rounded-[2.25rem] ${screenClass}`}>
           {/* Dynamic Island */}
           <div className="absolute left-1/2 top-[6px] z-30 h-[13px] w-[46px] -translate-x-1/2 rounded-full bg-black lg:top-[9px] lg:h-[19px] lg:w-[66px]" />
           {children}
-          {/* Glass glare — the single biggest cue that this is a screen and not
-              a card. Non-interactive so it never eats a click. */}
-          <div className="pointer-events-none absolute inset-0 z-40 bg-gradient-to-br from-white/[0.16] via-white/[0.02] to-transparent" />
+
+          {/* Glass. Three layers, and it needs all three: a broad sheen, a hard
+              diagonal streak where the light source is, and a vignette so the
+              screen looks recessed behind glass rather than printed on it. */}
+          <div className="pointer-events-none absolute inset-0 z-40 bg-gradient-to-br from-white/[0.18] via-white/[0.03] to-transparent" />
           <div
-            className="pointer-events-none absolute -left-[30%] top-0 z-40 h-full w-[55%] opacity-[0.13]"
-            style={{ background: 'linear-gradient(105deg, transparent, #fff 45%, transparent)', transform: 'skewX(-14deg)' }}
+            className="pointer-events-none absolute -left-[35%] top-0 z-40 h-full w-[60%] opacity-[0.16]"
+            style={{ background: 'linear-gradient(100deg, transparent, #fff 42%, transparent)', transform: 'skewX(-16deg)' }}
           />
+          <div className="pointer-events-none absolute inset-0 z-40 rounded-[1.7rem] shadow-[inset_0_0_28px_rgba(0,0,0,0.30)] lg:rounded-[2.25rem]" />
         </div>
       </div>
     </motion.div>
+  )
+}
+
+/** Soft ground shadow. Sits behind a phone and sells its weight. */
+function ContactShadow({ className }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 1.2, delay: 0.7 }}
+      className={`pointer-events-none absolute rounded-[50%] bg-[#0d2b33]/[0.22] blur-[30px] lg:blur-[40px] ${className}`}
+    />
   )
 }
 
@@ -102,12 +129,18 @@ const SPARK = 'M0,45 L24,39 L48,42 L72,30 L96,34 L120,22 L144,26 L168,14 L192,18
 
 export default function HeroPhones() {
   return (
-    <div className="relative mt-6 h-[420px] sm:h-[520px] lg:h-[640px] lg:mt-0" aria-hidden="true">
+    <div className="relative mt-6 h-[420px] sm:h-[470px] lg:h-[590px] lg:mt-0" aria-hidden="true">
+      {/* Ground shadows, behind everything. Without them the phones have no
+          weight — they read as stickers laid on the background rather than
+          objects standing in the scene. */}
+      <ContactShadow className="hidden sm:block sm:bottom-[11%] sm:left-[1%] sm:h-[34px] sm:w-[146px] lg:bottom-[8%] lg:left-0 lg:h-[46px] lg:w-[192px]" />
+      <ContactShadow className="bottom-[13%] left-[calc(50%-76px)] h-[32px] w-[152px] sm:bottom-[11%] sm:left-auto sm:right-[1%] lg:bottom-[6%] lg:right-0 lg:h-[48px] lg:w-[220px]" />
+
       {/* ── Back phone: a property ──────────────────────────────────────── */}
       <Phone
         delay={0.45}
         style={{ rotateX: 3, rotateY: 16, rotateZ: -7 }}
-        className="hidden sm:block sm:left-[2%] sm:top-[9%] sm:h-[360px] sm:w-[186px] lg:left-0 lg:h-[468px] lg:w-[240px]"
+        className="hidden sm:block sm:left-0 sm:top-[10%] sm:h-[338px] sm:w-[174px] lg:left-0 lg:top-[12%] lg:h-[418px] lg:w-[220px]"
       >
         <div className="flex h-full flex-col">
           <StatusBar />
@@ -143,10 +176,11 @@ export default function HeroPhones() {
             <p className="mt-1 text-[6.5px] text-ir-dark/45 lg:text-[8.5px]">68% funded · 41 investors</p>
 
             <div className="mt-2.5 space-y-[5px] border-t border-ir-dark/[0.07] pt-2 lg:mt-3 lg:space-y-[7px] lg:pt-2.5">
+              {/* Two rows, not three. The third pushed "Invest now" against the
+                  bottom bezel and it was being clipped. */}
               {[
                 ['Monthly rent', '$2,340'],
                 ['Ownership from', '$500'],
-                ['Managed by', 'InReal'],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between">
                   <span className="text-[7px] text-ir-dark/45 lg:text-[9px]">{k}</span>
@@ -167,7 +201,7 @@ export default function HeroPhones() {
         delay={0.25}
         style={{ rotateX: 2, rotateY: -13, rotateZ: 5 }}
         screenClass="bg-[#0d0f12]"
-        className="left-[calc(50%-97px)] top-[3%] z-10 h-[380px] w-[194px] sm:left-auto sm:right-[3%] sm:h-[430px] sm:w-[218px] lg:right-[2%] lg:h-[540px] lg:w-[276px]"
+        className="left-[calc(50%-95px)] top-[2%] z-10 h-[366px] w-[190px] sm:left-auto sm:right-0 sm:top-0 sm:h-[398px] sm:w-[204px] lg:right-0 lg:top-0 lg:h-[492px] lg:w-[262px]"
       >
         <div className="flex h-full flex-col">
           <StatusBar dark />
@@ -243,7 +277,12 @@ export default function HeroPhones() {
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.8, ease: EASE_PREMIUM, delay: 1.05 }}
-        className="absolute left-[26%] top-[13%] z-20 hidden w-[128px] rounded-xl bg-white p-1.5 shadow-[0_22px_45px_-12px_rgba(10,20,30,0.35)] sm:block lg:left-[30%] lg:top-[15%] lg:w-[162px] lg:rounded-2xl lg:p-2"
+        // Sits low in the gap, deliberately. At its original top-[13%] it
+        // landed straight over the dark phone's "$12,450", leaving ",450"
+        // visible — the one number in the whole composition that has to be
+        // readable. Down here it crosses the two phones where they show a chart
+        // and a list, so the overlap reads as layering instead of damage.
+        className="absolute left-[30%] top-[44%] z-20 hidden w-[124px] rounded-xl bg-white p-1.5 shadow-[0_22px_45px_-12px_rgba(10,20,30,0.35)] sm:block lg:left-[34%] lg:top-[46%] lg:w-[156px] lg:rounded-2xl lg:p-2"
         style={{ transformPerspective: 1200, rotateZ: -3 }}
       >
         <div className="relative h-[52px] w-full overflow-hidden rounded-lg bg-gradient-to-br from-[#1b6f8f] to-[#0d3f52] lg:h-[68px] lg:rounded-xl">
@@ -261,7 +300,7 @@ export default function HeroPhones() {
         initial={{ opacity: 0, y: 26, x: -18 }}
         animate={{ opacity: 1, y: 0, x: 0 }}
         transition={{ duration: 0.85, ease: EASE_PREMIUM, delay: 1.3 }}
-        className="absolute bottom-[3%] left-0 z-30 w-[196px] rounded-xl border border-black/[0.04] bg-white/95 p-2.5 shadow-[0_22px_50px_-12px_rgba(10,20,30,0.3)] backdrop-blur-sm sm:w-[216px] lg:bottom-[6%] lg:left-[4%] lg:w-[262px] lg:rounded-2xl lg:p-3.5"
+        className="absolute bottom-[1%] left-0 z-30 w-[190px] rounded-xl border border-black/[0.04] bg-white/95 p-2.5 shadow-[0_22px_50px_-12px_rgba(10,20,30,0.3)] backdrop-blur-sm sm:bottom-[2%] sm:w-[210px] lg:bottom-[3%] lg:left-[2%] lg:w-[252px] lg:rounded-2xl lg:p-3.5"
       >
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ir-teal/15 lg:h-10 lg:w-10">
@@ -276,16 +315,11 @@ export default function HeroPhones() {
         </div>
       </motion.div>
 
-      {/* ── Floating: this month's rent ─────────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 18, x: 18 }}
-        animate={{ opacity: 1, y: 0, x: 0 }}
-        transition={{ duration: 0.85, ease: EASE_PREMIUM, delay: 1.5 }}
-        className="absolute right-0 top-[44%] z-30 rounded-xl border border-black/[0.04] bg-white/95 px-3 py-2 shadow-[0_20px_45px_-12px_rgba(10,20,30,0.3)] backdrop-blur-sm lg:right-[-2%] lg:rounded-2xl lg:px-4 lg:py-3"
-      >
-        <p className="text-[7px] uppercase tracking-wider text-ir-dark/40 lg:text-[9px]">This month's rent</p>
-        <p className="mt-[1px] font-mono text-[15px] font-bold leading-none text-ir-dark lg:text-[21px]">$542.00</p>
-      </motion.div>
+      {/* A fourth floating card ("This month's rent — $542.00") was removed
+          here. It said the same thing as the notification above it, and sat on
+          top of the dark phone's figures to do so. Two phones and two floating
+          elements is the composition; a fifth object was crowding, not
+          layering. */}
     </div>
   )
 }
