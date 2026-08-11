@@ -23,7 +23,9 @@ A real-estate fractional-investment platform, currently in a pre-launch pilot. I
 
 Each has its own `JWT_SECRET` and `TOTP_ENCRYPTION_KEY`. **A migration run locally no longer reaches production** — it has to be applied there explicitly. That is the one new failure mode the split introduced: ship code that needs a column, forget the production migration, and those endpoints 500. **Migrations go to production BEFORE the code that needs them, never after.**
 
-**Supabase Storage is still shared** — documents live in a bucket, not the database, so local uploads still land in the production bucket. Half the split remains.
+**Storage is split too, as of 11 Aug 2026.** Each project has its own private `user-documents` bucket, so a local upload lands in the local bucket and never touches production. This entry previously read "storage is still shared, half the split remains" — that was true when the databases were split on 06 Aug and is no longer.
+
+**The two halves must stay in the same project.** A document is a row in `user_documents` *plus* an object in the bucket; point them at different projects and every upload succeeds while writing a row referencing a file the other environment holds, so downloads 404 and the orphans surface later by hand (22 had to be cleaned up in August). `server.js` now compares the project ref in `SUPABASE_URL` against the one in `DATABASE_URL` at boot and prints a loud warning if they differ — a warning, not an exit, because a mismatch degrades documents while leaving both portals working.
 
 ## Before touching anything
 
@@ -59,7 +61,7 @@ Each has its own `JWT_SECRET` and `TOTP_ENCRYPTION_KEY`. **A migration run local
 | `DATABASE_URL` | Everything | Supabase Postgres connection string |
 | `DB_SSL` | DB connection | `true` |
 | `JWT_SECRET` | Auth | Server refuses to boot without it |
-| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Document storage | Server refuses to boot without these — used for the private Storage bucket, not auth |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Document storage | Server refuses to boot without these — used for the private Storage bucket, not auth. **Must point at the same Supabase project as `DATABASE_URL`**; the server compares the two project refs at boot and warns loudly if they diverge. Local → `yikifsvzxdjvfkxknhpp`, production (Render) → `xxyvfaczurcptmxcgolt` |
 | `SUPABASE_DOCUMENTS_BUCKET` | Document storage | Optional, defaults to `user-documents` |
 | `TOTP_ENCRYPTION_KEY` | 2FA + bank details + **operator login** | 64 hex chars (32 bytes). Encrypts TOTP secrets AND bank account numbers — one key for both, deliberately (same risk profile, no reason for two). **Checked loudly at boot but NOT fatal** — the server prints a prominent warning and keeps serving. Briefly made a hard `exit(1)` on 05 Aug and reverted the same day: without the key only 2FA, bank details and operator login degrade, so exiting turns a contained failure into a total outage of both portals. The endpoints that need it return a named error instead of an opaque 500 |
 | `REQUIRE_OPERATOR_2FA` | Operator login | `true` makes 2FA **mandatory** for operators — an un-enrolled operator is refused with `OPERATOR_2FA_REQUIRED`. Defaults to `false`, which challenges enrolled operators and lets the rest in with a nudge. **Check every operator has actually enrolled before flipping it**, or you lock people out of production; enrolment lives behind this same login, so they cannot fix it themselves |

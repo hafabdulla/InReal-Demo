@@ -114,6 +114,55 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+// ── Storage and database must belong to the SAME Supabase project ───────────
+//
+// A document is two halves: a row in `user_documents` and an object in a
+// Storage bucket. Point them at different projects and every upload succeeds
+// while writing a row that references a file the other environment holds —
+// downloads 404, and the orphans are only found later by hand. That is not
+// hypothetical: 22 orphaned objects had to be cleaned up in August after local
+// uploads landed in the production bucket while the two shared one project.
+//
+// When the databases were split, storage was initially left shared and the
+// tracker carried it as "half the split remains". This check is what makes the
+// remaining half self-enforcing rather than a line in a document.
+//
+// A warning, not an exit. Same reasoning as TOTP_ENCRYPTION_KEY: a mismatch
+// degrades document storage but leaves login, KYC review and everything else
+// working, so killing the process turns a contained fault into a total outage
+// of both portals. It is printed loudly enough not to be missed.
+function supabaseProjectRef(value) {
+  if (!value) return null;
+  // Storage: https://<ref>.supabase.co
+  const fromUrl = value.match(/^https:\/\/([a-z0-9]{20})\.supabase\./i);
+  if (fromUrl) return fromUrl[1];
+  // Pooler connection: postgres://postgres.<ref>:…@aws-…pooler.supabase.com
+  const fromPooler = value.match(/\/\/postgres\.([a-z0-9]{20}):/i);
+  if (fromPooler) return fromPooler[1];
+  // Direct connection: postgres://postgres:…@db.<ref>.supabase.co
+  const fromDirect = value.match(/@db\.([a-z0-9]{20})\.supabase\./i);
+  if (fromDirect) return fromDirect[1];
+  return null;
+}
+
+const storageProjectRef = supabaseProjectRef(SUPABASE_URL);
+const databaseProjectRef = supabaseProjectRef(process.env.DATABASE_URL);
+if (storageProjectRef && databaseProjectRef && storageProjectRef !== databaseProjectRef) {
+  console.error(
+    '\n**********************************************************************\n' +
+    'WARNING: Supabase Storage and the database are in DIFFERENT projects.\n' +
+    `  database -> ${databaseProjectRef}\n` +
+    `  storage  -> ${storageProjectRef}\n` +
+    'Every document uploaded from here will write its row to one project and\n' +
+    'its file to the other. Uploads will appear to succeed and downloads will\n' +
+    'return "Document file not found".\n' +
+    'Fix SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY so they match DATABASE_URL.\n' +
+    '**********************************************************************\n'
+  );
+} else if (storageProjectRef && databaseProjectRef) {
+  console.log(`Supabase project: ${storageProjectRef} (database and storage matched)`);
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
