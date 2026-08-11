@@ -1687,6 +1687,152 @@ const KYC_DOC_REJECTION_REASONS = [
 // which happens after the drawer has already rendered.
 let kycDocumentState = null;
 
+// ── Document viewer ─────────────────────────────────────────────────────────
+//
+// Shows a passport or proof of address INSIDE this window. It never produces a
+// shareable address for the file.
+//
+// How: the file is fetched with the operator's bearer token, exactly like the
+// download path, and the resulting Blob is wrapped in an object URL. That URL
+// is origin-scoped, meaningless in anyone else's browser, dies with the tab,
+// and is revoked the moment the viewer closes — so there is nothing to copy
+// out, forward, or leave in history. Compliance Manual §9 is explicit that
+// there is to be "no link-sharing of any KYC document, ever", and a signed
+// Storage URL would have been exactly that.
+//
+// The object URL is deliberately never written into an <a href> or anywhere
+// else the browser exposes a "copy link" affordance — only into the src of the
+// frame doing the rendering.
+let docViewerObjectUrl = null;
+let docViewerFile = null;
+
+function releaseDocViewerUrl() {
+  if (docViewerObjectUrl) {
+    URL.revokeObjectURL(docViewerObjectUrl);
+    docViewerObjectUrl = null;
+  }
+}
+
+function closeDocumentViewer() {
+  const viewer = document.getElementById('docViewer');
+  if (viewer) viewer.classList.add('hidden');
+  const body = document.getElementById('docViewerBody');
+  // Tear the frame down BEFORE revoking, or the browser keeps the last painted
+  // page around in a detached document.
+  if (body) body.innerHTML = '<p class="helper" id="docViewerStatus">Loading…</p>';
+  releaseDocViewerUrl();
+  docViewerFile = null;
+}
+
+async function openDocumentViewer(documentId, fileName) {
+  const viewer = document.getElementById('docViewer');
+  const body = document.getElementById('docViewerBody');
+
+  // Any previously-open document is released before another is fetched, so at
+  // most one object URL exists at a time.
+  releaseDocViewerUrl();
+  docViewerFile = { documentId, fileName };
+
+  document.getElementById('docViewerTitle').textContent = fileName || `Document #${documentId}`;
+  body.innerHTML = '<p class="helper">Loading…</p>';
+  viewer.classList.remove('hidden');
+  refreshIcons();
+
+  try {
+    const response = await fetch(`${getApiBase()}/api/ops/documents/${documentId}/file`, {
+      headers: { Authorization: `Bearer ${authSession?.token || ''}` },
+    });
+    if (!response.ok) throw new Error(`Could not load the document (${response.status})`);
+    const blob = await response.blob();
+    docViewerObjectUrl = URL.createObjectURL(blob);
+
+    const type = blob.type || '';
+    body.innerHTML = '';
+    if (type.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.alt = fileName || 'Uploaded document';
+      // Upload validation only checks the leading magic bytes, so a truncated
+      // or corrupt file passes it and reaches storage intact-looking. Without
+      // this the reviewer gets a broken-image icon and no idea whether the
+      // problem is the file or the portal — and "unreadable" is a rejection
+      // reason they are expected to judge.
+      img.onerror = () => {
+        body.innerHTML = '';
+        const p = document.createElement('p');
+        p.className = 'helper';
+        p.textContent =
+          'This image could not be displayed — the file may be incomplete or corrupt. Download it to check, and reject as "not clear enough to read" if the applicant needs to send it again.';
+        body.appendChild(p);
+      };
+      img.src = docViewerObjectUrl;
+      body.appendChild(img);
+    } else if (type === 'application/pdf') {
+      const frame = document.createElement('iframe');
+      frame.src = docViewerObjectUrl;
+      frame.title = fileName || 'Uploaded document';
+      body.appendChild(frame);
+    } else {
+      // Only PDF, JPEG and PNG can ever reach storage — the upload endpoints
+      // check magic bytes — so this is a genuine "should not happen" rather
+      // than an expected format. Say so instead of rendering a blank frame.
+      const p = document.createElement('p');
+      p.className = 'helper';
+      p.textContent = `This file cannot be previewed here (${type || 'unknown type'}). Use Download instead.`;
+      body.appendChild(p);
+    }
+  } catch (error) {
+    body.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'helper';
+    p.textContent = error.message;
+    body.appendChild(p);
+  }
+}
+
+// Authenticated blob download, shared by the row button and the viewer footer
+// so there is one implementation rather than two that can drift.
+async function downloadDocument(documentId, fileName, button) {
+  const originalText = button ? button.textContent : null;
+  if (button) {
+    button.disabled = true;
+    button.textContent = '…';
+  }
+  try {
+    const response = await fetch(`${getApiBase()}/api/ops/documents/${documentId}/file`, {
+      headers: { Authorization: `Bearer ${authSession?.token || ''}` },
+    });
+    if (!response.ok) throw new Error(`Download failed (${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName || `document-${documentId}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    addAudit('Document download failed', `${authSession?.user?.Email || 'Ops'} • just now`, error.message);
+    renderAudit();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+document.getElementById('docViewerCloseBtn').addEventListener('click', closeDocumentViewer);
+document.getElementById('docViewerBackdrop').addEventListener('click', closeDocumentViewer);
+document.getElementById('docViewerDownloadBtn').addEventListener('click', (event) => {
+  if (docViewerFile) downloadDocument(docViewerFile.documentId, docViewerFile.fileName, event.currentTarget);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !document.getElementById('docViewer').classList.contains('hidden')) {
+    closeDocumentViewer();
+  }
+});
+
 function renderKycDocuments(state) {
   const emptyEl = document.getElementById('kycDocumentsEmpty');
   const listEl = document.getElementById('kycDocumentsList');
@@ -1735,6 +1881,9 @@ function renderKycDocuments(state) {
 
       const actions = req.document
         ? `<div class="kyc-doc-actions">
+             <button class="ghost-btn kyc-doc-btn" type="button" data-act="view"
+                     data-docid="${documentId}"
+                     data-docname="${escapeAttr(req.document.originalFileName)}">View</button>
              <button class="ghost-btn kyc-doc-btn" type="button" data-act="download"
                      data-docid="${documentId}"
                      data-docname="${escapeAttr(req.document.originalFileName)}">Download</button>
@@ -1837,32 +1986,13 @@ document.getElementById('kycDocumentsList').addEventListener('click', async (eve
   const documentId = Number(button.dataset.docid);
   if (!documentId) return;
 
+  if (action === 'view') {
+    await openDocumentViewer(documentId, button.dataset.docname || '');
+    return;
+  }
+
   if (action === 'download') {
-    const fileName = button.dataset.docname || `document-${documentId}`;
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = '…';
-    try {
-      const response = await fetch(`${getApiBase()}/api/ops/documents/${documentId}/file`, {
-        headers: { Authorization: `Bearer ${authSession?.token || ''}` },
-      });
-      if (!response.ok) throw new Error(`Download failed (${response.status})`);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      addAudit('Document download failed', `${authSession?.user?.Email || 'Ops'} • just now`, error.message);
-      renderAudit();
-    } finally {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
+    await downloadDocument(documentId, button.dataset.docname || `document-${documentId}`, button);
     return;
   }
 
@@ -2797,6 +2927,10 @@ function resetWorkspaceForSignOut() {
   kycDocumentState = null;
   const kycDocList = document.getElementById('kycDocumentsList');
   if (kycDocList) kycDocList.innerHTML = '';
+  // An open viewer holds a decoded passport or proof of address in memory and
+  // paints it on screen. Leaving it for the next person to sign in on this
+  // machine is precisely the leak this function exists to close.
+  closeDocumentViewer();
   operatorList = [];
   selectedOperatorId = null;
   bankRequestQueue = [];

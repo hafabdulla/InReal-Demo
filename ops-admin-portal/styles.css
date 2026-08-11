@@ -1239,9 +1239,15 @@ tbody tr:hover td {
   min-width: 0;
 }
 
+/* The gate warning sat flush against the first document heading, so the red
+   block and "Passport or national ID" read as one run of text. */
+#kycDocumentsGateWarning {
+  margin-bottom: 14px;
+}
+
 .kyc-doc-list {
   display: grid;
-  gap: 12px;
+  gap: 18px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1313,23 +1319,163 @@ tbody tr:hover td {
   font-style: italic;
 }
 
+/* Two even columns rather than flex-wrap. Wrapping laid the four controls out
+   3 + 1, so "Accept" sat alone on its own row looking like an afterthought
+   next to a full-width gap. The grid reads top to bottom as the actual task:
+   inspect the file, pick a reason if rejecting, then decide. */
 .kyc-doc-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  /* minmax(0, 1fr), not 1fr. A plain 1fr floors at the item's min-content
+     width, so the longer label ("View document") claimed a wider column than
+     "Download" and the pairs came out 114px / 96px instead of matching. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 10px;
 }
 
+/* The reason only applies to Reject, so it spans the full width immediately
+   above the decision pair rather than competing with the inspect buttons. */
 .kyc-doc-reason {
-  flex: 1 1 180px;
+  grid-column: 1 / -1;
   min-width: 0;
-  padding: 6px 10px;
+  width: 100%;
+  padding: 7px 10px;
   font-size: 0.78rem;
 }
 
 .kyc-doc-btn {
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
   font-size: 0.78rem;
   white-space: nowrap;
+}
+
+/* ── Document viewer ─────────────────────────────────────────────────────
+   Its own overlay rather than the shared .kyc-drawer, because it has to sit
+   ABOVE that drawer — it is opened from inside it — and it is a centred modal
+   rather than a side panel. */
+.doc-viewer {
+  position: fixed;
+  inset: 0;
+  /* Must beat .kyc-drawer (1000) and its backdrop (999). The viewer is opened
+     from inside that drawer, so anything lower renders behind the thing that
+     launched it — which is exactly what happened at 120. */
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.doc-viewer.hidden {
+  display: none;
+}
+
+.doc-viewer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 8, 12, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.doc-viewer-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 100%);
+  height: min(88vh, 100%);
+  border: 1px solid var(--portal-border, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  background: var(--portal-bg-secondary, #14171a);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  /* Grid/flex children do not shrink below their content by default, and the
+     body below holds an arbitrarily large document. */
+  min-width: 0;
+}
+
+.doc-viewer-head,
+.doc-viewer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  flex-shrink: 0;
+}
+
+.doc-viewer-head {
+  border-bottom: 1px solid var(--portal-border, rgba(255, 255, 255, 0.08));
+}
+
+.doc-viewer-foot {
+  border-top: 1px solid var(--portal-border, rgba(255, 255, 255, 0.08));
+}
+
+.doc-viewer-titles {
+  min-width: 0;
+}
+
+.doc-viewer-kicker {
+  margin: 0 0 2px;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--portal-text-secondary, #9ca3af);
+}
+
+.doc-viewer-head h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  /* A filename is text the applicant chose. Long ones wrap instead of pushing
+     the close button off the panel. */
+  overflow-wrap: anywhere;
+}
+
+.doc-viewer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: #0b0e11;
+  padding: 12px;
+}
+
+.doc-viewer-body iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.doc-viewer-body img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.doc-viewer-foot .helper {
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+@media (max-width: 640px) {
+  .doc-viewer {
+    padding: 10px;
+  }
+  .doc-viewer-panel {
+    height: 92vh;
+  }
+  .doc-viewer-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }

@@ -1067,6 +1067,35 @@
          shared backdrop is enough rather than one per drawer. -->
     <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>
 
+    <!-- Onboarding document viewer.
+         Renders the file INSIDE this window rather than handing out a URL.
+         The source is a blob: object URL built from an authenticated fetch and
+         revoked the moment this closes, so there is nothing to copy out, paste
+         to a colleague, or leave sitting in browser history — which is the whole
+         point, given these are passports and proof-of-address documents under
+         Compliance Manual §9's "no link-sharing of any KYC document, ever". -->
+    <div class="doc-viewer hidden" id="docViewer" role="dialog" aria-modal="true" aria-labelledby="docViewerTitle">
+      <div class="doc-viewer-backdrop" id="docViewerBackdrop"></div>
+      <div class="doc-viewer-panel">
+        <header class="doc-viewer-head">
+          <div class="doc-viewer-titles">
+            <p class="doc-viewer-kicker" id="docViewerKicker">Onboarding document</p>
+            <h4 id="docViewerTitle">—</h4>
+          </div>
+          <button class="ghost-btn" id="docViewerCloseBtn" type="button" aria-label="Close document">
+            <i data-lucide="x" style="width:16px;height:16px"></i>
+          </button>
+        </header>
+        <div class="doc-viewer-body" id="docViewerBody">
+          <p class="helper" id="docViewerStatus">Loading…</p>
+        </div>
+        <footer class="doc-viewer-foot">
+          <p class="helper" id="docViewerHint">Visible only in this window. Nothing is shared or linked.</p>
+          <button class="primary-btn" id="docViewerDownloadBtn" type="button">Download</button>
+        </footer>
+      </div>
+    </div>
+
     <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
     <script src="./config.js"></script>
     <script src="./app.js"></script>
