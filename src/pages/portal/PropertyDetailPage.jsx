@@ -26,6 +26,10 @@ export default function PropertyDetailPage() {
   const [property, setProperty] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Index rather than the image itself, so the selection survives the gallery
+  // being refetched with new signed URLs — holding the object would leave the
+  // main image pointing at a URL that is no longer in the list.
+  const [activeImage, setActiveImage] = useState(0);
 
   useEffect(() => {
     const loadProperty = async () => {
@@ -54,7 +58,14 @@ export default function PropertyDetailPage() {
           name: data.PropertyName,
           location: `${data.City}, ${data.Country}`,
           country: data.Country,
-          images: data.ImageURL ? [data.ImageURL] : [],
+          // The operator-curated gallery, in their chosen order. Falls back to
+          // the legacy single ImageURL column so the seeded properties keep
+          // showing something until someone uploads a real photo — the two
+          // are not merged, because a stock photo sitting among real ones is
+          // worse than either on its own.
+          images: Array.isArray(data.Media) && data.Media.length > 0
+            ? data.Media.filter((m) => m.Url).map((m) => ({ url: m.Url, caption: m.Caption }))
+            : (data.ImageURL ? [{ url: data.ImageURL, caption: null }] : []),
           minInvestment: fractionPrice,
           totalValue: propertyValue,
           rentalYieldPct: projectedYield,
@@ -77,6 +88,7 @@ export default function PropertyDetailPage() {
       }
     };
 
+    setActiveImage(0);
     if (id) loadProperty();
   }, [id]);
 
@@ -119,7 +131,11 @@ export default function PropertyDetailPage() {
           <div className="bg-white rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
             <div className="relative h-64 sm:h-80 lg:h-96 bg-gray-100 flex items-center justify-center overflow-hidden">
               {property.images.length > 0 ? (
-                <img src={property.images[0]} alt={property.name} className="w-full h-full object-cover" />
+                <img
+                  src={property.images[Math.min(activeImage, property.images.length - 1)].url}
+                  alt={property.images[Math.min(activeImage, property.images.length - 1)].caption || property.name}
+                  className="w-full h-full object-cover"
+                />
               ) : (
                 <div className="text-center text-gray-400">
                   <Building2 className="w-16 h-16 mx-auto mb-3" />
@@ -134,6 +150,36 @@ export default function PropertyDetailPage() {
                 </span>
               </div>
             </div>
+
+            {/* Only shown when there is genuinely more than one photo — a strip
+                holding a single thumbnail is a control that does nothing. */}
+            {property.images.length > 1 && (
+              <div className="flex gap-2 overflow-x-auto p-3">
+                {property.images.map((image, index) => (
+                  <button
+                    key={image.url}
+                    type="button"
+                    onClick={() => setActiveImage(index)}
+                    aria-label={image.caption || `View photo ${index + 1}`}
+                    aria-current={index === activeImage}
+                    className={`shrink-0 rounded-lg overflow-hidden border-2 transition-colors ${
+                      index === activeImage ? 'border-primary-accent' : 'border-transparent hover:border-gray-300'
+                    }`}
+                  >
+                    <img
+                      src={image.url}
+                      alt={image.caption || `${property.name} photo ${index + 1}`}
+                      className="w-20 h-16 object-cover"
+                      loading="lazy"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {property.images[activeImage]?.caption && (
+              <p className="px-4 pb-4 text-sm text-gray-500">{property.images[activeImage].caption}</p>
+            )}
           </div>
 
           <motion.div variants={fadeUp} className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">

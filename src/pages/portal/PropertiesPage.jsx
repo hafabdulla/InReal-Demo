@@ -47,7 +47,10 @@ export default function PropertiesPage() {
             country: property.Country,
             returns: `${Number(property.ProjectedAnnualYield) || 0}%`,
             annualReturn: `${Number(property.ProjectedAnnualYield) || 0}%`,
-            image: property.ImageURL || '/placeholder-property.jpg',
+            // The first published gallery photo the operator ordered, falling
+            // back to the legacy column, then to the placeholder.
+            image: property.CoverImage?.Url || property.ImageURL || '/placeholder-property.jpg',
+            imageAlt: property.CoverImage?.Caption || property.PropertyName,
             propertyType: property.PropertyType,
             status: property.Status === 'Funded' ? 'Funded' : 'Funding',
             funded: fundingProgress,
@@ -144,7 +147,7 @@ export default function PropertiesPage() {
                   <div className="relative h-44 overflow-hidden">
                     <img
                       src={property.image}
-                      alt={property.name}
+                      alt={property.imageAlt || property.name}
                       className="w-full h-full object-cover"
                     />
                     <div className="absolute top-3 left-3">
@@ -236,7 +239,7 @@ export default function PropertiesPage() {
                 <div className="relative h-48 overflow-hidden">
                   <img
                     src={property.image}
-                    alt={property.name}
+                    alt={property.imageAlt || property.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />

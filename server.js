@@ -99,6 +99,14 @@ if (!TOTP_KEY_OK) {
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DOCUMENTS_BUCKET = process.env.SUPABASE_DOCUMENTS_BUCKET || 'user-documents';
+
+// A second, separate bucket for property marketing images (REQ-DOC-06). Kept
+// apart from DOCUMENTS_BUCKET on purpose: that one holds passports and proof of
+// address under a seven-year retention rule, this one holds photographs of a
+// building. Sharing a bucket would mean one lifecycle for two very different
+// obligations, and would put marketing images inside the folder structure the
+// document cleanup scripts walk.
+const PROPERTY_MEDIA_BUCKET = process.env.SUPABASE_PROPERTY_MEDIA_BUCKET || 'property-media';
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error(
     'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Both are required to store user documents ' +
@@ -999,6 +1007,34 @@ async function ensureDocumentsBucket() {
   console.log(`Created private Supabase Storage bucket "${DOCUMENTS_BUCKET}".`);
 }
 
+// The same, for property marketing images. Also private, which is a choice
+// worth recording rather than assuming: these are images meant to be looked at,
+// so a public bucket would work and would cache better. Private wins because
+// property pages are authed-only at pilot (decision D-12) and because a public
+// bucket URL is permanent and un-revocable — an image pulled from a listing
+// would stay reachable to anyone who ever loaded the page. Access is through a
+// signed URL generated per request, same as every other object in this app.
+async function ensurePropertyMediaBucket() {
+  const { data: buckets, error: listError } = await supabaseAdmin.storage.listBuckets();
+  if (listError) {
+    throw new Error(`Could not list Supabase Storage buckets: ${listError.message}`);
+  }
+  if ((buckets || []).some((b) => b.name === PROPERTY_MEDIA_BUCKET)) return;
+
+  const { error: createError } = await supabaseAdmin.storage.createBucket(PROPERTY_MEDIA_BUCKET, {
+    public: false,
+    fileSizeLimit: '10MB',
+    // Images only. The document bucket accepts PDFs because a passport scan
+    // often is one; a property gallery renders in an <img>, so a PDF here would
+    // upload cleanly and then fail to display with no useful error.
+    allowedMimeTypes: ['image/jpeg', 'image/png'],
+  });
+  if (createError) {
+    throw new Error(`Could not create Supabase Storage bucket "${PROPERTY_MEDIA_BUCKET}": ${createError.message}`);
+  }
+  console.log(`Created private Supabase Storage bucket "${PROPERTY_MEDIA_BUCKET}".`);
+}
+
 function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   const hash = pbkdf2Sync(password, salt, 120000, 64, 'sha512').toString('hex');
   return { salt, hash };
@@ -1248,7 +1284,33 @@ app.get('/api/properties', async (req, res) => {
       LIMIT 100`
     );
 
-    res.json({ success: true, data: properties });
+    // The cover image for each card: the first published image in the operator's
+    // chosen order. One query for every property on the page rather than one per
+    // property — DISTINCT ON is Postgres picking the first row per group, which
+    // is exactly "the first image of each gallery" and needs no subquery.
+    const covers = await q(
+      `SELECT DISTINCT ON (property_id) property_id, media_id, storage_path, caption, original_file_name
+         FROM property_media
+        WHERE is_published = true
+        ORDER BY property_id, sort_order, media_id`
+    );
+    const signedCovers = await signPropertyMedia(covers);
+    const coverByProperty = new Map(
+      covers.map((row, i) => [String(row.property_id), signedCovers[i]])
+    );
+
+    // CoverImage is null where a property has no published image yet. The
+    // existing ImageURL column is left exactly as it was and still returned —
+    // the seeded properties point at stock photography through it, and removing
+    // that in the same change that adds the gallery would blank every card the
+    // moment this deploys, before anyone has uploaded anything.
+    res.json({
+      success: true,
+      data: properties.map((p) => ({
+        ...p,
+        CoverImage: coverByProperty.get(String(p.PropertyID)) || null,
+      })),
+    });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }
@@ -1291,7 +1353,405 @@ app.get('/api/properties/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Property not found' });
     }
 
-    res.json({ success: true, data: rows[0] });
+    // The published gallery, ordered. Only published rows, because an
+    // unpublished one is an operator's working state, not a decision to show
+    // anything.
+    const media = await q(
+      `SELECT media_id, storage_path, caption, original_file_name
+         FROM property_media
+        WHERE property_id = $1 AND is_published = true
+        ORDER BY sort_order, media_id`,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      data: { ...rows[0], Media: await signPropertyMedia(media) },
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ── Property media (F12 / REQ-OPS-13's media half, REQ-SPP-04, REQ-USR-15).
+//
+// Scope note, so nobody reads this as a half-finished REQ-OPS-13: that
+// requirement bundles "upload and order media" with "edit content", and only
+// the media half is built. Marketing copy needs the banned-term lint the same
+// requirement asks for, and that lint needs the non-CIS language rules the PRD
+// calls Appendix A — which is not in this repo. The PRD references it but the
+// text lives in v1.0, and the compliance manual's "Appendix A" is the country
+// matrix, a different document entirely. Shipping a copy editor without the
+// lint would put unreviewed investor-facing prose on a financial product page,
+// which is precisely what the PRD flags about property pages.
+
+// Sixty minutes, not the ten the document rule uses, and the difference is
+// deliberate. A document URL is redeemed immediately on click; a gallery URL
+// sits in an <img> on a page someone may leave open, and a ten-minute expiry
+// turns that into a wall of broken images. Still short enough that a leaked URL
+// stops working, which is the point of signing at all.
+const PROPERTY_MEDIA_URL_TTL_SECONDS = 60 * 60;
+
+// Empty and absent both mean "no caption" and both store NULL. An empty string
+// would read back as a caption that exists and is blank, which renders as an
+// empty alt attribute rather than falling back to anything useful.
+const PROPERTY_MEDIA_CAPTION_MAX = 120;
+
+function normalizePropertyMediaCaption(raw) {
+  if (raw === undefined || raw === null) return { value: null };
+  if (typeof raw !== 'string') return { error: 'caption must be text' };
+  const trimmed = raw.trim();
+  if (trimmed === '') return { value: null };
+  if (trimmed.length > PROPERTY_MEDIA_CAPTION_MAX) {
+    return { error: `caption must be ${PROPERTY_MEDIA_CAPTION_MAX} characters or fewer` };
+  }
+  return { value: trimmed };
+}
+
+// Signed URLs for a set of media rows, in one round trip rather than one per
+// image — a gallery is a handful of objects and N sequential calls to Supabase
+// is a visible delay on the page.
+async function signPropertyMedia(rows) {
+  if (!rows || rows.length === 0) return [];
+
+  const paths = rows.map((r) => r.storage_path);
+  const { data, error } = await supabaseAdmin.storage
+    .from(PROPERTY_MEDIA_BUCKET)
+    .createSignedUrls(paths, PROPERTY_MEDIA_URL_TTL_SECONDS);
+
+  // Indexed by path rather than trusting positional alignment with the input.
+  const urlByPath = new Map();
+  if (error) {
+    console.error('Supabase signed-URL error for property media:', error);
+  } else if (Array.isArray(data)) {
+    data.forEach((entry, i) => {
+      if (entry && entry.signedUrl) urlByPath.set(paths[i], entry.signedUrl);
+    });
+  }
+
+  // A row whose object could not be signed still returns, with a null url. The
+  // alternative — dropping it — makes a broken object look like a photo nobody
+  // uploaded, which is the harder fault to notice.
+  return rows.map((r) => ({
+    MediaID: String(r.media_id),
+    Url: urlByPath.get(r.storage_path) || null,
+    Caption: r.caption,
+    OriginalFileName: r.original_file_name,
+    ...(r.is_published === undefined ? {} : { IsPublished: r.is_published }),
+    ...(r.sort_order === undefined ? {} : { SortOrder: Number(r.sort_order) }),
+  }));
+}
+
+// Property media is content work, so OPERATIONS_ROLES — the same set that files
+// documents and decides KYC. Not finance: nothing here touches a number an
+// investor is paid on.
+app.get('/api/ops/properties/:propertyId/media', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const rows = await q(
+      `SELECT media_id, storage_path, caption, original_file_name, is_published, sort_order
+         FROM property_media
+        WHERE property_id = $1
+        ORDER BY sort_order, media_id`,
+      [propertyId]
+    );
+
+    res.json({ success: true, data: await signPropertyMedia(rows) });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/ops/properties/:propertyId/media', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const { fileBase64, fileName, caption } = req.body || {};
+    if (!fileBase64) {
+      return res.status(400).json({ success: false, error: 'fileBase64 is required' });
+    }
+
+    const captionValue = normalizePropertyMediaCaption(caption);
+    if (captionValue.error) {
+      return res.status(400).json({ success: false, error: captionValue.error });
+    }
+
+    // Validated against the real table before anything reaches storage, for the
+    // same reason the document upload validates its user reference: a
+    // client-supplied id written straight into a row is a client-controlled
+    // foreign key, and the database FK would catch it only after the object had
+    // already been uploaded.
+    const property = await q(
+      'SELECT property_id FROM properties WHERE property_id = $1 AND is_deleted = false',
+      [propertyId]
+    );
+    if (property.length === 0) {
+      return res.status(404).json({ success: false, error: 'Property not found' });
+    }
+
+    const validation = validateUploadedFile(fileBase64);
+    if (!validation.ok) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+    const { fileBuffer, extension } = validation;
+
+    // validateUploadedFile accepts PDFs because the document path needs them. A
+    // gallery renders in an <img>, so a PDF would upload cleanly here and then
+    // silently fail to display. Refused by DETECTED type, never the filename.
+    if (extension !== '.jpg' && extension !== '.png') {
+      return res.status(400).json({
+        success: false,
+        error: 'Property images must be JPEG or PNG. PDFs belong in the document registry, not the gallery.',
+      });
+    }
+
+    const correctedFileName = withDetectedExtension(fileName, extension);
+    const storagePath = `${propertyId}/${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+
+    await ensurePropertyMediaBucket();
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from(PROPERTY_MEDIA_BUCKET)
+      .upload(storagePath, fileBuffer, {
+        contentType: contentTypeForDetectedExtension(extension),
+        upsert: false,
+      });
+    if (uploadError) {
+      console.error('Supabase Storage upload error (property media):', uploadError);
+      return res.status(500).json({ success: false, error: 'Could not store the image' });
+    }
+
+    // New images land at the end. COALESCE covers the first upload, where MAX
+    // over no rows is NULL and NULL + 1 is NULL rather than 1 — a NULL
+    // sort_order would then order unpredictably against its siblings.
+    const inserted = await q(
+      `INSERT INTO property_media
+         (property_id, storage_path, original_file_name, mime_type, caption, sort_order, uploaded_by_admin_id)
+       VALUES ($1, $2, $3, $4, $5,
+               (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM property_media WHERE property_id = $1),
+               $6)
+       RETURNING media_id, storage_path, caption, original_file_name, is_published, sort_order`,
+      [
+        propertyId,
+        storagePath,
+        correctedFileName,
+        contentTypeForDetectedExtension(extension),
+        captionValue.value,
+        adminUserId,
+      ]
+    );
+
+    console.log(
+      `[property.media_added] property_id=${propertyId} media_id=${inserted[0].media_id} by admin_id=${adminUserId}`
+    );
+
+    const signed = await signPropertyMedia(inserted);
+    res.status(201).json({ success: true, data: signed[0] });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Caption and publish state. Separate from upload so an operator can build and
+// review a gallery before any of it becomes investor-visible.
+app.patch('/api/ops/property-media/:mediaId', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const mediaId = Number(req.params.mediaId);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid mediaId is required' });
+    }
+
+    // Same allow-list-and-reject shape as the profile endpoints: an unexpected
+    // field is a 400, never silently dropped.
+    const allowedFields = ['caption', 'isPublished'];
+    const bodyKeys = Object.keys(req.body || {});
+    const unexpected = bodyKeys.filter((k) => !allowedFields.includes(k));
+    if (unexpected.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Unexpected field(s): ${unexpected.join(', ')}. Only ${allowedFields.join(', ')} can be updated here.`,
+      });
+    }
+    if (bodyKeys.length === 0) {
+      return res.status(400).json({ success: false, error: 'At least one field is required' });
+    }
+
+    const setClauses = [];
+    const values = [];
+
+    if ('caption' in req.body) {
+      const captionValue = normalizePropertyMediaCaption(req.body.caption);
+      if (captionValue.error) {
+        return res.status(400).json({ success: false, error: captionValue.error });
+      }
+      values.push(captionValue.value);
+      setClauses.push(`caption = $${values.length}`);
+    }
+
+    if ('isPublished' in req.body) {
+      if (typeof req.body.isPublished !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'isPublished must be true or false' });
+      }
+      values.push(req.body.isPublished);
+      setClauses.push(`is_published = $${values.length}`);
+    }
+
+    values.push(mediaId);
+    const updated = await q(
+      `UPDATE property_media SET ${setClauses.join(', ')}, updated_at = NOW()
+        WHERE media_id = $${values.length}
+        RETURNING media_id, property_id, storage_path, caption, original_file_name, is_published, sort_order`,
+      values
+    );
+    if (updated.length === 0) {
+      return res.status(404).json({ success: false, error: 'Image not found' });
+    }
+
+    if ('isPublished' in req.body) {
+      console.log(
+        `[property.media_visibility_changed] media_id=${mediaId} property_id=${updated[0].property_id} ` +
+        `published=${req.body.isPublished} by admin_id=${adminUserId}`
+      );
+    }
+
+    const signed = await signPropertyMedia(updated);
+    res.json({ success: true, data: signed[0] });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Reorder. Takes the full ordered list of this property's media ids rather than
+// a "move up" instruction, because a positional nudge depends on client and
+// server agreeing about the current order, and they diverge the moment two
+// operators have the page open.
+app.put('/api/ops/properties/:propertyId/media/order', async (req, res) => {
+  let client;
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const { mediaIds } = req.body || {};
+    if (!Array.isArray(mediaIds) || mediaIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'mediaIds must be a non-empty array' });
+    }
+    const ids = mediaIds.map(Number);
+    if (ids.some((n) => !Number.isInteger(n) || n <= 0)) {
+      return res.status(400).json({ success: false, error: 'mediaIds must all be positive integers' });
+    }
+    if (new Set(ids).size !== ids.length) {
+      return res.status(400).json({ success: false, error: 'mediaIds must not contain duplicates' });
+    }
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    // Every id must belong to THIS property, and the list must be complete.
+    // Without the ownership half an operator could reorder another property's
+    // gallery by passing its ids; without the completeness half a partial list
+    // would leave the omitted rows holding stale positions that collide with
+    // the new ones.
+    const owned = await client.query(
+      'SELECT media_id FROM property_media WHERE property_id = $1 FOR UPDATE',
+      [propertyId]
+    );
+    const ownedIds = new Set(owned.rows.map((r) => Number(r.media_id)));
+    if (ownedIds.size !== ids.length || ids.some((mediaId) => !ownedIds.has(mediaId))) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        error: "mediaIds must list exactly this property's images, once each.",
+      });
+    }
+
+    for (let i = 0; i < ids.length; i += 1) {
+      await client.query(
+        'UPDATE property_media SET sort_order = $1, updated_at = NOW() WHERE media_id = $2 AND property_id = $3',
+        [i, ids[i], propertyId]
+      );
+    }
+    await client.query('COMMIT');
+
+    const rows = await q(
+      `SELECT media_id, storage_path, caption, original_file_name, is_published, sort_order
+         FROM property_media WHERE property_id = $1 ORDER BY sort_order, media_id`,
+      [propertyId]
+    );
+    res.json({ success: true, data: await signPropertyMedia(rows) });
+  } catch (error) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch { /* already rolled back, or the connection is gone */ }
+    }
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Removal is a real delete, which is the opposite of the rule for documents —
+// and that difference is the point of REQ-DOC-06's separate bucket. Manual §9's
+// seven-year retention covers KYC documentation, screening results, transaction
+// records and compliance decisions. A photograph of a kitchen is none of those,
+// and keeping every superseded marketing image forever would be data nobody can
+// justify holding rather than prudence.
+//
+// The object goes before the row, deliberately. If the storage delete fails the
+// row survives and the image still displays — visibly wrong, and fixed by
+// pressing the button again. The other order fails silently into an orphaned
+// object nobody finds until someone audits the bucket by hand, which is exactly
+// how 22 of them accumulated before.
+app.delete('/api/ops/property-media/:mediaId', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const mediaId = Number(req.params.mediaId);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid mediaId is required' });
+    }
+
+    const rows = await q(
+      'SELECT media_id, property_id, storage_path FROM property_media WHERE media_id = $1',
+      [mediaId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Image not found' });
+    }
+
+    const { error: removeError } = await supabaseAdmin.storage
+      .from(PROPERTY_MEDIA_BUCKET)
+      .remove([rows[0].storage_path]);
+    if (removeError) {
+      console.error('Supabase Storage remove error (property media):', removeError);
+      return res.status(500).json({ success: false, error: 'Could not remove the stored image' });
+    }
+
+    await q('DELETE FROM property_media WHERE media_id = $1', [mediaId]);
+    console.log(
+      `[property.media_removed] property_id=${rows[0].property_id} media_id=${mediaId} by admin_id=${adminUserId}`
+    );
+
+    res.json({ success: true, message: 'Image removed.' });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }

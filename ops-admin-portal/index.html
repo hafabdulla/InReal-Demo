@@ -110,6 +110,14 @@
             <i data-lucide="list-checks"></i>
             <span>Queues</span>
           </button>
+          <!-- Visible to every operator, like the other shared tabs. The upload
+               and edit controls inside it are gated to Operations in
+               applyOperatorActionGates(); a finance role can still look at a
+               property's gallery, which is harmless and occasionally useful. -->
+          <button class="nav-item" data-tab="properties" data-title="Properties">
+            <i data-lucide="image"></i>
+            <span>Properties</span>
+          </button>
           <!-- Hidden by default and revealed only for super_admin (see
                applyOperatorRoleVisibility in app.js). The server rejects these
                endpoints for everyone else regardless — hiding the tab is so a
@@ -947,6 +955,78 @@
             <div class="card">
               <p class="helper" id="operatorHistoryLabel">Select an operator to see every grant, change and revocation.</p>
               <div class="audit-list" id="operatorHistoryList"></div>
+            </div>
+          </section>
+
+          <!-- Property media (F12's media half). Marketing COPY is deliberately
+               not editable here — see the scope note on the endpoints in
+               server.js. The banned-term lint REQ-OPS-13 asks for needs the
+               PRD's Appendix A language rules, which are not in this repo. -->
+          <section class="panel" data-panel="properties">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Property content</p>
+                <h3>Photo gallery</h3>
+              </div>
+              <div class="inline-actions">
+                <select id="mediaPropertySelect" class="field" style="min-width: 260px">
+                  <option value="">Choose a property…</option>
+                </select>
+                <button class="ghost-btn" id="refreshMediaBtn" type="button">
+                  <i data-lucide="refresh-cw"></i>
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <p class="panel-note">
+              Images are stored privately and served through short-lived links — never a public URL.
+              Nothing reaches an investor until you publish it.
+            </p>
+
+            <div class="split upload-grid">
+              <label class="upload-dropzone" id="mediaDropzone">
+                <input id="mediaFileInput" type="file" hidden accept=".jpg,.jpeg,.png" />
+                <div id="mediaDropzoneEmpty">
+                  <i data-lucide="image-plus" style="width: 32px; height: 32px; color: #01ced1"></i>
+                  <strong>Drop a photo or click to choose</strong>
+                  <span>JPEG or PNG, up to 8 MB</span>
+                </div>
+                <div id="mediaDropzoneFile" class="dropzone-file-state" hidden>
+                  <img id="mediaDropzoneThumb" alt="" />
+                  <strong id="mediaDropzoneName"></strong>
+                  <span id="mediaDropzoneSize"></span>
+                  <button type="button" id="mediaDropzoneClear">Choose a different photo</button>
+                </div>
+              </label>
+
+              <form class="card form" id="mediaUploadForm">
+                <div class="card-title">
+                  <div>
+                    <h4>Add to gallery</h4>
+                    <p>Uploads unpublished. Publish it below when the gallery is right.</p>
+                  </div>
+                </div>
+                <label>
+                  Caption <span class="helper">(optional)</span>
+                  <input class="field" id="mediaCaptionInput" maxlength="120" placeholder="e.g. Living room, north-facing" />
+                  <span class="helper">Doubles as the description for screen readers. Describe the photo — this is not ad copy.</span>
+                </label>
+                <button class="primary-btn" type="submit" id="mediaUploadBtn">Upload photo</button>
+                <p id="mediaUploadError" class="helper" style="color:#ff6b6b;"></p>
+                <p class="helper role-note" id="mediaFormRoleNote" hidden></p>
+              </form>
+            </div>
+
+            <div class="card table-card mt-16">
+              <div class="card-title">
+                <div>
+                  <h4>Gallery</h4>
+                  <p id="mediaCountLabel">No property selected</p>
+                </div>
+              </div>
+              <p class="helper" id="mediaEmpty">Choose a property above to see its photos.</p>
+              <ul class="media-grid" id="mediaList" hidden></ul>
             </div>
           </section>
 

@@ -371,6 +371,10 @@ async function loadPropertyOptions() {
       els.docFilterProperty.innerHTML =
         `<option value="">All properties</option><option value="general">General — no property</option>${options}`;
     }
+
+    // The property-media picker rides on the same fetch, for the same reason
+    // the filter above does: one list, one request.
+    fillMediaPropertySelect(properties);
   } catch (error) {
     console.error('Could not load properties for the document form:', error);
   }
@@ -2265,6 +2269,15 @@ function applyOperatorActionGates() {
   setFormEnabled('uploadForm', allowed);
   setNote('uploadFormRoleNote', allowed, 'Filing documents is an Operations task. Your role is Finance, so this form is read-only.');
 
+  // Property media is Operations work too. The picker itself stays usable so a
+  // finance role can still look at a gallery; only the upload half is gated.
+  setFormEnabled('mediaUploadForm', allowed);
+  setNote('mediaFormRoleNote', allowed, 'Property photos are managed by Operations. Your role is Finance, so this form is read-only.');
+  const mediaDropzone = document.getElementById('mediaDropzone');
+  const mediaFileInput = document.getElementById('mediaFileInput');
+  if (mediaDropzone) mediaDropzone.classList.toggle('disabled', !allowed);
+  if (mediaFileInput) mediaFileInput.disabled = !allowed;
+
   // The dropzone sits outside #uploadForm in the grid, so gating the form alone
   // would still let someone stage a file against a form they cannot submit.
   const dropzone = document.getElementById('uploadDropzone');
@@ -3052,6 +3065,20 @@ function resetWorkspaceForSignOut() {
   closeDocumentViewer();
   operatorList = [];
   selectedOperatorId = null;
+  // Signed image URLs and captions for whichever property the previous operator
+  // was working on. Server data, so it goes the same way as everything else
+  // here — a sign-out that only drops the token leaves it on screen for the
+  // next person on this machine.
+  mediaList = [];
+  selectedMediaPropertyId = '';
+  stagedMediaFile = null;
+  const mediaListEl = document.getElementById('mediaList');
+  if (mediaListEl) {
+    mediaListEl.innerHTML = '';
+    mediaListEl.hidden = true;
+  }
+  const mediaThumb = document.getElementById('mediaDropzoneThumb');
+  if (mediaThumb) mediaThumb.removeAttribute('src');
   bankRequestQueue = [];
   selectedBankRequest = null;
   selectedPortfolioUserId = null;
@@ -3323,6 +3350,7 @@ bindWorkspaceEvents();
 bindKycEvents();
 bindBankRequestEvents();
 bindPortfolioEvents();
+bindPropertyMediaEvents();
 bindSettingsEvents();
 
 // Backdrop click closes whichever of the three drawers is currently open —
@@ -3334,3 +3362,328 @@ document.getElementById('drawerBackdrop').addEventListener('click', () => {
 });
 
 bootstrapAuth();
+
+// ── Property media (F12's media half) ────────────────────────────────────────
+//
+// Marketing COPY is deliberately not editable here. REQ-OPS-13 pairs "upload
+// and order media" with "edit content" and a banned-term lint over the content
+// fields; that lint needs the PRD's Appendix A language rules, which are not in
+// this repo. The one free-text field below is a photo caption, capped short and
+// described to the operator as a description rather than ad copy.
+//
+// Everything server-sourced rendered here — captions, filenames — goes through
+// escapeHtml/escapeAttr. Filenames are attacker-supplied in the general case
+// (whoever uploaded the photo chose the name), and this file has produced real
+// stored-XSS twice. Run `node test-escaping.mjs` after touching it.
+
+let mediaList = [];
+let selectedMediaPropertyId = '';
+let stagedMediaFile = null;
+
+function setMediaError(message) {
+  const el = document.getElementById('mediaUploadError');
+  if (el) el.textContent = message || '';
+}
+
+async function loadPropertyMedia(propertyId) {
+  const emptyEl = document.getElementById('mediaEmpty');
+  const listEl = document.getElementById('mediaList');
+  const countEl = document.getElementById('mediaCountLabel');
+
+  mediaList = [];
+  listEl.hidden = true;
+  listEl.innerHTML = '';
+
+  if (!propertyId) {
+    emptyEl.textContent = 'Choose a property above to see its photos.';
+    emptyEl.hidden = false;
+    countEl.textContent = 'No property selected';
+    return;
+  }
+
+  // The list endpoint is OPERATIONS_ROLES, so a finance role would get a 403
+  // here. Say so plainly rather than requesting it and rendering the error,
+  // which reads as a fault rather than a boundary — same as the onboarding
+  // documents panel.
+  if (!canOperatorDoOperationsWork()) {
+    emptyEl.textContent = 'Property photos are managed by Operations. Your role is Finance.';
+    emptyEl.hidden = false;
+    countEl.textContent = '';
+    return;
+  }
+
+  emptyEl.textContent = 'Loading photos…';
+  emptyEl.hidden = false;
+
+  try {
+    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(propertyId)}/media`);
+    mediaList = Array.isArray(result.data) ? result.data : [];
+    renderPropertyMedia();
+  } catch (error) {
+    emptyEl.textContent = `Could not load photos: ${error.message}`;
+    emptyEl.hidden = false;
+    countEl.textContent = '';
+  }
+}
+
+function renderPropertyMedia() {
+  const emptyEl = document.getElementById('mediaEmpty');
+  const listEl = document.getElementById('mediaList');
+  const countEl = document.getElementById('mediaCountLabel');
+
+  const published = mediaList.filter((m) => m.IsPublished).length;
+  countEl.textContent = mediaList.length === 0
+    ? 'No photos yet'
+    : `${mediaList.length} photo${mediaList.length === 1 ? '' : 's'} • ${published} published`;
+
+  if (mediaList.length === 0) {
+    emptyEl.textContent = 'No photos for this property yet. Upload one above.';
+    emptyEl.hidden = false;
+    listEl.hidden = true;
+    listEl.innerHTML = '';
+    return;
+  }
+
+  emptyEl.hidden = true;
+  listEl.hidden = false;
+
+  const canEdit = canOperatorDoOperationsWork();
+
+  listEl.innerHTML = mediaList
+    .map((m, index) => {
+      // Built before the template rather than as a nested ternary inside it —
+      // a conditional whose test is a server-sourced path reads to the escaping
+      // scanner as an unescaped interpolation, and the scanner is right to be
+      // blunt about that, so the code moves rather than the rule.
+      const thumb = m.Url
+        ? `<img class="media-thumb" src="${escapeAttr(m.Url)}" alt="${escapeAttr(m.Caption || m.OriginalFileName)}" loading="lazy" />`
+        : '<div class="media-thumb-missing">Stored file could not be loaded</div>';
+
+      const badge = m.IsPublished
+        ? '<span class="media-badge published">Published</span>'
+        : '<span class="media-badge draft">Not published</span>';
+
+      const controls = canEdit
+        ? `<div class="media-item-actions">
+             <button class="ghost-btn" type="button" data-media-act="up" data-mediaid="${escapeAttr(m.MediaID)}" ${index === 0 ? 'disabled' : ''}>&uarr;</button>
+             <button class="ghost-btn" type="button" data-media-act="down" data-mediaid="${escapeAttr(m.MediaID)}" ${index === mediaList.length - 1 ? 'disabled' : ''}>&darr;</button>
+             <button class="ghost-btn" type="button" data-media-act="toggle" data-mediaid="${escapeAttr(m.MediaID)}">${m.IsPublished ? 'Unpublish' : 'Publish'}</button>
+             <button class="decline-btn" type="button" data-media-act="delete" data-mediaid="${escapeAttr(m.MediaID)}">Remove</button>
+           </div>
+           <input class="field field-sm media-caption" data-mediaid="${escapeAttr(m.MediaID)}" maxlength="120"
+                  value="${escapeAttr(m.Caption || '')}" placeholder="Add a caption…" />`
+        : '<span class="helper">Managed by Operations.</span>';
+
+      return `
+        <li class="media-item">
+          ${thumb}
+          ${badge}
+          <span class="media-filename" title="${escapeAttr(m.OriginalFileName)}">${escapeHtml(m.OriginalFileName)}</span>
+          ${controls}
+        </li>`;
+    })
+    .join('');
+
+  refreshIcons();
+}
+
+// Reorder sends the WHOLE list, not a "move up" instruction — the server
+// requires the complete set and rejects anything else, so the swap happens here
+// and the result is the new order in full.
+async function movePropertyMedia(mediaId, direction) {
+  const index = mediaList.findIndex((m) => String(m.MediaID) === String(mediaId));
+  const target = index + (direction === 'up' ? -1 : 1);
+  if (index < 0 || target < 0 || target >= mediaList.length) return;
+
+  const ids = mediaList.map((m) => Number(m.MediaID));
+  [ids[index], ids[target]] = [ids[target], ids[index]];
+
+  setMediaError('');
+  try {
+    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedMediaPropertyId)}/media/order`, {
+      method: 'PUT',
+      body: JSON.stringify({ mediaIds: ids }),
+    });
+    mediaList = Array.isArray(result.data) ? result.data : mediaList;
+    renderPropertyMedia();
+    addAudit('Gallery reordered', `${authSession?.user?.Email || 'Ops'} • just now`, `Property #${selectedMediaPropertyId}.`);
+    renderAudit();
+  } catch (error) {
+    setMediaError(`Could not reorder: ${error.message}`);
+  }
+}
+
+async function updatePropertyMedia(mediaId, patch, auditLabel) {
+  setMediaError('');
+  try {
+    const result = await apiFetch(`/api/ops/property-media/${encodeURIComponent(mediaId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+    const updated = result.data;
+    const i = mediaList.findIndex((m) => String(m.MediaID) === String(mediaId));
+    if (i >= 0 && updated) mediaList[i] = updated;
+    renderPropertyMedia();
+    if (auditLabel) {
+      addAudit(auditLabel, `${authSession?.user?.Email || 'Ops'} • just now`, `Photo #${mediaId}, property #${selectedMediaPropertyId}.`);
+      renderAudit();
+    }
+  } catch (error) {
+    setMediaError(`Could not save: ${error.message}`);
+  }
+}
+
+async function deletePropertyMedia(mediaId) {
+  setMediaError('');
+  try {
+    await apiFetch(`/api/ops/property-media/${encodeURIComponent(mediaId)}`, { method: 'DELETE' });
+    mediaList = mediaList.filter((m) => String(m.MediaID) !== String(mediaId));
+    renderPropertyMedia();
+    addAudit('Photo removed', `${authSession?.user?.Email || 'Ops'} • just now`, `Photo #${mediaId}, property #${selectedMediaPropertyId}.`);
+    renderAudit();
+  } catch (error) {
+    setMediaError(`Could not remove: ${error.message}`);
+  }
+}
+
+function stagePropertyMediaFile(file) {
+  const emptyState = document.getElementById('mediaDropzoneEmpty');
+  const fileState = document.getElementById('mediaDropzoneFile');
+
+  if (!file) {
+    stagedMediaFile = null;
+    emptyState.hidden = false;
+    fileState.hidden = true;
+    document.getElementById('mediaDropzoneThumb').removeAttribute('src');
+    return;
+  }
+
+  stagedMediaFile = file;
+  emptyState.hidden = true;
+  fileState.hidden = false;
+  // The uploader's own filename, so escaped like any other untrusted string
+  // even though it came from this machine — the rule does not have an
+  // exception for "probably fine".
+  document.getElementById('mediaDropzoneName').textContent = file.name;
+  document.getElementById('mediaDropzoneSize').textContent = `${(file.size / 1024).toFixed(0)} KB`;
+
+  const reader = new FileReader();
+  reader.onload = () => { document.getElementById('mediaDropzoneThumb').src = reader.result; };
+  reader.readAsDataURL(file);
+}
+
+function bindPropertyMediaEvents() {
+  const select = document.getElementById('mediaPropertySelect');
+  const dropzone = document.getElementById('mediaDropzone');
+  const fileInput = document.getElementById('mediaFileInput');
+  const listEl = document.getElementById('mediaList');
+  if (!select || !fileInput || !listEl) return;
+
+  select.addEventListener('change', () => {
+    selectedMediaPropertyId = select.value;
+    setMediaError('');
+    loadPropertyMedia(selectedMediaPropertyId);
+  });
+
+  document.getElementById('refreshMediaBtn').addEventListener('click', () => {
+    loadPropertyMedia(selectedMediaPropertyId);
+  });
+
+  fileInput.addEventListener('change', () => stagePropertyMediaFile(fileInput.files[0] || null));
+  document.getElementById('mediaDropzoneClear').addEventListener('click', (e) => {
+    e.preventDefault();
+    fileInput.value = '';
+    stagePropertyMediaFile(null);
+  });
+
+  dropzone.addEventListener('dragover', (e) => e.preventDefault());
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (dropzone.classList.contains('disabled')) return;
+    stagePropertyMediaFile(e.dataTransfer?.files?.[0] || null);
+  });
+
+  document.getElementById('mediaUploadForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setMediaError('');
+
+    if (!selectedMediaPropertyId) { setMediaError('Choose a property first.'); return; }
+    if (!stagedMediaFile) { setMediaError('Choose a photo to upload.'); return; }
+
+    const btn = document.getElementById('mediaUploadBtn');
+    btn.disabled = true;
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = () => reject(new Error('Could not read that file'));
+        reader.readAsDataURL(stagedMediaFile);
+      });
+
+      const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedMediaPropertyId)}/media`, {
+        method: 'POST',
+        body: JSON.stringify({
+          fileBase64,
+          fileName: stagedMediaFile.name,
+          caption: document.getElementById('mediaCaptionInput').value.trim() || undefined,
+        }),
+      });
+
+      if (result.data) mediaList.push(result.data);
+      renderPropertyMedia();
+      document.getElementById('mediaCaptionInput').value = '';
+      fileInput.value = '';
+      stagePropertyMediaFile(null);
+      addAudit('Photo uploaded', `${authSession?.user?.Email || 'Ops'} • just now`, `Property #${selectedMediaPropertyId}. Not published yet.`);
+      renderAudit();
+    } catch (error) {
+      setMediaError(error.message || 'Could not upload that photo.');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Delegated, so the buttons can be re-rendered freely after each action
+  // without rebinding anything.
+  listEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-media-act]');
+    if (!btn) return;
+    const mediaId = btn.dataset.mediaid;
+    const act = btn.dataset.mediaAct;
+
+    if (act === 'up' || act === 'down') return void movePropertyMedia(mediaId, act);
+    if (act === 'delete') return void deletePropertyMedia(mediaId);
+    if (act === 'toggle') {
+      const item = mediaList.find((m) => String(m.MediaID) === String(mediaId));
+      const next = !item?.IsPublished;
+      return void updatePropertyMedia(mediaId, { isPublished: next }, next ? 'Photo published' : 'Photo unpublished');
+    }
+  });
+
+  // Captions save on blur rather than per keystroke, and only when the value
+  // actually changed — otherwise tabbing through a gallery fires a PATCH per
+  // photo for no reason.
+  listEl.addEventListener('blur', (e) => {
+    const input = e.target.closest('.media-caption');
+    if (!input) return;
+    const mediaId = input.dataset.mediaid;
+    const item = mediaList.find((m) => String(m.MediaID) === String(mediaId));
+    const next = input.value.trim();
+    if (!item || next === (item.Caption || '')) return;
+    updatePropertyMedia(mediaId, { caption: next }, 'Caption updated');
+  }, true);
+}
+
+// Fills the property picker from the same /api/properties fetch the document
+// form uses. Kept as its own function rather than folded into
+// loadPropertyOptions() so a failure to populate one picker does not blank the
+// other.
+function fillMediaPropertySelect(properties) {
+  const select = document.getElementById('mediaPropertySelect');
+  if (!select) return;
+  const options = properties
+    .map((p) => `<option value="${escapeAttr(p.PropertyID)}">${escapeHtml(p.PropertyName)}</option>`)
+    .join('');
+  select.innerHTML = `<option value="">Choose a property…</option>${options}`;
+  if (selectedMediaPropertyId) select.value = selectedMediaPropertyId;
+}

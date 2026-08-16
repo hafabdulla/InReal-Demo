@@ -734,6 +734,94 @@ tbody tr:hover td {
   font-style: italic;
 }
 
+/* Property gallery. auto-fill with a minmax track means the columns follow the
+   available width without a media query per breakpoint — and min-width: 0 on
+   the items is the grid rule this project has already been bitten by: without
+   it a long filename refuses to shrink and pushes the whole page wider instead
+   of ellipsising inside its own card. */
+.media-grid {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.media-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--portal-border-default);
+  border-radius: var(--radius);
+  background: var(--portal-bg-tertiary);
+}
+
+.media-thumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--portal-bg-secondary);
+  display: block;
+}
+
+/* Stands in for an image whose signed link could not be generated. Deliberately
+   visible rather than a blank box: a missing object is a real fault worth
+   noticing, not something to hide behind a placeholder that looks intentional. */
+.media-thumb-missing {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--portal-bg-secondary);
+  border: 1px dashed #ff6b6b;
+  display: grid;
+  place-items: center;
+  color: #ff6b6b;
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 8px;
+}
+
+.media-filename {
+  font-size: 0.75rem;
+  color: var(--portal-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.media-item-actions button {
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.media-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  align-self: flex-start;
+}
+
+.media-badge.published {
+  background: rgba(1, 206, 209, 0.15);
+  color: #01ced1;
+}
+
+.media-badge.draft {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--portal-text-tertiary);
+}
+
 .upload-dropzone strong {
   font-size: 0.95rem;
   color: var(--portal-text-primary);
