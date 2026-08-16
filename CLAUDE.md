@@ -34,7 +34,7 @@ Each has its own `JWT_SECRET` and `TOTP_ENCRYPTION_KEY`. **A migration run local
    - The **Plain-English Status** table at the top — what's actually live vs. built-but-untested vs. not started.
    - **Part C** — the priority order from the actual client meeting (not the same as technical build-dependency order — both are documented, don't confuse them).
    - The **Engineering Log** (Parts A/B and the D.x entries) — exact bugs found, exact fixes, exact tests run. Several real mistakes happened during this build (a KYC-status value mixup, an email case-sensitivity bug, a CSS grid overflow bug) — all documented there so they aren't rediscovered as "new" issues.
-2. Check `database/pg/` for the current schema — numbered migration files (`01` through `15`, plus `08b`, which is numbered that way because 09 and 10 ALTER a table 08b creates).
+2. Check `database/pg/` for the current schema — numbered migration files (`01` through `16`, plus `08b`, which is numbered that way because 09 and 10 ALTER a table 08b creates).
 
    **Use the migration runner, not manual pastes.** `npm run db:status` shows what a database has and what it is missing; `npm run db:migrate` applies the pending ones. It tracks state in a `schema_migrations` table, runs each file in its own transaction, and refuses to run if a migration that was already applied has since been edited.
 
@@ -48,7 +48,7 @@ Each has its own `JWT_SECRET` and `TOTP_ENCRYPTION_KEY`. **A migration run local
    | `npm run db:migrate:prod` | **Apply pending migrations to production.** Do this before deploying code that needs them |
    | `node tools/migrate.mjs --url "postgres://…"` | Target any other database |
 
-   The old `npm run db:setup` still exists but only knows files `01` and `02` by name — prefer the runner. Both databases were at 15 recorded / 0 pending as of 06 Aug.
+   The old `npm run db:setup` still exists but only knows files `01` and `02` by name — prefer the runner. Both databases were at 15 recorded / 0 pending as of 06 Aug. **Local is at 16 as of 16 Aug; production is still at 15** — migration 16 adds `users.date_of_birth` and `users.participant_type`, both of which are read on the login path (`LOGIN_USER_COLUMNS`), so deploying that code before the migration 500s every login on both portals.
 
    **The schema used to be partly created by application boot code.** `password_reset_tokens`, `kyc_decisions`, `user_documents` and the `users` auth columns existed only because `ensure*()` in `server.js` created them at boot — they were in no migration at all. That was invisible until a second database was built from the files alone (migrations 09 and 02 both failed). Fixed by `08b` and `13`; the `ensure*` functions were left in place as a redundant safety net rather than a hidden dependency. **Do not add schema in boot code** — it produces a database nobody can reproduce.
 

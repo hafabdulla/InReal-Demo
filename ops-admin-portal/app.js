@@ -446,9 +446,20 @@ function renderUsers() {
     return;
   }
 
+  // Adjusting a portfolio value is FINANCE_ROLES on the server. Drawn per row,
+  // so the gate has to live in the render rather than in the one-shot
+  // applyOperatorRoleVisibility() — this table is rebuilt on every refresh and
+  // would otherwise put the button back. An operations_admin gets the label
+  // instead of fifty disabled buttons, each carrying the same tooltip.
+  const canAdjust = canOperatorSeeFinanceData();
+
   els.userTableBody.innerHTML = filtered
-    .map(
-      (user) => `
+    .map((user) => {
+      const adjustCell = canAdjust
+        ? `<button class="ghost-btn portfolio-adjust-btn" data-userid="${escapeAttr(user.id)}" style="font-size:0.8rem;padding:4px 10px">Adjust</button>`
+        : '<span class="helper">Finance only</span>';
+
+      return `
       <tr>
         <td>
           <strong>${escapeHtml(user.name)}</strong><br />
@@ -458,14 +469,10 @@ function renderUsers() {
         <td>${escapeHtml(user.country)}</td>
         <td><span class="tag ${statusClass(user.status)}">${escapeHtml(user.status)}</span></td>
         <td><span class="tag">${escapeHtml(user.role)}</span></td>
-        <td>
-          <button class="ghost-btn portfolio-adjust-btn" data-userid="${escapeAttr(user.id)}" style="font-size:0.8rem;padding:4px 10px">
-            Adjust
-          </button>
-        </td>
+        <td>${adjustCell}</td>
       </tr>
-    `,
-    )
+    `;
+    })
     .join('');
 }
 
@@ -1851,6 +1858,8 @@ function renderKycDocuments(state) {
   emptyEl.classList.add('hidden');
   listEl.classList.remove('hidden');
 
+  const canReviewDocuments = canOperatorDoOperationsWork();
+
   listEl.innerHTML = requirements
     .map((req) => {
       const presentation =
@@ -1879,15 +1888,12 @@ function renderKycDocuments(state) {
           ? `<p class="kyc-doc-note">Rejected as: ${escapeHtml(req.review.reasonCode)}</p>`
           : '';
 
-      const actions = req.document
-        ? `<div class="kyc-doc-actions">
-             <button class="ghost-btn kyc-doc-btn" type="button" data-act="view"
-                     data-docid="${documentId}"
-                     data-docname="${escapeAttr(req.document.originalFileName)}">View</button>
-             <button class="ghost-btn kyc-doc-btn" type="button" data-act="download"
-                     data-docid="${documentId}"
-                     data-docname="${escapeAttr(req.document.originalFileName)}">Download</button>
-             <select class="field kyc-doc-reason" data-docid="${documentId}" aria-label="Rejection reason">
+      // Sign-off is OPERATIONS_ROLES; viewing and downloading are not (both
+      // read endpoints take any operator). So the split is per button, not per
+      // panel — a finance_admin who reached this drawer can still read the
+      // evidence, they just cannot record a verdict on it.
+      const reviewControls = canReviewDocuments
+        ? `<select class="field kyc-doc-reason" data-docid="${documentId}" aria-label="Rejection reason">
                <option value="">Reason for rejecting…</option>
                ${KYC_DOC_REJECTION_REASONS.map(
                  ([value, text]) => `<option value="${escapeAttr(value)}">${escapeHtml(text)}</option>`
@@ -1896,7 +1902,18 @@ function renderKycDocuments(state) {
              <button class="decline-btn kyc-doc-btn" type="button" data-act="reject"
                      data-docid="${documentId}">Reject</button>
              <button class="approve-btn kyc-doc-btn" type="button" data-act="accept"
-                     data-docid="${documentId}">Accept</button>
+                     data-docid="${documentId}">Accept</button>`
+        : '<span class="helper">Sign-off is an Operations task.</span>';
+
+      const actions = req.document
+        ? `<div class="kyc-doc-actions">
+             <button class="ghost-btn kyc-doc-btn" type="button" data-act="view"
+                     data-docid="${documentId}"
+                     data-docname="${escapeAttr(req.document.originalFileName)}">View</button>
+             <button class="ghost-btn kyc-doc-btn" type="button" data-act="download"
+                     data-docid="${documentId}"
+                     data-docname="${escapeAttr(req.document.originalFileName)}">Download</button>
+             ${reviewControls}
            </div>`
         : '';
 
@@ -1943,6 +1960,18 @@ async function loadKycDocuments(userId) {
   listEl.innerHTML = '';
   document.getElementById('kycDocumentsGateWarning').classList.add('hidden');
 
+  // The documents endpoint is OPERATIONS_ROLES, not any-operator like the queue
+  // that leads here — so a finance_admin can open this drawer and the fetch
+  // will 403. Say so plainly instead of requesting it and rendering the error
+  // text, which reads as a fault rather than a boundary. Same reasoning as not
+  // loading finance panels for an operations role.
+  if (!canOperatorDoOperationsWork()) {
+    emptyEl.textContent = 'Onboarding documents are visible to Operations. Your role is Finance.';
+    emptyEl.classList.remove('hidden');
+    applyApproveButtonState();
+    return;
+  }
+
   try {
     const result = await apiFetch(`/api/ops/kyc-reviews/${userId}/documents`);
     kycDocumentState = result?.data || null;
@@ -1956,23 +1985,45 @@ async function loadKycDocuments(userId) {
   }
 }
 
-// One place deciding whether Approve is available, because two conditions now
-// feed it — the jurisdiction verdict and the document gate — and letting each
-// set the property independently means whichever runs last silently wins.
+// One place deciding whether Approve is available, because three conditions now
+// feed it — the operator's role, the jurisdiction verdict and the document gate
+// — and letting each set the property independently means whichever runs last
+// silently wins.
+//
+// Role is the one that also governs Decline, and it is the only one that does.
+// The document gate deliberately never blocks a decline (an applicant who
+// cannot evidence their address must still be refusable), and jurisdiction only
+// speaks to approval. But a finance_admin cannot record either verdict — the
+// server refuses both with the same 403 — so the role check covers both
+// buttons and the two compliance conditions cover only Approve.
 function applyApproveButtonState() {
   const approveBtn = document.getElementById('kycApproveBtn');
+  const declineBtn = document.getElementById('kycDeclineBtn');
+  const reasonSelect = document.getElementById('kycDeclineReasonType');
   if (!approveBtn || !selectedKycUser) return;
 
+  const canDecide = canOperatorDoOperationsWork();
   const risk = getJurisdiction(selectedKycUser);
   const gateBlocks = Boolean(kycDocumentState?.enforced) && kycDocumentState?.complete === false;
+  const roleNote = 'KYC decisions are an Operations task. Your role is Finance.';
 
-  approveBtn.disabled = !risk.canApprove || gateBlocks;
-  if (!risk.canApprove) {
+  approveBtn.disabled = !canDecide || !risk.canApprove || gateBlocks;
+  if (!canDecide) {
+    approveBtn.title = roleNote;
+  } else if (!risk.canApprove) {
     approveBtn.title = risk.reason;
   } else if (gateBlocks) {
     approveBtn.title = 'Every onboarding document must be accepted before this account can be approved.';
   } else {
     approveBtn.title = '';
+  }
+
+  if (declineBtn) {
+    declineBtn.disabled = !canDecide;
+    declineBtn.title = canDecide ? '' : roleNote;
+  }
+  if (reasonSelect) {
+    reasonSelect.disabled = !canDecide;
   }
 }
 
@@ -2110,6 +2161,21 @@ const OPERATOR_ROLE_LABELS = {
   operations_admin: 'Operations admin',
 };
 
+// A deliberate mirror of FINANCE_ROLES and OPERATIONS_ROLES in server.js. Kept
+// as literal arrays with the same names so the two sides can be read against
+// each other — if a requireOperator() call over there changes role set, the
+// grep that finds it finds this too.
+//
+// Nothing here authorises anything. requireOperator() refuses the request
+// whatever the DOM says, and that is the control. What these decide is whether
+// a control that will be refused gets drawn looking usable.
+const FINANCE_ROLES = ['finance_admin', 'super_admin'];
+const OPERATIONS_ROLES = ['operations_admin', 'super_admin'];
+
+function operatorHasRole(roles) {
+  return roles.includes(authSession?.user?.OperatorRole);
+}
+
 // Reveals the Operators tab for super admins only. This is presentation, not
 // authorisation — requireOperator(SUPER_ONLY) on the server is what actually
 // stops anyone else, and it does so whether or not this ever runs.
@@ -2118,8 +2184,15 @@ const OPERATOR_ROLE_LABELS = {
 // data-load is skipped renders an empty panel forever, and loading data for a
 // hidden tab wastes a request that will 403 anyway.
 function canOperatorSeeFinanceData() {
-  const role = authSession?.user?.OperatorRole;
-  return role === 'finance_admin' || role === 'super_admin';
+  return operatorHasRole(FINANCE_ROLES);
+}
+
+// The operations half: KYC decisions, per-document sign-off, account creation
+// and document filing are all OPERATIONS_ROLES on the server. A finance_admin
+// sees the tabs they live in — those are shared and hold plenty a finance role
+// legitimately reads — but must not be handed the buttons.
+function canOperatorDoOperationsWork() {
+  return operatorHasRole(OPERATIONS_ROLES);
 }
 
 function canOperatorManageOperators() {
@@ -2167,6 +2240,52 @@ function applyOperatorRoleVisibility() {
   if (activePanel && !canOperatorSeeTab(activePanel)) {
     setActiveTab(DEFAULT_TAB);
   }
+
+  applyOperatorActionGates();
+}
+
+// Turns off the two standing forms a finance_admin can reach but never submit.
+//
+// Tab visibility was already right; this is the layer below it. Users and
+// Documents are shared tabs — a finance role reads both — so hiding them is
+// wrong, but leaving a full account-creation form live means someone types six
+// fields, presses Create, and gets a 403 that explains nothing. That is the
+// same "convincing placeholder" shape as a rendered form wired to nothing: the
+// screen makes a promise the server was never going to keep.
+//
+// Disabled and labelled rather than removed, deliberately. A vanished form
+// reads as a broken page and gets reported as one; a disabled form with a line
+// of text saying which role owns the task answers the question on the spot.
+function applyOperatorActionGates() {
+  const allowed = canOperatorDoOperationsWork();
+
+  setFormEnabled('userForm', allowed);
+  setNote('userFormRoleNote', allowed, 'Creating investor accounts is an Operations task. Your role is Finance, so this form is read-only.');
+
+  setFormEnabled('uploadForm', allowed);
+  setNote('uploadFormRoleNote', allowed, 'Filing documents is an Operations task. Your role is Finance, so this form is read-only.');
+
+  // The dropzone sits outside #uploadForm in the grid, so gating the form alone
+  // would still let someone stage a file against a form they cannot submit.
+  const dropzone = document.getElementById('uploadDropzone');
+  const fileInput = document.getElementById('fileInput');
+  if (dropzone) dropzone.classList.toggle('disabled', !allowed);
+  if (fileInput) fileInput.disabled = !allowed;
+}
+
+function setFormEnabled(formId, enabled) {
+  const form = document.getElementById(formId);
+  if (!form) return;
+  form.querySelectorAll('input, select, textarea, button').forEach((el) => {
+    el.disabled = !enabled;
+  });
+}
+
+function setNote(noteId, allowed, message) {
+  const note = document.getElementById(noteId);
+  if (!note) return;
+  note.textContent = allowed ? '' : message;
+  note.hidden = allowed;
 }
 
 async function loadOperators() {

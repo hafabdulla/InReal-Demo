@@ -19,6 +19,44 @@ import { useToast } from '@/components/ui/use-toast';
 import { COUNTRIES, countryName } from '@/lib/countries';
 import { getKycDisplay, KYC_TONE_CLASSES } from '@/lib/kycStatus';
 
+// Whole years between a YYYY-MM-DD birthday and today, in UTC, mirroring
+// ageInYearsUtc() in server.js. Returns null for anything that is not a real
+// calendar date — '2008-02-30' parses happily and becomes 1 March, so the
+// result is compared back against its own components.
+//
+// This is a courtesy so the applicant is told before submitting rather than
+// after; the server runs the same computation and is the control.
+function ageFromDateOfBirth(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  const born = new Date(Date.UTC(year, month - 1, day));
+  if (
+    born.getUTCFullYear() !== year ||
+    born.getUTCMonth() !== month - 1 ||
+    born.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  let age = today.getUTCFullYear() - year;
+  const monthDiff = today.getUTCMonth() - (month - 1);
+  if (monthDiff < 0 || (monthDiff === 0 && today.getUTCDate() < day)) age -= 1;
+  return age;
+}
+
+const MINIMUM_PARTICIPANT_AGE = 18; // matches server.js
+
+// Asked as three options rather than a yes/no, because the point of the
+// question is that the applicant has been asked and has answered — the manual's
+// position on someone who conceals their status depends on it. A tickbox they
+// could skip would give them "nobody asked me".
+const PARTICIPANT_TYPES = [
+  ['natural_person', 'An individual (myself)'],
+  ['company', 'A company'],
+  ['trust', 'A trust'],
+];
+
 export default function SettingsPage() {
   const { user, session, refreshUser } = useAuth();
   const { toast } = useToast();
@@ -106,8 +144,22 @@ export default function SettingsPage() {
   const [usPerson, setUsPerson] = useState(
     typeof user?.UsPerson === 'boolean' ? user.UsPerson : null
   );
+  // Both '' = not answered yet, same convention as usPerson's null. The server
+  // stores nothing for an ineligible answer, so "not answered" and "answered
+  // ineligibly" look identical on reload — which is intended: there is no
+  // register of applicants we refused at the declaration step.
+  const [dateOfBirth, setDateOfBirth] = useState(user?.DateOfBirth || '');
+  const [participantType, setParticipantType] = useState(user?.ParticipantType || '');
   const [identityError, setIdentityError] = useState('');
   const [savingIdentity, setSavingIdentity] = useState(false);
+
+  // Derived, not stored in state. Holding these as their own useState would
+  // mean two sources of truth for one answer, and the stale one wins whenever
+  // an update forgets to set both.
+  const declaredAge = ageFromDateOfBirth(dateOfBirth);
+  const isUnderAge = declaredAge !== null && declaredAge < MINIMUM_PARTICIPANT_AGE;
+  const isIneligibleParticipantType =
+    participantType !== '' && participantType !== 'natural_person';
 
   // The auth context populates asynchronously, so seed from `user` once it
   // arrives rather than leaving the fields stuck on their initial empty value.
@@ -115,7 +167,9 @@ export default function SettingsPage() {
     if (user?.Nationalities) setNationalities(user.Nationalities);
     if (user?.CountryOfResidence) setCountryOfResidence(user.CountryOfResidence);
     if (typeof user?.UsPerson === 'boolean') setUsPerson(user.UsPerson);
-  }, [user?.Nationalities, user?.CountryOfResidence, user?.UsPerson]);
+    if (user?.DateOfBirth) setDateOfBirth(user.DateOfBirth);
+    if (user?.ParticipantType) setParticipantType(user.ParticipantType);
+  }, [user?.Nationalities, user?.CountryOfResidence, user?.UsPerson, user?.DateOfBirth, user?.ParticipantType]);
 
   const toggleNationality = (code) => {
     setNationalities((current) =>
@@ -142,6 +196,18 @@ export default function SettingsPage() {
       setIdentityError('Please answer the US person question.');
       return;
     }
+    if (!dateOfBirth) {
+      setIdentityError('Please enter your date of birth.');
+      return;
+    }
+    if (ageFromDateOfBirth(dateOfBirth) === null) {
+      setIdentityError('Please enter your date of birth as a real calendar date.');
+      return;
+    }
+    if (!participantType) {
+      setIdentityError('Please tell us who this application is for.');
+      return;
+    }
 
     setSavingIdentity(true);
     try {
@@ -151,7 +217,7 @@ export default function SettingsPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session?.token || ''}`,
         },
-        body: JSON.stringify({ nationalities, countryOfResidence, usPerson }),
+        body: JSON.stringify({ nationalities, countryOfResidence, usPerson, dateOfBirth, participantType }),
       });
       const data = await response.json();
 
@@ -742,6 +808,54 @@ export default function SettingsPage() {
                       We use these to complete your verification. Please list every nationality you hold — if you hold more than one, all of them need to be declared.
                     </p>
 
+                    {/* Date of birth. Asked at the profile step for the same
+                        reason as the US-person question below: the manual's
+                        eligible participant is a "natural person, aged 18 years
+                        or older", so an under-18 answer has nowhere to go, and
+                        finding that out after a document upload would mean
+                        having collected a minor's passport for nothing. */}
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5" htmlFor="dateOfBirth">
+                        Date of birth
+                      </label>
+                      <input
+                        id="dateOfBirth"
+                        type="date"
+                        value={dateOfBirth}
+                        onChange={(e) => setDateOfBirth(e.target.value)}
+                        className="portal-input"
+                      />
+                      {isUnderAge && (
+                        <p className="mt-2 text-xs text-red-400 leading-relaxed">
+                          InReal is only able to accept participants aged {MINIMUM_PARTICIPANT_AGE} or over, so we won't be able to open an account. We're sorry we can't help on this occasion.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Individuals only in Phase 1 (Manual §3). Three options
+                        rather than a tickbox — see PARTICIPANT_TYPES. */}
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5" htmlFor="participantType">
+                        Who is this application for?
+                      </label>
+                      <select
+                        id="participantType"
+                        value={participantType}
+                        onChange={(e) => setParticipantType(e.target.value)}
+                        className="portal-input"
+                      >
+                        <option value="">Select…</option>
+                        {PARTICIPANT_TYPES.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                      {isIneligibleParticipantType && (
+                        <p className="mt-2 text-xs text-red-400 leading-relaxed">
+                          InReal is only able to accept applications from individuals during this phase. Company and trust applications aren't accepted yet.
+                        </p>
+                      )}
+                    </div>
+
                     <div>
                       <label className="block text-sm font-medium text-portal-secondary mb-1.5">
                         Nationality <span className="text-portal-tertiary font-normal">(select all that apply)</span>
@@ -849,7 +963,7 @@ export default function SettingsPage() {
                     <div className="flex justify-end pt-2">
                       <button
                         onClick={handleSaveIdentity}
-                        disabled={savingIdentity || usPerson === true}
+                        disabled={savingIdentity || usPerson === true || isUnderAge || isIneligibleParticipantType}
                         className="portal-btn-primary text-sm py-2.5 disabled:opacity-60"
                       >
                         {savingIdentity ? 'Saving...' : 'Save Identity Details'}

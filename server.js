@@ -868,6 +868,11 @@ const LOGIN_USER_COLUMNS = `
       country_of_residence AS "CountryOfResidence",
       nationalities AS "Nationalities",
       us_person AS "UsPerson",
+      participant_type AS "ParticipantType",
+      -- to_char, not the bare column: the driver parses a DATE at the server's
+      -- local midnight and res.json() emits a UTC instant, which moves a
+      -- birthday by a day for any host east of UTC. See migration 16.
+      to_char(date_of_birth, 'YYYY-MM-DD') AS "DateOfBirth",
       profile_completed_at AS "ProfileCompletedAt",
       kyc_decline_reason_type AS "KycDeclineReasonType",
       kyc_declined_at AS "KycDeclinedAt",
@@ -2452,6 +2457,8 @@ app.get('/api/auth/me', async (req, res) => {
         country_of_residence AS "CountryOfResidence",
         nationalities AS "Nationalities",
         us_person AS "UsPerson",
+        participant_type AS "ParticipantType",
+        to_char(date_of_birth, 'YYYY-MM-DD') AS "DateOfBirth",
         profile_completed_at AS "ProfileCompletedAt",
         kyc_decline_reason_type AS "KycDeclineReasonType",
         kyc_declined_at AS "KycDeclinedAt",
@@ -3237,6 +3244,10 @@ app.get('/api/ops/kyc-reviews', async (req, res) => {
          -- deciding eligibility needs to see the declaration they are meant to
          -- be checking against documents, not just the tier derived from it.
          us_person            AS "UsPerson",
+         -- Same reasoning as the line above, for the other two declarations a
+         -- reviewer is meant to check against the passport in front of them.
+         participant_type     AS "ParticipantType",
+         to_char(date_of_birth, 'YYYY-MM-DD') AS "DateOfBirth",
          phone_number         AS "PhoneNumber",
          kyc_status           AS "KYCStatus",
          accreditation_status AS "AccreditationStatus",
@@ -4256,6 +4267,54 @@ const ONBOARDING_DOCUMENT_LABELS = {
 
 // Manual §5: a proof of address must be less than three months old.
 const PROOF_OF_ADDRESS_MAX_AGE_MONTHS = 3;
+
+// Manual §3: an eligible participant is a "natural person, aged 18 years or
+// older", and "Corporate and trust participants are not accepted at this
+// stage." Both are enforced at the declaration step in
+// PUT /api/user/profile/identity.
+const MINIMUM_PARTICIPANT_AGE = 18;
+
+// A Set of one, on purpose. Phase 2 widens this after legal and compliance
+// review; writing it as a collection now means that change is adding a value
+// here and to the CHECK in migration 16, not restructuring a boolean.
+const ACCEPTED_PARTICIPANT_TYPES = new Set(['natural_person']);
+
+// Whole years between a YYYY-MM-DD birthday and today, computed entirely in
+// UTC. Returns null if the string is not a real calendar date, and a negative
+// number for a future date so the caller can tell "not yet born" apart from
+// "too young" — they are different mistakes and deserve different messages.
+//
+// Deliberately not `new Date(value)` arithmetic against a local `new Date()`:
+// mixing a UTC-parsed date with a local now is how an 18th birthday lands a day
+// early or late depending on the host's timezone, and this host is UTC+5 while
+// the reviewers are not. Date.UTC also validates by round-trip — '2008-02-30'
+// parses without complaint and silently becomes 1 March, so it is compared back
+// against its own components rather than trusted.
+function ageInYearsUtc(value) {
+  const [year, month, day] = value.split('-').map(Number);
+  const born = new Date(Date.UTC(year, month - 1, day));
+  if (
+    born.getUTCFullYear() !== year ||
+    born.getUTCMonth() !== month - 1 ||
+    born.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  let age = today.getUTCFullYear() - year;
+  // Birthday not yet reached this year. Compared as month-then-day rather than
+  // via a constructed date, which avoids the 29 February case where building
+  // "this year's birthday" for a leap-day birth rolls to 1 March and reads as
+  // a day still to come.
+  const monthDiff = today.getUTCMonth() - (month - 1);
+  if (monthDiff < 0 || (monthDiff === 0 && today.getUTCDate() < day)) {
+    age -= 1;
+  }
+  return age;
+}
 
 // Shown to the investor verbatim when a document is rejected, so they know what
 // to fix. Every one is a statement about the DOCUMENT — legible, current, the
@@ -5406,7 +5465,7 @@ app.put('/api/user/profile/identity', async (req, res) => {
     // Same allow-list-and-reject approach as the contact endpoint: an
     // unexpected field is a 400, never silently dropped, so a client bug that
     // thinks it changed something can't go unnoticed.
-    const allowedFields = ['nationalities', 'countryOfResidence', 'usPerson'];
+    const allowedFields = ['nationalities', 'countryOfResidence', 'usPerson', 'dateOfBirth', 'participantType'];
     const bodyKeys = Object.keys(req.body || {});
     const unexpectedKeys = bodyKeys.filter((key) => !allowedFields.includes(key));
     if (unexpectedKeys.length > 0) {
@@ -5420,7 +5479,14 @@ app.put('/api/user/profile/identity', async (req, res) => {
     }
 
     const current = await q(
-      `SELECT kyc_status, country_of_residence, nationalities, profile_completed_at, us_person
+      `SELECT kyc_status, country_of_residence, nationalities, profile_completed_at, us_person,
+              participant_type,
+              -- Not date_of_birth directly. The pg driver parses a DATE at the
+              -- server's local midnight and res.json() emits it as a UTC
+              -- instant, so a birthday of 1 January leaves a UTC+5 host as
+              -- "31 December" — a whole year wrong at a year boundary, on the
+              -- one field where a day's drift can flip eligibility.
+              to_char(date_of_birth, 'YYYY-MM-DD') AS date_of_birth
        FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
       [userId]
     );
@@ -5505,6 +5571,67 @@ app.put('/api/user/profile/identity', async (req, res) => {
       updates.us_person = false;
     }
 
+    // Age gate. Manual §3: an eligible participant is a "natural person, aged
+    // 18 years or older". Refused here rather than at review, on the same
+    // reasoning as the US-person gate above — there is no outcome where
+    // declaring an under-18 date of birth leads anywhere, so collecting a
+    // minor's identity documents first would be both wasted effort and personal
+    // data on a child we have no basis to hold.
+    //
+    // Nothing is stored on refusal, deliberately, matching the US-person
+    // precedent: a rejected declaration would otherwise build a register of
+    // minors who never became participants.
+    if ('dateOfBirth' in req.body) {
+      const value = String(req.body.dateOfBirth ?? '').trim();
+      // Format first, and strictly. Date.parse() would accept '2008' and
+      // '5 Aug 2008' and resolve both to something plausible-looking, which
+      // turns a client bug into a silently wrong compliance record.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return res.status(400).json({
+          success: false,
+          error: 'dateOfBirth must be a calendar date in YYYY-MM-DD format',
+        });
+      }
+      const age = ageInYearsUtc(value);
+      if (age === null) {
+        return res.status(400).json({ success: false, error: 'dateOfBirth is not a real calendar date' });
+      }
+      if (age < 0) {
+        return res.status(400).json({ success: false, error: 'dateOfBirth cannot be in the future' });
+      }
+      if (age > 120) {
+        return res.status(400).json({ success: false, error: 'Please check the year — that date of birth is not plausible.' });
+      }
+      if (age < MINIMUM_PARTICIPANT_AGE) {
+        return res.status(403).json({
+          success: false,
+          code: 'UNDER_AGE_INELIGIBLE',
+          error: `InReal is only able to accept participants aged ${MINIMUM_PARTICIPANT_AGE} or over. We are sorry we cannot help on this occasion.`,
+        });
+      }
+      updates.date_of_birth = value;
+    }
+
+    // Individuals only. Manual §3: "Corporate and trust participants are not
+    // accepted at this stage. The Company will revisit this restriction in
+    // Phase 2 with legal and compliance review."
+    //
+    // Stored rather than assumed. The manual's position on a participant who
+    // conceals their status — and PO-11's "self-declare everything and we can
+    // walk away if you lied" — both rest on the person having been asked and
+    // having answered. A value nobody stated gives them "nobody asked me".
+    if ('participantType' in req.body) {
+      const value = String(req.body.participantType ?? '').trim();
+      if (!ACCEPTED_PARTICIPANT_TYPES.has(value)) {
+        return res.status(403).json({
+          success: false,
+          code: 'PARTICIPANT_TYPE_INELIGIBLE',
+          error: 'InReal is only able to accept applications from individuals during this phase. Company and trust applications are not accepted yet.',
+        });
+      }
+      updates.participant_type = value;
+    }
+
     const previous = current[0];
     const sameArray = (a, b) =>
       Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
@@ -5524,6 +5651,8 @@ app.put('/api/user/profile/identity', async (req, res) => {
           Nationalities: previous.nationalities,
           CountryOfResidence: previous.country_of_residence,
           UsPerson: previous.us_person,
+          DateOfBirth: previous.date_of_birth,
+          ParticipantType: previous.participant_type,
           ProfileCompletedAt: previous.profile_completed_at,
         },
         message: 'No change.',
@@ -5553,7 +5682,9 @@ app.put('/api/user/profile/identity', async (req, res) => {
     });
 
     const after = await q(
-      `SELECT nationalities, country_of_residence, us_person, profile_completed_at
+      `SELECT nationalities, country_of_residence, us_person, profile_completed_at,
+              participant_type,
+              to_char(date_of_birth, 'YYYY-MM-DD') AS date_of_birth
        FROM users WHERE user_id = $1`,
       [userId]
     );
@@ -5564,6 +5695,8 @@ app.put('/api/user/profile/identity', async (req, res) => {
         Nationalities: after[0].nationalities,
         CountryOfResidence: after[0].country_of_residence,
         UsPerson: after[0].us_person,
+        DateOfBirth: after[0].date_of_birth,
+        ParticipantType: after[0].participant_type,
         ProfileCompletedAt: after[0].profile_completed_at,
       },
       message: 'Identity details updated.',

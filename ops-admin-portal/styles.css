@@ -716,6 +716,24 @@ tbody tr:hover td {
   background: var(--portal-teal-muted);
 }
 
+/* Staging area for a form the current role cannot submit. Declared after the
+   :hover rule above and at higher specificity, so it wins on both counts —
+   the ordering trap that broke the mobile sidebar toggle applies to equal
+   specificity, and this is deliberately not equal. */
+.upload-dropzone.disabled,
+.upload-dropzone.disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.5;
+  border-color: var(--portal-border-default);
+  background: var(--portal-bg-tertiary);
+}
+
+/* Says which role owns a task, on a control this role can see but not use. */
+.role-note {
+  color: var(--portal-text-tertiary);
+  font-style: italic;
+}
+
 .upload-dropzone strong {
   font-size: 0.95rem;
   color: var(--portal-text-primary);
