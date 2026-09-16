@@ -3098,9 +3098,15 @@ function resetWorkspaceForSignOut() {
   selectedPropertyId = '';
   propertyDetail = null;
   propertyEditorMode = 'none';
+  propertyStep = 'details';
+  mediaLoadedFor = '';
   document.getElementById('propertyForm')?.reset();
-  const propertyStatusCard = document.getElementById('propertyStatusCard');
-  if (propertyStatusCard) propertyStatusCard.innerHTML = '';
+  // Only the panels this file renders. The photos panel is static markup, and
+  // emptying it would take the upload form with it.
+  ['propertyValuationPanel', 'propertyPublishPanel', 'propertyStepList'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
   const valuationHistoryList = document.getElementById('valuationHistoryList');
   if (valuationHistoryList) valuationHistoryList.innerHTML = '';
   showPropertyWorkspace(false);
@@ -3409,6 +3415,18 @@ bootstrapAuth();
 // the server will refuse is drawn looking usable, and every one that is not
 // says which team owns it.
 //
+// The tab is a flow rather than one long page. A rail of four steps — details,
+// photos, valuation, publish — sits beside a single open panel: opening a step
+// closes the one before it. A tick means that step has what it needs.
+//
+// The ticks are a checklist, NOT a gate, and the difference matters. The only
+// thing the server refuses to publish without is a recorded valuation; the
+// other ticks are there to show what is still missing, and every saved
+// property's steps can be opened in any order. Drawing them as a wizard that
+// locks steps would invent rules the server does not have — the mistake the
+// role-gating work had to undo, where the screen made promises the API never
+// agreed to.
+//
 // Marketing COPY is still not editable. The property description is shown
 // read-only; REQ-OPS-13's banned-term lint needs the PRD's Appendix A language
 // rules, which are not in this repo.
@@ -3425,6 +3443,11 @@ let propertyDetail = null;
 // 'none' before anything is picked, 'create' for the blank new-property form,
 // 'edit' once a real property is selected.
 let propertyEditorMode = 'none';
+// Which step of the flow is open. Exactly one panel is visible at a time.
+let propertyStep = 'details';
+// The property whose gallery has been fetched, so opening the photos step
+// twice does not fetch it twice.
+let mediaLoadedFor = '';
 
 function canOperatorRecordValuations() {
   return operatorHasRole(FINANCE_ROLES);
@@ -3476,6 +3499,147 @@ function restoreSelectValue(select, value) {
   if ([...select.options].some((option) => option.value === value)) select.value = value;
 }
 
+// ── The flow ─────────────────────────────────────────────────────────────────
+
+// The four steps, their tick state, and the one line of status each shows in
+// the rail. `done` answers "does this step have what it needs", which is not
+// the same question as "may the property be published" — only the valuation is
+// that. `disabled` is only ever true before a draft has been saved, because
+// photos, valuations and publishing all need a property to exist first.
+function propertyStepStates() {
+  const detail = propertyDetail;
+  const isCreate = propertyEditorMode === 'create';
+
+  const missingDetails = [];
+  if (detail) {
+    if (!detail.Address) missingDetails.push('address');
+    if (!detail.PropertyType) missingDetails.push('property type');
+  }
+
+  const valuations = detail && Array.isArray(detail.Valuations) ? detail.Valuations : [];
+  const row = valuations[0] || null;
+  const totalPhotos = detail ? Number(detail.PhotoCount) || 0 : 0;
+  const publishedPhotos = detail ? Number(detail.PublishedPhotoCount) || 0 : 0;
+  const blockers = detail && Array.isArray(detail.PublishBlockers) ? detail.PublishBlockers : [];
+  const laterStepsWait = 'Once the draft is saved';
+
+  let detailsSummary = laterStepsWait;
+  if (!isCreate) {
+    detailsSummary = missingDetails.length === 0 ? 'Complete' : `Add ${missingDetails.join(' and ')}`;
+  }
+
+  let photosSummary = laterStepsWait;
+  if (!isCreate && totalPhotos === 0) photosSummary = 'None uploaded yet';
+  else if (!isCreate && publishedPhotos === 0) photosSummary = `${totalPhotos} uploaded, none published`;
+  else if (!isCreate) photosSummary = `${publishedPhotos} of ${totalPhotos} published`;
+
+  let valuationSummary = laterStepsWait;
+  if (!isCreate) valuationSummary = row ? `Valued ${formatDateOnly(row.ValuationDate)}` : 'Finance records the value';
+
+  let publishSummary = laterStepsWait;
+  if (!isCreate && detail?.IsPublished) publishSummary = 'Live for investors';
+  else if (!isCreate && blockers.length > 0) publishSummary = 'Needs a valuation first';
+  else if (!isCreate) publishSummary = 'Ready to publish';
+
+  return [
+    {
+      key: 'details',
+      label: 'Details',
+      done: !isCreate && missingDetails.length === 0,
+      summary: detailsSummary,
+      disabled: false,
+    },
+    {
+      key: 'photos',
+      label: 'Photos',
+      done: !isCreate && publishedPhotos > 0,
+      summary: photosSummary,
+      disabled: isCreate,
+    },
+    {
+      key: 'valuation',
+      label: 'Valuation',
+      done: !isCreate && valuations.length > 0,
+      summary: valuationSummary,
+      disabled: isCreate,
+    },
+    {
+      key: 'publish',
+      label: 'Publish',
+      done: !isCreate && !!detail?.IsPublished,
+      summary: publishSummary,
+      disabled: isCreate,
+    },
+  ];
+}
+
+function firstIncompletePropertyStep() {
+  const states = propertyStepStates();
+  return (states.find((step) => !step.done && !step.disabled) || states[0]).key;
+}
+
+function renderPropertyStepRail() {
+  const list = document.getElementById('propertyStepList');
+  const nameEl = document.getElementById('propertyFlowName');
+  const subtitleEl = document.getElementById('propertyFlowSubtitle');
+  if (!list || !nameEl || !subtitleEl) return;
+
+  const states = propertyStepStates();
+  const done = states.filter((step) => step.done).length;
+
+  if (propertyEditorMode === 'create') {
+    nameEl.textContent = 'New property';
+    subtitleEl.textContent = 'Save the details to unlock the rest';
+  } else {
+    nameEl.textContent = propertyDetail?.PropertyName || '';
+    subtitleEl.textContent = `${done} of ${states.length} done`;
+  }
+
+  list.innerHTML = states
+    .map((step) => {
+      // Built before the template: a conditional inside one reads to the
+      // escaping scanner as an unescaped interpolation.
+      const classes = ['step-item'];
+      if (step.key === propertyStep) classes.push('active');
+      if (step.done) classes.push('done');
+      const current = step.key === propertyStep ? ' aria-current="step"' : '';
+      const disabled = step.disabled ? ' disabled' : '';
+      const mark = step.done ? '&check;' : '';
+      return `
+        <li>
+          <button type="button" class="${classes.join(' ')}" data-step="${step.key}"${disabled}${current}>
+            <span class="step-check" aria-hidden="true">${mark}</span>
+            <span class="step-text">
+              <span class="step-label">${step.label}</span>
+              <span class="step-summary">${escapeHtml(step.summary)}</span>
+            </span>
+          </button>
+        </li>`;
+    })
+    .join('');
+}
+
+// Shows one panel and hides the rest. A step that is not available yet falls
+// back to the details panel rather than leaving the workspace blank.
+function setPropertyStep(step) {
+  const states = propertyStepStates();
+  const wanted = states.find((candidate) => candidate.key === step && !candidate.disabled);
+  propertyStep = wanted ? step : 'details';
+
+  document.querySelectorAll('[data-step-panel]').forEach((panel) => {
+    panel.classList.toggle('hidden', panel.dataset.stepPanel !== propertyStep);
+  });
+  renderPropertyStepRail();
+
+  // The gallery is fetched when its step is first opened for this property,
+  // rather than on every selection — the rail's photo counts come from the
+  // property record, so nothing on screen waits for it.
+  if (propertyStep === 'photos' && selectedPropertyId && mediaLoadedFor !== String(selectedPropertyId)) {
+    loadPropertyMedia(selectedPropertyId);
+  }
+  refreshIcons();
+}
+
 function renderPropertyTable() {
   const tbody = document.getElementById('propertyTableBody');
   const countLabel = document.getElementById('propertyCountLabel');
@@ -3499,9 +3663,6 @@ function renderPropertyTable() {
 
   tbody.innerHTML = propertyList
     .map((row) => {
-      // Decided before the template rather than inside it: a conditional whose
-      // test is a server field reads to the escaping scanner as an unescaped
-      // interpolation, so the code moves rather than the rule.
       const selectedClass = String(row.PropertyID) === String(selectedPropertyId) ? ' selected' : '';
       const statusTag = row.IsPublished
         ? '<span class="tag verified">Published</span>'
@@ -3536,17 +3697,13 @@ async function selectProperty(propertyId) {
   selectedPropertyId = String(propertyId);
   propertyEditorMode = 'edit';
   propertyDetail = null;
+  mediaLoadedFor = '';
   setPropertyFormError('');
   renderPropertyTable();
   showPropertyWorkspace(true);
-  document.getElementById('propertyMediaSection').hidden = false;
-  document.getElementById('propertyStatusCard').innerHTML = '<p class="helper">Loading property…</p>';
   setFormEnabled('propertyForm', false);
-
-  // The gallery loads alongside the details rather than after them — neither
-  // depends on the other, and a slow detail request should not also hold back
-  // the photos.
-  loadPropertyMedia(selectedPropertyId);
+  document.getElementById('propertyFlowName').textContent = 'Loading property…';
+  document.getElementById('propertyFlowSubtitle').textContent = '';
 
   try {
     const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(propertyId)}`);
@@ -3555,10 +3712,12 @@ async function selectProperty(propertyId) {
     if (String(propertyId) !== selectedPropertyId) return;
     propertyDetail = result.data;
     renderPropertyWorkspace();
+    // Opens where the work actually is, which is the point of the flow.
+    setPropertyStep(firstIncompletePropertyStep());
   } catch (error) {
     if (String(propertyId) !== selectedPropertyId) return;
-    document.getElementById('propertyStatusCard').innerHTML =
-      `<p class="helper" style="color:#ff6b6b">Could not load this property: ${escapeHtml(error.message)}</p>`;
+    document.getElementById('propertyFlowName').textContent = 'Could not load this property';
+    document.getElementById('propertyFlowSubtitle').textContent = error.message || '';
   }
 }
 
@@ -3568,10 +3727,12 @@ function startNewProperty() {
   propertyDetail = null;
   propertyEditorMode = 'create';
   mediaList = [];
+  mediaLoadedFor = '';
   setPropertyFormError('');
   renderPropertyTable();
   showPropertyWorkspace(true);
   renderPropertyWorkspace();
+  setPropertyStep('details');
   document.getElementById('propName')?.focus();
 }
 
@@ -3637,57 +3798,16 @@ function renderPropertyWorkspace() {
     fractionsHelp.textContent = 'The price per fraction is the valuation divided by this. It locks once the property is published or anyone expresses interest.';
   }
 
-  renderPropertyStatusCard();
-
-  // Photos need a property to belong to, so the gallery is only offered once
-  // the draft exists.
-  document.getElementById('propertyMediaSection').hidden = isCreate;
+  renderPropertyValuationPanel();
+  renderPropertyPublishPanel();
+  renderPropertyStepRail();
 }
 
-function renderPropertyStatusCard() {
-  const card = document.getElementById('propertyStatusCard');
-  if (!card) return;
-
-  if (propertyEditorMode === 'create') {
-    card.innerHTML = `
-      <div class="card-title">
-        <div><h4>New property</h4></div>
-        <span class="tag pending">Draft</span>
-      </div>
-      <ol class="property-steps">
-        <li>Save the details. The property is created as a draft only staff can see.</li>
-        <li>Add its photos, and publish the ones investors should see.</li>
-        <li>Finance records a valuation, which sets the value and the price per fraction.</li>
-        <li>Publish the property.</li>
-      </ol>`;
-    return;
-  }
-
+function renderPropertyValuationPanel() {
+  const panel = document.getElementById('propertyValuationPanel');
+  if (!panel) return;
   const detail = propertyDetail;
-  if (!detail) return;
-
-  const blockers = Array.isArray(detail.PublishBlockers) ? detail.PublishBlockers : [];
-  const statusTag = detail.IsPublished
-    ? '<span class="tag verified">Published</span>'
-    : '<span class="tag pending">Draft</span>';
-  const statusText = detail.IsPublished
-    ? 'Investors can see this property and its published photos.'
-    : 'Only staff can see this property.';
-
-  let publishControl;
-  if (!canOperatorDoOperationsWork()) {
-    publishControl = '<p class="helper role-note">Publishing is an Operations task.</p>';
-  } else if (detail.IsPublished) {
-    publishControl = '<button class="decline-btn" type="button" data-property-act="unpublish">Unpublish</button>';
-  } else if (blockers.length > 0) {
-    publishControl = '<button class="approve-btn" type="button" disabled title="Resolve the items above first">Publish to investors</button>';
-  } else {
-    publishControl = '<button class="approve-btn" type="button" data-property-act="publish">Publish to investors</button>';
-  }
-
-  const blockerList = !detail.IsPublished && blockers.length > 0
-    ? `<ul class="blocker-list">${blockers.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul>`
-    : '';
+  if (!detail) { panel.innerHTML = ''; return; }
 
   const valuations = Array.isArray(detail.Valuations) ? detail.Valuations : [];
   // The current valuation: the ledger arrives most recent by date first, which
@@ -3710,35 +3830,80 @@ function renderPropertyStatusCard() {
   } else {
     provenance = '<p class="helper">No valuation recorded yet, so there are no figures to show investors.</p>';
   }
-  const valuationButtonLabel = canOperatorRecordValuations() ? 'Record valuation' : 'Valuation history';
+  const buttonLabel = canOperatorRecordValuations() ? 'Record valuation' : 'Valuation history';
 
-  card.innerHTML = `
+  panel.innerHTML = `
     <div class="card-title">
-      <div><h4>Status</h4></div>
+      <div>
+        <h4>Valuation</h4>
+        <p>${countText}</p>
+      </div>
+    </div>
+    <div class="kyc-detail-grid">
+      <div class="kyc-detail-item"><span class="kyc-detail-label">Property value</span><span class="kyc-detail-value">${value}</span></div>
+      <div class="kyc-detail-item"><span class="kyc-detail-label">Price per fraction</span><span class="kyc-detail-value">${price}</span></div>
+      <div class="kyc-detail-item"><span class="kyc-detail-label">Monthly rent</span><span class="kyc-detail-value">${rent}</span></div>
+      <div class="kyc-detail-item"><span class="kyc-detail-label">Projected yield</span><span class="kyc-detail-value">${projectedYield}</span></div>
+    </div>
+    <p class="helper">${fractions} fractions. The price per fraction is the value divided by that number.</p>
+    ${provenance}
+    <div class="inline-actions"><button class="ghost-btn" type="button" data-property-act="valuations">${buttonLabel}</button></div>`;
+}
+
+function renderPropertyPublishPanel() {
+  const panel = document.getElementById('propertyPublishPanel');
+  if (!panel) return;
+  const detail = propertyDetail;
+  if (!detail) { panel.innerHTML = ''; return; }
+
+  const blockers = Array.isArray(detail.PublishBlockers) ? detail.PublishBlockers : [];
+  const statusTag = detail.IsPublished
+    ? '<span class="tag verified">Published</span>'
+    : '<span class="tag pending">Draft</span>';
+  const statusText = detail.IsPublished
+    ? 'Investors can see this property and its published photos.'
+    : 'Only staff can see this property.';
+
+  let control;
+  if (!canOperatorDoOperationsWork()) {
+    control = '<p class="helper role-note">Publishing is an Operations task.</p>';
+  } else if (detail.IsPublished) {
+    control = '<button class="decline-btn" type="button" data-property-act="unpublish">Unpublish</button>';
+  } else if (blockers.length > 0) {
+    control = '<button class="approve-btn" type="button" disabled title="Resolve the items listed above first">Publish to investors</button>';
+  } else {
+    control = '<button class="approve-btn" type="button" data-property-act="publish">Publish to investors</button>';
+  }
+
+  const blockerList = !detail.IsPublished && blockers.length > 0
+    ? `<ul class="blocker-list">${blockers.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul>`
+    : '';
+
+  // What an investor would get, so whoever presses the button can see it
+  // without leaving the step.
+  const photos = Number(detail.PublishedPhotoCount) || 0;
+  const row = (Array.isArray(detail.Valuations) ? detail.Valuations : [])[0] || null;
+  const recap = [
+    photos === 0
+      ? 'No published photos, so the card falls back to its stock image'
+      : `${photos} published photo${photos === 1 ? '' : 's'}`,
+    row ? `Figures as of ${formatDateOnly(row.ValuationDate)}` : 'No valuation, so no figures',
+    detail.Address ? escapeHtml(detail.Address) : 'No address',
+  ];
+
+  panel.innerHTML = `
+    <div class="card-title">
+      <div>
+        <h4>Publish</h4>
+        <p>${statusText}</p>
+      </div>
       ${statusTag}
     </div>
-    <p class="helper">${statusText}</p>
     ${blockerList}
-    <div class="inline-actions property-status-actions">${publishControl}</div>
-    <p class="kyc-form-error hidden" id="propertyPublishError"></p>
-
-    <div class="property-status-section">
-      <div class="card-title">
-        <div>
-          <h4>Valuation</h4>
-          <p>${countText}</p>
-        </div>
-      </div>
-      <div class="kyc-detail-grid">
-        <div class="kyc-detail-item"><span class="kyc-detail-label">Property value</span><span class="kyc-detail-value">${value}</span></div>
-        <div class="kyc-detail-item"><span class="kyc-detail-label">Price per fraction</span><span class="kyc-detail-value">${price}</span></div>
-        <div class="kyc-detail-item"><span class="kyc-detail-label">Monthly rent</span><span class="kyc-detail-value">${rent}</span></div>
-        <div class="kyc-detail-item"><span class="kyc-detail-label">Projected yield</span><span class="kyc-detail-value">${projectedYield}</span></div>
-      </div>
-      <p class="helper">${fractions} fractions.</p>
-      ${provenance}
-      <div><button class="ghost-btn" type="button" data-property-act="valuations">${valuationButtonLabel}</button></div>
-    </div>`;
+    <p class="kyc-form-label" style="margin-bottom:0">What investors would see</p>
+    <ul class="recap-list">${recap.map((text) => `<li>${text}</li>`).join('')}</ul>
+    <div class="inline-actions">${control}</div>
+    <p class="kyc-form-error hidden" id="propertyPublishError"></p>`;
 }
 
 // For a new property, every filled-in field. For an existing one, only the
@@ -3801,12 +3966,15 @@ async function submitPropertyForm(event) {
     if (isCreate) {
       addAudit('Property created', propertyAuditMeta(), `${result.data.PropertyName} — saved as a draft.`);
       mediaList = [];
-      loadPropertyMedia(selectedPropertyId);
+      mediaLoadedFor = '';
     } else {
       addAudit('Property details saved', propertyAuditMeta(), `${result.data.PropertyName}: ${Object.keys(payload).join(', ')}.`);
     }
     renderAudit();
     renderPropertyWorkspace();
+    // Creating a draft moves the flow on; an edit leaves the operator where
+    // they were, because they may not be finished with this step.
+    if (isCreate) setPropertyStep(firstIncompletePropertyStep());
     await loadPropertyOptions();
   } catch (error) {
     setPropertyFormError(error.message || 'Could not save the property.');
@@ -3823,7 +3991,6 @@ async function setPropertyPublished(isPublished) {
     : `Unpublish "${name}"? Investors will stop seeing it straight away.`;
   if (!window.confirm(question)) return;
 
-  const errorEl = document.getElementById('propertyPublishError');
   try {
     const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedPropertyId)}/publish-state`, {
       method: 'PATCH',
@@ -3835,6 +4002,7 @@ async function setPropertyPublished(isPublished) {
     renderPropertyWorkspace();
     await loadPropertyOptions();
   } catch (error) {
+    const errorEl = document.getElementById('propertyPublishError');
     if (errorEl) {
       errorEl.textContent = error.message || 'Could not change what investors can see.';
       errorEl.classList.remove('hidden');
@@ -4029,11 +4197,17 @@ function bindPropertyEvents() {
     selectProperty(tr.dataset.propertyid);
   });
 
+  // The rail, delegated because it is re-rendered after every change.
+  document.getElementById('propertyStepList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-step]');
+    if (btn) setPropertyStep(btn.dataset.step);
+  });
+
   document.getElementById('propertyForm').addEventListener('submit', submitPropertyForm);
   document.getElementById('propertyCancelBtn').addEventListener('click', cancelNewProperty);
 
-  // Delegated, because the status card is re-rendered after every action.
-  document.getElementById('propertyStatusCard').addEventListener('click', (e) => {
+  // One handler for every panel: they are all re-rendered after each action.
+  document.querySelector('.property-step-panels').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-property-act]');
     if (!btn) return;
     const act = btn.dataset.propertyAct;
@@ -4105,6 +4279,7 @@ async function loadPropertyMedia(propertyId) {
     // upload would then look like it belonged to the wrong gallery.
     if (String(propertyId) !== String(selectedPropertyId)) return;
     mediaList = Array.isArray(result.data) ? result.data : [];
+    mediaLoadedFor = String(propertyId);
     renderPropertyMedia();
   } catch (error) {
     if (String(propertyId) !== String(selectedPropertyId)) return;
@@ -4112,6 +4287,17 @@ async function loadPropertyMedia(propertyId) {
     emptyEl.hidden = false;
     countEl.textContent = '';
   }
+}
+
+// The rail's photo tick and the table's counts both come from the property
+// record, which does not refetch on every upload — so the gallery keeps them
+// in step from what it already knows.
+function syncPhotoCountsFromGallery() {
+  if (!propertyDetail) return;
+  propertyDetail.PhotoCount = mediaList.length;
+  propertyDetail.PublishedPhotoCount = mediaList.filter((m) => m.IsPublished).length;
+  renderPropertyStepRail();
+  renderPropertyPublishPanel();
 }
 
 function renderPropertyMedia() {
@@ -4129,6 +4315,7 @@ function renderPropertyMedia() {
     emptyEl.hidden = false;
     listEl.hidden = true;
     listEl.innerHTML = '';
+    syncPhotoCountsFromGallery();
     return;
   }
 
@@ -4172,10 +4359,11 @@ function renderPropertyMedia() {
     })
     .join('');
 
+  syncPhotoCountsFromGallery();
   refreshIcons();
 }
 
-// The table's photo counts come from the property list, so they are refreshed
+// The table's photo counts come from the property list, so it is refreshed
 // after anything that changes a gallery. Not awaited — the counts are a
 // convenience and must never hold up the gallery itself.
 function refreshPropertyPhotoCounts() {

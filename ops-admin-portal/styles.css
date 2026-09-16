@@ -858,20 +858,91 @@ tr.clickable-row.selected td {
   background: var(--portal-teal-muted);
 }
 
-.property-status-actions {
-  margin-top: 12px;
+/* The property flow: a rail of steps beside a single open panel. A tick means
+   that step has what it needs. It is a checklist and not a wizard — every step
+   of a saved property stays clickable, in any order. */
+.property-rail {
+  align-self: start;
 }
 
-.property-status-section {
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid var(--portal-border-subtle);
+.step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
-.property-status-section .card-title {
-  margin-bottom: 0;
+.step-item {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--portal-border-subtle);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.step-item:hover:not(:disabled) {
+  border-color: var(--portal-teal);
+  background: var(--portal-teal-muted);
+}
+
+.step-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.step-item.active {
+  border-color: var(--portal-teal);
+  background: var(--portal-teal-muted);
+}
+
+/* Empty until the step is done, so the tick arriving is the signal. */
+.step-check {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--portal-border-default);
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: transparent;
+}
+
+.step-item.done .step-check {
+  border-color: var(--portal-success);
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--portal-success);
+}
+
+.step-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.step-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--portal-text-primary);
+}
+
+.step-summary {
+  font-size: 0.78rem;
+  color: var(--portal-text-tertiary);
+}
+
+/* A grid item, so a wide panel scrolls inside itself instead of widening the
+   whole page — the rule this project has been bitten by before. */
+.property-step-panels {
+  min-width: 0;
 }
 
 .blocker-list {
@@ -882,14 +953,14 @@ tr.clickable-row.selected td {
   line-height: 1.5;
 }
 
-.property-steps {
-  margin: 0;
+/* What an investor would see, listed in the publish step. Muted rather than
+   amber: it is a recap, not a warning. */
+.recap-list {
+  margin: 8px 0 0;
   padding-left: 18px;
-  display: grid;
-  gap: 8px;
   color: var(--portal-text-secondary);
-  font-size: 0.85rem;
-  line-height: 1.5;
+  font-size: 0.82rem;
+  line-height: 1.6;
 }
 
 .form-success {

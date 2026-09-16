@@ -2060,6 +2060,10 @@ async function loadOpsPropertyDetail(propertyId) {
        status AS "Status",
        is_active AS "IsActive",
        is_published AS "IsPublished",
+       (SELECT COUNT(*)::int FROM property_media pm
+         WHERE pm.property_id = properties.property_id) AS "PhotoCount",
+       (SELECT (COUNT(*) FILTER (WHERE pm.is_published))::int FROM property_media pm
+         WHERE pm.property_id = properties.property_id) AS "PublishedPhotoCount",
        created_at AS "CreatedAt",
        updated_at AS "UpdatedAt"
      FROM properties
