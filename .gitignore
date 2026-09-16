@@ -41,6 +41,6 @@ db-cleanup-orphaned-storage-paths.txt
 
 # some testing scripts.
 verify-d44-live.ps1
-
+test-f12-local.ps1
 #sample properties
 /public/sample_properties

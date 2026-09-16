@@ -1235,13 +1235,23 @@ async function verifyUserAndProperty(userId, propertyId) {
     throw new Error('User is not KYC/identity approved');
   }
 
+  // is_published as well as is_active: a draft is invisible on the investor
+  // pages, but property ids are sequential, so without this check anyone could
+  // express interest in a property nobody has published by guessing its
+  // number. Same message as a missing property, so the refusal does not
+  // confirm that a draft exists.
   const properties = await q(
-    `SELECT property_id, is_active, is_deleted, status
+    `SELECT property_id, is_active, is_deleted, is_published, status
      FROM properties
      WHERE property_id = $1`,
     [propertyId]
   );
-  if (properties.length === 0 || !properties[0].is_active || properties[0].is_deleted) {
+  if (
+    properties.length === 0 ||
+    !properties[0].is_active ||
+    properties[0].is_deleted ||
+    !properties[0].is_published
+  ) {
     throw new Error('Property not found or inactive');
   }
 }
@@ -1257,30 +1267,41 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/properties', async (req, res) => {
   try {
+    // ValuationAsOf is the date of the valuation the money figures come from
+    // (migration 19), so the page can say how current they are. The date only:
+    // the valuation's source text stays operator-side under decision D-7. NULL
+    // for a property whose figures predate the valuation ledger.
     const properties = await q(
       `SELECT
-        property_id AS "PropertyID",
-        property_name AS "PropertyName",
-        address AS "Address",
-        city AS "City",
-        country AS "Country",
-        property_type AS "PropertyType",
-        bedrooms AS "Bedrooms",
-        bathrooms AS "Bathrooms",
-        square_meter AS "SquareMeter",
-        property_value AS "PropertyValue",
-        fraction_price AS "FractionPrice",
-        monthly_rental_income AS "MonthlyRentalIncome",
-        projected_annual_yield AS "ProjectedAnnualYield",
-        current_occupancy_rate AS "CurrentOccupancyRate",
-        status AS "Status",
-        fractions_sold AS "FractionsSold",
-        total_fractions AS "TotalFractions",
-        property_description AS "PropertyDescription",
-        image_url AS "ImageURL"
-      FROM properties
-      WHERE is_active = true AND is_deleted = false
-      ORDER BY property_name
+        p.property_id AS "PropertyID",
+        p.property_name AS "PropertyName",
+        p.address AS "Address",
+        p.city AS "City",
+        p.country AS "Country",
+        p.property_type AS "PropertyType",
+        p.bedrooms AS "Bedrooms",
+        p.bathrooms AS "Bathrooms",
+        p.square_meter AS "SquareMeter",
+        p.property_value AS "PropertyValue",
+        p.fraction_price AS "FractionPrice",
+        p.monthly_rental_income AS "MonthlyRentalIncome",
+        p.projected_annual_yield AS "ProjectedAnnualYield",
+        p.current_occupancy_rate AS "CurrentOccupancyRate",
+        p.status AS "Status",
+        p.fractions_sold AS "FractionsSold",
+        p.total_fractions AS "TotalFractions",
+        p.property_description AS "PropertyDescription",
+        p.image_url AS "ImageURL",
+        to_char(v.valuation_date, 'YYYY-MM-DD') AS "ValuationAsOf"
+      FROM properties p
+      LEFT JOIN LATERAL (
+        SELECT pv.valuation_date FROM property_valuations pv
+         WHERE pv.property_id = p.property_id
+         ORDER BY pv.valuation_date DESC, pv.valuation_id DESC
+         LIMIT 1
+      ) v ON true
+      WHERE p.is_active = true AND p.is_deleted = false AND p.is_published = true
+      ORDER BY p.property_name
       LIMIT 100`
     );
 
@@ -1288,11 +1309,15 @@ app.get('/api/properties', async (req, res) => {
     // chosen order. One query for every property on the page rather than one per
     // property — DISTINCT ON is Postgres picking the first row per group, which
     // is exactly "the first image of each gallery" and needs no subquery.
+    // Joined to the same visibility rule as the list above, so a draft's photos
+    // are never signed for a page that cannot show them.
     const covers = await q(
-      `SELECT DISTINCT ON (property_id) property_id, media_id, storage_path, caption, original_file_name
-         FROM property_media
-        WHERE is_published = true
-        ORDER BY property_id, sort_order, media_id`
+      `SELECT DISTINCT ON (m.property_id) m.property_id, m.media_id, m.storage_path, m.caption, m.original_file_name
+         FROM property_media m
+         JOIN properties p ON p.property_id = m.property_id
+        WHERE m.is_published = true
+          AND p.is_active = true AND p.is_deleted = false AND p.is_published = true
+        ORDER BY m.property_id, m.sort_order, m.media_id`
     );
     const signedCovers = await signPropertyMedia(covers);
     const coverByProperty = new Map(
@@ -1318,7 +1343,18 @@ app.get('/api/properties', async (req, res) => {
 
 app.get('/api/properties/:id', async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = Number(req.params.id);
+    // A non-numeric id used to reach the query as NaN and come back as a 500.
+    // It is simply a property that does not exist.
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(404).json({ success: false, error: 'Property not found' });
+    }
+
+    // AcquisitionDate is a DATE and leaves as 'YYYY-MM-DD'. Serialised raw, the
+    // pg driver parses it at the server's local midnight and it reaches a
+    // browser west of the server as the previous day — on 1 January, the
+    // previous year, which is the part this page displays. ValuationAsOf: see
+    // the list endpoint above.
     const rows = await q(
       `SELECT
         property_id AS "PropertyID",
@@ -1341,11 +1377,16 @@ app.get('/api/properties/:id', async (req, res) => {
         image_url AS "ImageURL",
         status AS "Status",
         fractions_sold AS "FractionsSold",
-        acquisition_date AS "AcquisitionDate",
+        to_char(acquisition_date, 'YYYY-MM-DD') AS "AcquisitionDate",
+        (SELECT to_char(pv.valuation_date, 'YYYY-MM-DD')
+           FROM property_valuations pv
+          WHERE pv.property_id = properties.property_id
+          ORDER BY pv.valuation_date DESC, pv.valuation_id DESC
+          LIMIT 1) AS "ValuationAsOf",
         is_active AS "IsActive",
         is_deleted AS "IsDeleted"
       FROM properties
-      WHERE property_id = $1 AND is_active = true AND is_deleted = false`,
+      WHERE property_id = $1 AND is_active = true AND is_deleted = false AND is_published = true`,
       [id]
     );
 
@@ -1752,6 +1793,744 @@ app.delete('/api/ops/property-media/:mediaId', async (req, res) => {
     );
 
     res.json({ success: true, message: 'Image removed.' });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F12 — Property creation and management (REQ-OPS-04's property half).
+//
+// Three kinds of change with three different owners, and the split is the
+// point:
+//
+//   - Descriptive facts — name, address, rooms, insurer — are Operations
+//     work, edited in place. Same role set as the gallery above.
+//   - The money figures investors are shown — value, rent, projected yield —
+//     change only through a dated, sourced row in property_valuations, which
+//     Finance records (migration 19). REQ-OPS-04: "valuation update is a
+//     dated, audited action that recomputes the derived price for display."
+//     The 23 June meeting put "portfolio-value edits and other financially
+//     sensitive admin actions" behind finance_admin/super_admin, and setting
+//     the price an investor pays per fraction is one of those.
+//   - Visibility to investors is its own action (publish-state), so "I fixed
+//     the address" and "investors can now see this" are never one request.
+//
+// Deliberately NOT editable here: property_description. It is marketing copy
+// on a financial product page, and REQ-OPS-13's banned-term lint needs the
+// PRD's Appendix A, which is not in this repo — the same reason the gallery
+// shipped without a copy editor (D.44).
+// ---------------------------------------------------------------------------
+
+// Matches the investor portal's Property Type filter, so a property is never
+// filed under a type investors cannot filter to.
+const PROPERTY_TYPES = ['Residential', 'Commercial', 'Hospitality'];
+
+// Request field -> column, and how to check it. camelCase in, like every other
+// request body in this API; column names never leave the server. `required`
+// marks a NOT NULL column: it can be changed but never cleared. The upper
+// bounds keep a typo from reaching Postgres as a numeric overflow, which would
+// surface as an opaque 500 instead of a named error.
+const PROPERTY_DETAIL_FIELDS = {
+  propertyName: { column: 'property_name', kind: 'text', max: 255, required: true, label: 'Property name' },
+  address: { column: 'address', kind: 'text', max: 500, label: 'Address' },
+  city: { column: 'city', kind: 'text', max: 100, required: true, label: 'City' },
+  country: { column: 'country', kind: 'text', max: 100, required: true, label: 'Country' },
+  propertyType: { column: 'property_type', kind: 'choice', choices: PROPERTY_TYPES, label: 'Property type' },
+  bedrooms: { column: 'bedrooms', kind: 'integer', max: 1000, label: 'Bedrooms' },
+  // NUMERIC(3,1) and NUMERIC(10,2) in migration 01.
+  bathrooms: { column: 'bathrooms', kind: 'decimal', places: 1, max: 99.9, label: 'Bathrooms' },
+  squareMeters: { column: 'square_meter', kind: 'decimal', places: 2, max: 99999999.99, label: 'Floor area' },
+  acquisitionDate: { column: 'acquisition_date', kind: 'date', label: 'Acquisition date' },
+  managerName: { column: 'manager_name', kind: 'text', max: 255, label: 'Property manager' },
+  insuranceProvider: { column: 'insurance_provider', kind: 'text', max: 255, label: 'Insurer' },
+  insurancePolicyNumber: { column: 'insurance_policy_number', kind: 'text', max: 100, label: 'Insurance policy number' },
+};
+
+// What a valuation states. Each one is a complete statement rather than a
+// diff (see migration 19), so rent and yield are sent every time and an
+// omitted one means "this valuation does not state it".
+const PROPERTY_VALUATION_FIELDS = {
+  propertyValue: { kind: 'decimal', places: 2, max: 1e12, required: true, positive: true, label: 'Property value' },
+  monthlyRentalIncome: { kind: 'decimal', places: 2, max: 1e12, label: 'Monthly rental income' },
+  projectedAnnualYield: { kind: 'decimal', places: 2, max: 99.99, label: 'Projected annual yield' },
+  valuationDate: { kind: 'date', required: true, label: 'Valuation date' },
+  source: { kind: 'text', max: 200, required: true, label: 'Source' },
+  note: { kind: 'text', max: 1000, label: 'Note' },
+};
+
+// Sent to the edit endpoint, these are answered with where they DO change,
+// rather than "unknown field" — an operator or a script that sends one has a
+// real intention, and the useful reply is the route to it.
+const PROPERTY_FIELDS_CHANGED_ELSEWHERE = {
+  propertyValue: 'only through a recorded valuation, which is a Finance action',
+  monthlyRentalIncome: 'only through a recorded valuation, which is a Finance action',
+  projectedAnnualYield: 'only through a recorded valuation, which is a Finance action',
+  fractionPrice: 'never directly: it is the property value divided by the number of fractions',
+  isPublished: 'through the publish action, not the edit form',
+  propertyDescription: 'not yet: it is investor-facing marketing copy, and the banned-term check it needs (PRD Appendix A) has not been built',
+};
+
+const MAX_TOTAL_FRACTIONS = 10000000;
+
+// A YYYY-MM-DD string as a UTC-midnight Date, or null if it is not a real
+// calendar date. Strict format first — Date.parse accepts '2024' and
+// '5 Aug 2024' and resolves both to something plausible — then a round trip,
+// because Date.UTC turns 2024-02-30 into 1 March without complaint. The same
+// approach as ageInYearsUtc.
+function parseCalendarDateUtc(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+// "Not in the future", with one day of slack. The operators sit between UTC+1
+// and UTC+7; judged strictly against UTC, a Bangkok colleague entering a
+// report dated today would be refused every morning until 07:00. Tomorrow in
+// UTC covers every timezone on earth and still stops a typo'd year.
+function isLaterThanTomorrowUtc(date) {
+  const now = new Date();
+  const tomorrow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return date.getTime() > tomorrow;
+}
+
+// Validates and coerces one value against its spec. Same { value } / { error }
+// shape as normalizePropertyMediaCaption above, so every caller checks it the
+// same way. Absent, null or blank clears an optional field and is refused for
+// a required one.
+function normalizePropertyInput(spec, raw) {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return spec.required ? { error: `${spec.label} is required` } : { value: null };
+  }
+
+  if (spec.kind === 'text') {
+    if (typeof raw !== 'string') return { error: `${spec.label} must be text` };
+    const text = raw.trim();
+    if (text.length > spec.max) return { error: `${spec.label} must be ${spec.max} characters or fewer` };
+    return { value: text };
+  }
+
+  if (spec.kind === 'choice') {
+    if (!spec.choices.includes(raw)) return { error: `${spec.label} must be one of: ${spec.choices.join(', ')}` };
+    return { value: raw };
+  }
+
+  if (spec.kind === 'integer') {
+    const text = String(raw).trim();
+    if (!/^\d+$/.test(text)) return { error: `${spec.label} must be a whole number` };
+    if (Number(text) > spec.max) return { error: `${spec.label} cannot be more than ${spec.max}` };
+    return { value: Number(text) };
+  }
+
+  if (spec.kind === 'decimal') {
+    // Checked on the string form, not the parsed number. A float cannot say
+    // whether the client meant 8.2 or 8.19999, and Postgres would round a
+    // third decimal away silently — on a figure an investor is shown.
+    const text = String(raw).trim();
+    const pattern = new RegExp(`^\\d+(\\.\\d{1,${spec.places}})?$`);
+    if (!pattern.test(text)) {
+      return {
+        error: `${spec.label} must be a non-negative number with at most ${spec.places} decimal place${spec.places === 1 ? '' : 's'}`,
+      };
+    }
+    const amount = Number(text);
+    if (spec.positive && amount <= 0) return { error: `${spec.label} must be more than zero` };
+    if (amount > spec.max) return { error: `${spec.label} cannot be more than ${spec.max}` };
+    return { value: amount };
+  }
+
+  if (spec.kind === 'date') {
+    const text = String(raw).trim();
+    const date = parseCalendarDateUtc(text);
+    if (!date) return { error: `${spec.label} must be a real calendar date in YYYY-MM-DD format` };
+    if (date.getUTCFullYear() < 1900) return { error: `${spec.label} is not plausible — please check the year` };
+    if (isLaterThanTomorrowUtc(date)) return { error: `${spec.label} cannot be in the future` };
+    return { value: text };
+  }
+
+  return { error: `${spec.label} could not be read` };
+}
+
+function normalizeTotalFractions(raw) {
+  const text = String(raw ?? '').trim();
+  if (!/^\d+$/.test(text) || Number(text) < 1) {
+    return { error: 'Number of fractions must be a whole number of at least 1' };
+  }
+  if (Number(text) > MAX_TOTAL_FRACTIONS) {
+    return { error: `Number of fractions cannot be more than ${MAX_TOTAL_FRACTIONS}` };
+  }
+  return { value: Number(text) };
+}
+
+// Rejects rather than silently dropping, like the contact-info endpoint: a
+// client that believes it saved a field it did not is worse off than one told
+// no.
+function unexpectedPropertyFieldsError(body) {
+  const keys = Object.keys(body);
+  const elsewhere = keys.filter((k) => k in PROPERTY_FIELDS_CHANGED_ELSEWHERE);
+  if (elsewhere.length > 0) {
+    return elsewhere.map((k) => `${k} changes ${PROPERTY_FIELDS_CHANGED_ELSEWHERE[k]}.`).join(' ');
+  }
+  const allowed = [...Object.keys(PROPERTY_DETAIL_FIELDS), 'totalFractions'];
+  const unknown = keys.filter((k) => !allowed.includes(k));
+  if (unknown.length > 0) {
+    return `Unexpected field(s): ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}.`;
+  }
+  return null;
+}
+
+// Whether the number of fractions may still change, and why not. Changing it
+// re-prices every fraction and re-divides every holding, so it freezes the
+// moment anything outside this screen depends on it: investors can see the
+// price, someone holds a fraction, or someone has expressed interest at the
+// current price. Takes the query function so it can run inside the caller's
+// transaction, after the row lock.
+async function fractionStructureLock(propertyId, isPublished, query = q) {
+  if (isPublished) {
+    return { locked: true, reason: 'The property is published, so investors can already see its price per fraction.' };
+  }
+  const counts = await query(
+    `SELECT
+       (SELECT COUNT(*) FROM investments WHERE property_id = $1 AND is_deleted = false)::int AS holdings,
+       (SELECT COUNT(*) FROM transactions
+         WHERE related_property_id = $1 AND transaction_type = 'InvestmentIntent')::int AS intents`,
+    [propertyId]
+  );
+  if (counts[0].holdings > 0) {
+    return { locked: true, reason: 'Investors already hold fractions of this property.' };
+  }
+  if (counts[0].intents > 0) {
+    return { locked: true, reason: 'Investors have already expressed interest at the current price.' };
+  }
+  return { locked: false, reason: null };
+}
+
+// What stands between a draft and publication. Only the one check the data can
+// actually support today: every money figure an investor will see must come
+// from a dated, sourced valuation.
+//
+// The document-completeness gate the PRD asks for (REQ-DOC-10, mandatory list
+// D-16) is NOT here. The document registry files a coarse KYC / Finance /
+// Property category, not the PRP-VAL / PRP-TTL / PRP-INS taxonomy that gate
+// needs, so it cannot be written correctly yet. Publishing a valued property
+// stays an operator's judgement for the pilot — a known gap, not an oversight.
+function publishBlockers(valuationCount) {
+  const blockers = [];
+  if (!valuationCount) blockers.push('Finance has not recorded a valuation yet.');
+  return blockers;
+}
+
+// The complete operator view of one property: every editable field, the
+// current figures, the valuation ledger, whether the fraction count can still
+// change, and what blocks publishing. Every write endpoint below returns this
+// same shape, so the portal re-renders from any response without a second
+// request.
+async function loadOpsPropertyDetail(propertyId) {
+  const rows = await q(
+    `SELECT
+       property_id AS "PropertyID",
+       property_name AS "PropertyName",
+       address AS "Address",
+       city AS "City",
+       country AS "Country",
+       property_type AS "PropertyType",
+       bedrooms AS "Bedrooms",
+       bathrooms AS "Bathrooms",
+       square_meter AS "SquareMeters",
+       to_char(acquisition_date, 'YYYY-MM-DD') AS "AcquisitionDate",
+       manager_name AS "ManagerName",
+       insurance_provider AS "InsuranceProvider",
+       insurance_policy_number AS "InsurancePolicyNumber",
+       property_description AS "PropertyDescription",
+       property_value AS "PropertyValue",
+       monthly_rental_income AS "MonthlyRentalIncome",
+       projected_annual_yield AS "ProjectedAnnualYield",
+       total_fractions AS "TotalFractions",
+       fraction_price AS "FractionPrice",
+       fractions_sold AS "FractionsSold",
+       fractions_available AS "FractionsAvailable",
+       status AS "Status",
+       is_active AS "IsActive",
+       is_published AS "IsPublished",
+       created_at AS "CreatedAt",
+       updated_at AS "UpdatedAt"
+     FROM properties
+     WHERE property_id = $1 AND is_deleted = false`,
+    [propertyId]
+  );
+  if (rows.length === 0) return null;
+  const property = rows[0];
+
+  // valuation_date is a DATE and leaves as a string, never a timestamp — the
+  // pg driver would otherwise parse it at the server's local midnight and
+  // shift it a day for anyone west of that server.
+  const valuations = await q(
+    `SELECT
+       v.valuation_id AS "ValuationID",
+       v.property_value AS "PropertyValue",
+       v.monthly_rental_income AS "MonthlyRentalIncome",
+       v.projected_annual_yield AS "ProjectedAnnualYield",
+       v.total_fractions AS "TotalFractions",
+       v.fraction_price AS "FractionPrice",
+       to_char(v.valuation_date, 'YYYY-MM-DD') AS "ValuationDate",
+       v.source AS "Source",
+       v.note AS "Note",
+       v.created_at AS "RecordedAt",
+       u.first_name AS "RecordedByFirstName",
+       u.last_name AS "RecordedByLastName",
+       u.email AS "RecordedByEmail"
+     FROM property_valuations v
+     JOIN users u ON u.user_id = v.recorded_by_admin_id
+     WHERE v.property_id = $1
+     ORDER BY v.valuation_date DESC, v.valuation_id DESC`,
+    [propertyId]
+  );
+
+  const lock = await fractionStructureLock(propertyId, property.IsPublished);
+
+  return {
+    ...property,
+    Valuations: valuations,
+    FractionStructureLocked: lock.locked,
+    FractionStructureLockReason: lock.reason,
+    PublishBlockers: publishBlockers(valuations.length),
+  };
+}
+
+// GET /api/ops/properties — every property, drafts included, for the
+// Properties tab and for the property pickers on the document and gallery
+// forms. Any operator: Finance needs it to find a property to value, and the
+// document registry it feeds is readable by every role.
+//
+// This replaces the portal's use of the investor endpoint for those pickers.
+// That endpoint now hides drafts, so a property being built would have been
+// unable to receive its own photos or documents until after it was published
+// — the opposite of the order anyone would work in.
+app.get('/api/ops/properties', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, ANY_OPERATOR);
+    if (!adminUserId) return;
+
+    const properties = await q(
+      `SELECT
+         p.property_id AS "PropertyID",
+         p.property_name AS "PropertyName",
+         p.city AS "City",
+         p.country AS "Country",
+         p.property_value AS "PropertyValue",
+         p.fraction_price AS "FractionPrice",
+         p.total_fractions AS "TotalFractions",
+         p.fractions_sold AS "FractionsSold",
+         p.is_active AS "IsActive",
+         p.is_published AS "IsPublished",
+         to_char(v.valuation_date, 'YYYY-MM-DD') AS "ValuationAsOf",
+         m.total AS "PhotoCount",
+         m.published AS "PublishedPhotoCount",
+         p.updated_at AS "UpdatedAt"
+       FROM properties p
+       LEFT JOIN LATERAL (
+         SELECT valuation_date FROM property_valuations
+          WHERE property_id = p.property_id
+          ORDER BY valuation_date DESC, valuation_id DESC
+          LIMIT 1
+       ) v ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS total,
+                (COUNT(*) FILTER (WHERE is_published))::int AS published
+           FROM property_media
+          WHERE property_id = p.property_id
+       ) m ON true
+       WHERE p.is_deleted = false
+       ORDER BY p.property_name, p.property_id`
+    );
+    res.json({ success: true, data: properties });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/properties/:propertyId — one property in full, with its
+// valuation ledger. Any operator, for the same reason as the list.
+app.get('/api/ops/properties/:propertyId', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, ANY_OPERATOR);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const detail = await loadOpsPropertyDetail(propertyId);
+    if (!detail) {
+      return res.status(404).json({ success: false, error: 'Property not found' });
+    }
+    res.json({ success: true, data: detail });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/properties — create. Always lands as an unpublished draft with
+// nothing sold and no valuation: value and price stay NULL until Finance
+// records one, and publishing is refused until then. Publishing is a separate,
+// deliberate action, so "I filled in the address" and "investors can now see
+// this" are never the same request.
+app.post('/api/ops/properties', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const body = req.body || {};
+    const refusal = unexpectedPropertyFieldsError(body);
+    if (refusal) {
+      return res.status(400).json({ success: false, error: refusal });
+    }
+
+    // The three NOT NULL descriptive columns, plus the share structure, which
+    // has no honest default — 1000 was the seed file's number, not a product
+    // decision about this property.
+    const missing = ['propertyName', 'city', 'country', 'totalFractions'].filter(
+      (f) => body[f] === undefined || body[f] === null || (typeof body[f] === 'string' && body[f].trim() === '')
+    );
+    if (missing.length > 0) {
+      return res.status(400).json({ success: false, error: `Missing required field(s): ${missing.join(', ')}` });
+    }
+
+    const columns = [];
+    const values = [];
+    for (const [field, spec] of Object.entries(PROPERTY_DETAIL_FIELDS)) {
+      if (!(field in body)) continue;
+      const result = normalizePropertyInput(spec, body[field]);
+      if (result.error) {
+        return res.status(400).json({ success: false, error: result.error });
+      }
+      columns.push(spec.column);
+      values.push(result.value);
+    }
+
+    const fractions = normalizeTotalFractions(body.totalFractions);
+    if (fractions.error) {
+      return res.status(400).json({ success: false, error: fractions.error });
+    }
+    columns.push('total_fractions', 'fractions_available', 'fractions_sold', 'is_published');
+    values.push(fractions.value, fractions.value, 0, false);
+
+    const placeholders = values.map((_, i) => `$${i + 1}`);
+    const inserted = await q(
+      `INSERT INTO properties (${columns.join(', ')})
+       VALUES (${placeholders.join(', ')})
+       RETURNING property_id`,
+      values
+    );
+    const propertyId = Number(inserted[0].property_id);
+
+    console.log(`[property.created] property_id=${propertyId} fractions=${fractions.value} by admin_id=${adminUserId}`);
+    res.status(201).json({ success: true, data: await loadOpsPropertyDetail(propertyId) });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// PUT /api/ops/properties/:propertyId — edit the descriptive fields, and the
+// number of fractions while nothing depends on it yet (fractionStructureLock).
+// Money figures, publication and the description are refused with a pointer to
+// where they do change — see PROPERTY_FIELDS_CHANGED_ELSEWHERE.
+app.put('/api/ops/properties/:propertyId', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const body = req.body || {};
+    const refusal = unexpectedPropertyFieldsError(body);
+    if (refusal) {
+      return res.status(400).json({ success: false, error: refusal });
+    }
+    if (Object.keys(body).length === 0) {
+      return res.status(400).json({ success: false, error: 'At least one field is required' });
+    }
+
+    // Everything is validated before the transaction opens, so a bad field
+    // never holds a row lock while the error is being built.
+    const setClauses = [];
+    const values = [];
+    const changedFields = [];
+    for (const [field, spec] of Object.entries(PROPERTY_DETAIL_FIELDS)) {
+      if (!(field in body)) continue;
+      const result = normalizePropertyInput(spec, body[field]);
+      if (result.error) {
+        return res.status(400).json({ success: false, error: result.error });
+      }
+      values.push(result.value);
+      setClauses.push(`${spec.column} = $${values.length}`);
+      changedFields.push(field);
+    }
+
+    let fractions = null;
+    if ('totalFractions' in body) {
+      fractions = normalizeTotalFractions(body.totalFractions);
+      if (fractions.error) {
+        return res.status(400).json({ success: false, error: fractions.error });
+      }
+    }
+
+    const outcome = await withTransaction(async (tx) => {
+      // Row lock first. The fraction check reads is_published, and the
+      // publish action takes this same lock, so the two cannot interleave.
+      const current = await tx(
+        `SELECT total_fractions, is_published FROM properties
+          WHERE property_id = $1 AND is_deleted = false
+          FOR UPDATE`,
+        [propertyId]
+      );
+      if (current.length === 0) return { status: 404, error: 'Property not found' };
+
+      const previousFractions = Number(current[0].total_fractions);
+      // The edit form always sends the count, so an unchanged value must not
+      // trip the lock — only an actual change is checked.
+      if (fractions && fractions.value !== previousFractions) {
+        const lock = await fractionStructureLock(propertyId, current[0].is_published, tx);
+        if (lock.locked) {
+          return {
+            status: 409,
+            code: 'FRACTIONS_LOCKED',
+            error: `The number of fractions can no longer change. ${lock.reason}`,
+          };
+        }
+        values.push(fractions.value);
+        const n = `$${values.length}::int`;
+        setClauses.push(
+          `total_fractions = ${n}`,
+          `fractions_available = ${n} - COALESCE(fractions_sold, 0)`,
+          // Re-priced, since the price per fraction is derived from the count.
+          // An unvalued property has no value to divide, and stays NULL.
+          `fraction_price = ROUND(property_value / ${n}, 2)`
+        );
+        changedFields.push('totalFractions');
+      }
+
+      if (setClauses.length > 0) {
+        values.push(propertyId);
+        await tx(
+          `UPDATE properties SET ${setClauses.join(', ')}, updated_at = NOW()
+            WHERE property_id = $${values.length}`,
+          values
+        );
+      }
+      return { status: 200, previousFractions };
+    });
+
+    if (outcome.status !== 200) {
+      return res.status(outcome.status).json({ success: false, code: outcome.code, error: outcome.error });
+    }
+
+    console.log(`[property.updated] property_id=${propertyId} fields=${changedFields.join(',') || 'none'} by admin_id=${adminUserId}`);
+    if (changedFields.includes('totalFractions')) {
+      console.log(
+        `[property.fractions_changed] property_id=${propertyId} from=${outcome.previousFractions} to=${fractions.value} by admin_id=${adminUserId}`
+      );
+    }
+    res.json({ success: true, data: await loadOpsPropertyDetail(propertyId) });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/properties/:propertyId/valuations — record a valuation. The
+// only path that changes a property's value, rent, projected yield or price
+// per fraction. Appends a ledger row, then projects the most recent valuation
+// BY DATE onto the property row, in one transaction — so recording an older
+// report for the history cannot overwrite a newer one, and the property row
+// can never disagree with its own ledger.
+app.post('/api/ops/properties/:propertyId/valuations', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, FINANCE_ROLES);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const body = req.body || {};
+    const unknown = Object.keys(body).filter((k) => !(k in PROPERTY_VALUATION_FIELDS));
+    if (unknown.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Unexpected field(s): ${unknown.join(', ')}. Allowed: ${Object.keys(PROPERTY_VALUATION_FIELDS).join(', ')}.`,
+      });
+    }
+
+    const input = {};
+    for (const [field, spec] of Object.entries(PROPERTY_VALUATION_FIELDS)) {
+      const result = normalizePropertyInput(spec, body[field]);
+      if (result.error) {
+        return res.status(400).json({ success: false, error: result.error });
+      }
+      input[field] = result.value;
+    }
+
+    const outcome = await withTransaction(async (tx) => {
+      // Locked so a concurrent change to the fraction count cannot land
+      // between pricing this valuation and projecting it.
+      const current = await tx(
+        `SELECT total_fractions FROM properties
+          WHERE property_id = $1 AND is_deleted = false
+          FOR UPDATE`,
+        [propertyId]
+      );
+      if (current.length === 0) return { status: 404, error: 'Property not found' };
+
+      const totalFractions = Number(current[0].total_fractions);
+      if (!Number.isInteger(totalFractions) || totalFractions <= 0) {
+        return {
+          status: 409,
+          error: 'This property has no number of fractions, so no price per fraction can be derived. Set it on the property first.',
+        };
+      }
+
+      const inserted = await tx(
+        `INSERT INTO property_valuations
+           (property_id, property_value, monthly_rental_income, projected_annual_yield,
+            total_fractions, fraction_price, valuation_date, source, note, recorded_by_admin_id)
+         VALUES ($1, $2::numeric, $3::numeric, $4::numeric,
+                 $5::int, ROUND($2::numeric / $5::int, 2), $6::date, $7, $8, $9)
+         RETURNING valuation_id`,
+        [
+          propertyId,
+          input.propertyValue,
+          input.monthlyRentalIncome,
+          input.projectedAnnualYield,
+          totalFractions,
+          input.valuationDate,
+          input.source,
+          input.note,
+          adminUserId,
+        ]
+      );
+
+      const projected = await tx(
+        `UPDATE properties p
+            SET property_value = v.property_value,
+                monthly_rental_income = v.monthly_rental_income,
+                projected_annual_yield = v.projected_annual_yield,
+                fraction_price = ROUND(v.property_value / p.total_fractions, 2),
+                updated_at = NOW()
+           FROM (
+             SELECT valuation_id, property_value, monthly_rental_income, projected_annual_yield
+               FROM property_valuations
+              WHERE property_id = $1
+              ORDER BY valuation_date DESC, valuation_id DESC
+              LIMIT 1
+           ) v
+          WHERE p.property_id = $1
+          RETURNING v.valuation_id`,
+        [propertyId]
+      );
+
+      return {
+        status: 201,
+        valuationId: String(inserted[0].valuation_id),
+        becameCurrent: String(projected[0].valuation_id) === String(inserted[0].valuation_id),
+      };
+    });
+
+    if (outcome.status !== 201) {
+      return res.status(outcome.status).json({ success: false, error: outcome.error });
+    }
+
+    console.log(
+      `[property.valued] property_id=${propertyId} valuation_id=${outcome.valuationId} value=${input.propertyValue} ` +
+      `as_of=${input.valuationDate} current=${outcome.becameCurrent ? 'yes' : 'no'} by admin_id=${adminUserId}`
+    );
+    res.status(201).json({
+      success: true,
+      becameCurrent: outcome.becameCurrent,
+      data: await loadOpsPropertyDetail(propertyId),
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// PATCH /api/ops/properties/:propertyId/publish-state — the one action that
+// exposes a property to investors, or takes it back. Kept apart from the edit
+// route so it gets its own audit line rather than being buried in a field
+// diff, and so isPublished can never be smuggled in alongside an unrelated
+// edit. Publishing is refused while publishBlockers() names anything;
+// unpublishing never is — taking something down must always be possible.
+app.patch('/api/ops/properties/:propertyId/publish-state', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const propertyId = Number(req.params.propertyId);
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid propertyId is required' });
+    }
+
+    const body = req.body || {};
+    const unexpected = Object.keys(body).filter((k) => k !== 'isPublished');
+    if (unexpected.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Unexpected field(s): ${unexpected.join(', ')}. Only isPublished can be set here.`,
+      });
+    }
+    if (typeof body.isPublished !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'isPublished must be true or false' });
+    }
+
+    const outcome = await withTransaction(async (tx) => {
+      const current = await tx(
+        'SELECT property_id FROM properties WHERE property_id = $1 AND is_deleted = false FOR UPDATE',
+        [propertyId]
+      );
+      if (current.length === 0) return { status: 404, error: 'Property not found' };
+
+      if (body.isPublished) {
+        const count = await tx(
+          'SELECT COUNT(*)::int AS n FROM property_valuations WHERE property_id = $1',
+          [propertyId]
+        );
+        const blockers = publishBlockers(count[0].n);
+        if (blockers.length > 0) {
+          return {
+            status: 409,
+            code: 'PROPERTY_NOT_READY',
+            error: `This property cannot be published yet. ${blockers.join(' ')}`,
+          };
+        }
+      }
+
+      await tx(
+        'UPDATE properties SET is_published = $1, updated_at = NOW() WHERE property_id = $2',
+        [body.isPublished, propertyId]
+      );
+      return { status: 200 };
+    });
+
+    if (outcome.status !== 200) {
+      return res.status(outcome.status).json({ success: false, code: outcome.code, error: outcome.error });
+    }
+
+    console.log(
+      `[${body.isPublished ? 'property.published' : 'property.unpublished'}] property_id=${propertyId} by admin_id=${adminUserId}`
+    );
+    res.json({ success: true, data: await loadOpsPropertyDetail(propertyId) });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
   }

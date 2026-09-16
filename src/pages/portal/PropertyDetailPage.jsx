@@ -6,14 +6,13 @@ import {
   MapPin,
   Building2,
   Calendar,
-  Percent,
   DollarSign,
   Bed,
   Bath,
   Maximize2,
   FileText,
 } from 'lucide-react';
-import { getApiBase } from '@/lib/utils';
+import { getApiBase, formatCalendarDate } from '@/lib/utils';
 import { fadeUp, staggerContainer, staggerItem } from '@/animations.js';
 
 function money(value) {
@@ -47,8 +46,15 @@ export default function PropertyDetailPage() {
         const data = payload.data;
         const propertyValue = Number(data.PropertyValue) || 0;
         const fractionPrice = Number(data.FractionPrice) || 0;
-        const projectedYield = Number(data.ProjectedAnnualYield) || 0;
-        const monthlyIncome = Number(data.MonthlyRentalIncome) || 0;
+        // null when the current valuation does not state one. Kept apart from
+        // zero so the page says "Not stated" instead of showing an investor a
+        // 0% yield or $0 rent that nobody claimed.
+        const projectedYield = data.ProjectedAnnualYield === null || data.ProjectedAnnualYield === undefined
+          ? null
+          : Number(data.ProjectedAnnualYield);
+        const monthlyIncome = data.MonthlyRentalIncome === null || data.MonthlyRentalIncome === undefined
+          ? null
+          : Number(data.MonthlyRentalIncome);
         const fractionsSold = Number(data.FractionsSold) || 0;
         const totalFractions = Number(data.TotalFractions) || 0;
         const funded = totalFractions > 0 ? Math.round((fractionsSold / totalFractions) * 100) : 0;
@@ -69,14 +75,21 @@ export default function PropertyDetailPage() {
           minInvestment: fractionPrice,
           totalValue: propertyValue,
           rentalYieldPct: projectedYield,
-          appreciationPct: Math.max(0, projectedYield * 0.4),
+          // No appreciation figure. This page used to show 40% of the projected
+          // yield as an "appreciation estimate" — a number with no source at
+          // all, which REQ-USR-15's "source and date on any forward-looking
+          // figure" rules out on a product page.
           investors: fractionsSold,
           funded,
           propertyType: data.PropertyType,
           size: data.SquareMeter ? `${data.SquareMeter} sqm` : 'N/A',
           bedrooms: Number(data.Bedrooms) || 0,
           bathrooms: Number(data.Bathrooms) || 0,
-          yearBuilt: data.AcquisitionDate ? new Date(data.AcquisitionDate).getFullYear() : 'N/A',
+          // The year read straight off the 'YYYY-MM-DD' string. Through new
+          // Date() it would put 1 January in the previous year for anyone west
+          // of UTC.
+          acquiredYear: data.AcquisitionDate ? String(data.AcquisitionDate).slice(0, 4) : null,
+          valuationAsOf: formatCalendarDate(data.ValuationAsOf),
           status: data.Status || 'Funding',
           description: data.PropertyDescription || 'No description available.',
           monthlyIncome,
@@ -209,13 +222,18 @@ export default function PropertyDetailPage() {
               </div>
               <div className="bg-gray-50 rounded-xl p-3">
                 <p className="text-xs text-gray-400">Projected Annual Yield</p>
-                <p className="text-sm font-semibold text-gray-900 mt-0.5">{Number(property.rentalYieldPct || 0).toFixed(1)}%</p>
+                <p className="text-sm font-semibold text-gray-900 mt-0.5">
+                  {property.rentalYieldPct === null ? 'Not stated' : `${property.rentalYieldPct.toFixed(1)}%`}
+                </p>
               </div>
               <div className="bg-gray-50 rounded-xl p-3">
                 <p className="text-xs text-gray-400">Current Funding</p>
                 <p className="text-sm font-semibold text-gray-900 mt-0.5">{property.funded}%</p>
               </div>
             </div>
+            {property.valuationAsOf && (
+              <p className="text-xs text-gray-400">Figures as of {property.valuationAsOf}</p>
+            )}
           </motion.div>
         </motion.div>
 
@@ -226,9 +244,8 @@ export default function PropertyDetailPage() {
               <div className="flex items-center gap-2"><Maximize2 className="w-4 h-4 text-gray-400" /> {property.size}</div>
               <div className="flex items-center gap-2"><Bed className="w-4 h-4 text-gray-400" /> {property.bedrooms} bedrooms</div>
               <div className="flex items-center gap-2"><Bath className="w-4 h-4 text-gray-400" /> {property.bathrooms} bathrooms</div>
-              <div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-gray-400" /> Built / acquired: {property.yearBuilt}</div>
-              <div className="flex items-center gap-2"><Percent className="w-4 h-4 text-gray-400" /> Appreciation estimate: {property.appreciationPct.toFixed(1)}%</div>
-              <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-gray-400" /> Monthly rental income: {money(property.monthlyIncome)}</div>
+              <div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-gray-400" /> Acquired: {property.acquiredYear || 'Not stated'}</div>
+              <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-gray-400" /> Monthly rental income: {property.monthlyIncome === null ? 'Not stated' : money(property.monthlyIncome)}</div>
             </div>
           </div>
 

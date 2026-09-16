@@ -62,3 +62,22 @@ export function getApiBase() {
 
   return url;
 }
+
+/**
+ * A calendar date the API sends as 'YYYY-MM-DD' — a valuation date, an
+ * acquisition date — formatted for display, or null if there is none.
+ *
+ * Read from its parts and formatted in UTC. A DATE has no time and no
+ * timezone; handed to new Date() as a string and shown in local time, it lands
+ * on the previous day for every reader west of UTC.
+ */
+export function formatCalendarDate(value) {
+  const [year, month, day] = String(value ?? '').slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}

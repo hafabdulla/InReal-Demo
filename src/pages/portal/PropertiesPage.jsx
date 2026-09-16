@@ -7,7 +7,7 @@ import {
   MapPin,
   ArrowRight,
 } from 'lucide-react';
-import { getApiBase } from '@/lib/utils';
+import { getApiBase, formatCalendarDate } from '@/lib/utils';
 
 const categories = ['All', 'Residential', 'Commercial', 'Hospitality'];
 const statuses = ['All', 'Funding', 'Funded'];
@@ -38,15 +38,30 @@ export default function PropertiesPage() {
           const totalFractions = Number(property.TotalFractions) || 0;
           const fractionsSold = Number(property.FractionsSold) || 0;
           const fundingProgress = totalFractions > 0 ? Math.round((fractionsSold / totalFractions) * 100) : 0;
+          // null when the current valuation does not state one — shown as "Not
+          // stated", never as 0%, which would be a figure nobody claimed.
+          const projectedYield = property.ProjectedAnnualYield === null || property.ProjectedAnnualYield === undefined
+            ? null
+            : Number(property.ProjectedAnnualYield);
+          const monthlyRent = Number(property.MonthlyRentalIncome) || 0;
 
+          let rentalYield = 'Not stated';
+          if (monthlyRent > 0 && propertyValue > 0) {
+            rentalYield = `${((monthlyRent * 12) / propertyValue * 100).toFixed(1)}%`;
+          } else if (projectedYield !== null) {
+            rentalYield = `${projectedYield.toFixed(1)}%`;
+          }
+
+          // No appreciation figure. The card used to show 40% of the projected
+          // yield as "Tgt. Appreciation" — a number with no source at all, on a
+          // financial product page, which REQ-USR-15's "source and date on any
+          // forward-looking figure" rules out.
           return {
             id: String(property.PropertyID),
             title: property.PropertyName,
             name: property.PropertyName,
             location: `${property.City}, ${property.Country}`,
             country: property.Country,
-            returns: `${Number(property.ProjectedAnnualYield) || 0}%`,
-            annualReturn: `${Number(property.ProjectedAnnualYield) || 0}%`,
             // The first published gallery photo the operator ordered, falling
             // back to the legacy column, then to the placeholder.
             image: property.CoverImage?.Url || property.ImageURL || '/placeholder-property.jpg',
@@ -54,12 +69,12 @@ export default function PropertiesPage() {
             propertyType: property.PropertyType,
             status: property.Status === 'Funded' ? 'Funded' : 'Funding',
             funded: fundingProgress,
-            rentalYield: `${Number(property.MonthlyRentalIncome) > 0 && propertyValue > 0 ? ((Number(property.MonthlyRentalIncome) * 12) / propertyValue * 100).toFixed(1) : Number(property.ProjectedAnnualYield || 0).toFixed(1)}%`,
+            rentalYield,
+            projectedYield: projectedYield === null ? 'Not stated' : `${projectedYield.toFixed(1)}%`,
             minInvestment: fractionPrice ? `$${fractionPrice.toLocaleString('en-US')}` : '$0',
             propertyValue: propertyValue ? `$${propertyValue.toLocaleString('en-US')}` : '$0',
-            appreciation: `${Math.max(0, (Number(property.ProjectedAnnualYield) || 0) * 0.4).toFixed(1)}%`,
+            valuationAsOf: formatCalendarDate(property.ValuationAsOf),
             investors: fractionsSold,
-            completionDate: property.AcquisitionDate || '',
             description: property.PropertyDescription || '',
           };
         });
@@ -255,10 +270,11 @@ export default function PropertiesPage() {
                       {property.propertyType}
                     </span>
                   </div>
+                  {/* Funded share only. The card used to carry a second badge
+                      showing the projected yield labelled "Est. ROI" — a yield
+                      is not a return on investment, and the yield is already on
+                      the card below, labelled as what it is. */}
                   <div className="absolute top-3 right-3 flex flex-col gap-2">
-                    <div className="bg-primary-accent/20 backdrop-blur-sm rounded-full px-3 py-1.5 font-semibold text-primary-accent text-xs border border-primary-accent/40">
-                      {property.annualReturn} Est. ROI
-                    </div>
                     <div className="bg-white/95 backdrop-blur-sm rounded-full px-3 py-1.5 font-semibold text-primary-accent text-xs">
                       {property.funded}% Funded
                     </div>
@@ -285,10 +301,13 @@ export default function PropertiesPage() {
                       <p className="text-sm font-bold text-gray-900 mt-0.5">{property.propertyValue}</p>
                     </div>
                     <div className="text-center bg-gray-50 rounded-xl py-3">
-                      <p className="text-xs text-gray-400">Tgt. Appreciation</p>
-                      <p className="text-sm font-bold text-primary-accent mt-0.5">{property.appreciation}</p>
+                      <p className="text-xs text-gray-400">Proj. Annual Yield</p>
+                      <p className="text-sm font-bold text-primary-accent mt-0.5">{property.projectedYield}</p>
                     </div>
                   </div>
+                  {property.valuationAsOf && (
+                    <p className="mt-2 text-xs text-gray-400">Figures as of {property.valuationAsOf}</p>
+                  )}
 
                   {/* Funding Progress */}
                   <div className="mt-4">

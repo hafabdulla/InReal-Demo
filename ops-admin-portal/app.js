@@ -341,42 +341,56 @@ async function loadDocuments() {
   docQueryState.totalPages = Number.isFinite(result.totalPages) ? result.totalPages : 1;
 }
 
-// Fills the optional "Property" dropdown on the upload form. Reuses the
-// existing /api/properties endpoint rather than adding an ops-specific one —
-// the property list is the same data either way, and a second endpoint would be
-// a second thing to keep in sync.
+// Loads every property — drafts included — and fills everything that lists
+// them: the Properties tab table, and the optional property pickers on the
+// document upload form and the queue filter.
 //
-// Failure here is deliberately non-fatal: the property link is optional, so if
-// the list can't load the admin can still upload a general document rather than
-// being blocked entirely.
+// Reads the operator endpoint. This used to read the investor one,
+// /api/properties, which hides drafts — so a property still being built could
+// not be picked to receive its own photos or documents until after it had been
+// published, which is the opposite of the order anyone works in.
+//
+// Failure here is deliberately non-fatal: the property link on a document is
+// optional, so if the list can't load the admin can still upload a general
+// document rather than being blocked entirely.
 async function loadPropertyOptions() {
-  if (!els.docPropertyId) return;
   try {
-    const result = await apiFetch('/api/properties');
-    const properties = result.data || [];
-    const options = properties
-      .map((p) => `<option value="${escapeAttr(p.PropertyID)}">${escapeHtml(p.PropertyName)}</option>`)
-      .join('');
-    els.docPropertyId.innerHTML =
-      `<option value="">General — not property-specific</option>${options}`;
-
-    // The queue's property FILTER is filled from the same fetch rather than a
-    // second request. Its leading options differ from the upload form's on
-    // purpose: here an empty value means "don't filter", and "general" is an
-    // explicit choice meaning "documents tied to no property" — on the upload
-    // form empty IS "no property". Same list, opposite meaning for the blank
-    // option, which is worth stating because reusing the markup would have
-    // quietly made the filter unable to express "general only".
-    if (els.docFilterProperty) {
-      els.docFilterProperty.innerHTML =
-        `<option value="">All properties</option><option value="general">General — no property</option>${options}`;
-    }
-
-    // The property-media picker rides on the same fetch, for the same reason
-    // the filter above does: one list, one request.
-    fillMediaPropertySelect(properties);
+    const result = await apiFetch('/api/ops/properties');
+    propertyList = Array.isArray(result.data) ? result.data : [];
+    propertyListError = '';
   } catch (error) {
-    console.error('Could not load properties for the document form:', error);
+    console.error('Could not load properties:', error);
+    propertyListError = error.message || 'Request failed';
+  }
+  fillDocumentPropertyPickers();
+  renderPropertyTable();
+}
+
+// The queue's property FILTER is filled from the same list as the upload
+// form's picker. Its leading options differ on purpose: here an empty value
+// means "don't filter", and "general" is an explicit choice meaning "documents
+// tied to no property" — on the upload form empty IS "no property". Same list,
+// opposite meaning for the blank option, which is worth stating because reusing
+// the markup would have quietly made the filter unable to express "general
+// only". Drafts are labelled: a document filed against one is filed against a
+// property investors cannot see yet.
+function fillDocumentPropertyPickers() {
+  const options = propertyList
+    .map((row) => {
+      const draftSuffix = row.IsPublished ? '' : ' (draft)';
+      return `<option value="${escapeAttr(row.PropertyID)}">${escapeHtml(row.PropertyName)}${draftSuffix}</option>`;
+    })
+    .join('');
+
+  if (els.docPropertyId) {
+    const chosen = els.docPropertyId.value;
+    els.docPropertyId.innerHTML = `<option value="">General — not property-specific</option>${options}`;
+    restoreSelectValue(els.docPropertyId, chosen);
+  }
+  if (els.docFilterProperty) {
+    els.docFilterProperty.innerHTML =
+      `<option value="">All properties</option><option value="general">General — no property</option>${options}`;
+    restoreSelectValue(els.docFilterProperty, docQueryState.propertyId);
   }
 }
 
@@ -2278,6 +2292,12 @@ function applyOperatorActionGates() {
   if (mediaDropzone) mediaDropzone.classList.toggle('disabled', !allowed);
   if (mediaFileInput) mediaFileInput.disabled = !allowed;
 
+  // Creating a property is Operations work too. The rest of the Properties tab
+  // is drawn per property and gates itself as it renders (renderPropertyWorkspace).
+  const newPropertyBtn = document.getElementById('newPropertyBtn');
+  if (newPropertyBtn) newPropertyBtn.disabled = !allowed;
+  setNote('newPropertyRoleNote', allowed, 'Creating and editing properties is an Operations task. Your role is Finance: open a property below to record its valuation.');
+
   // The dropzone sits outside #uploadForm in the grid, so gating the form alone
   // would still let someone stage a file against a form they cannot submit.
   const dropzone = document.getElementById('uploadDropzone');
@@ -3070,8 +3090,22 @@ function resetWorkspaceForSignOut() {
   // here — a sign-out that only drops the token leaves it on screen for the
   // next person on this machine.
   mediaList = [];
-  selectedMediaPropertyId = '';
   stagedMediaFile = null;
+  // The property list, the open property's details and its valuation ledger —
+  // which names who recorded each valuation — go the same way.
+  propertyList = [];
+  propertyListError = '';
+  selectedPropertyId = '';
+  propertyDetail = null;
+  propertyEditorMode = 'none';
+  document.getElementById('propertyForm')?.reset();
+  const propertyStatusCard = document.getElementById('propertyStatusCard');
+  if (propertyStatusCard) propertyStatusCard.innerHTML = '';
+  const valuationHistoryList = document.getElementById('valuationHistoryList');
+  if (valuationHistoryList) valuationHistoryList.innerHTML = '';
+  showPropertyWorkspace(false);
+  fillDocumentPropertyPickers();
+  renderPropertyTable();
   const mediaListEl = document.getElementById('mediaList');
   if (mediaListEl) {
     mediaListEl.innerHTML = '';
@@ -3094,6 +3128,7 @@ function resetWorkspaceForSignOut() {
   closeKycDrawer();
   closeBankRequestDrawer();
   closePortfolioDrawer();
+  closeValuationDrawer();
   setActiveTab(DEFAULT_TAB);
 
   // Last, because render() -> saveWorkspaceState() writes the key back. Absent
@@ -3350,26 +3385,675 @@ bindWorkspaceEvents();
 bindKycEvents();
 bindBankRequestEvents();
 bindPortfolioEvents();
+bindPropertyEvents();
 bindPropertyMediaEvents();
 bindSettingsEvents();
 
-// Backdrop click closes whichever of the three drawers is currently open —
-// harmless to call close on ones that aren't open, they're already hidden.
+// Backdrop click closes whichever drawer is currently open — harmless to call
+// close on ones that aren't open, they're already hidden.
 document.getElementById('drawerBackdrop').addEventListener('click', () => {
   closeKycDrawer();
   closeBankRequestDrawer();
   closePortfolioDrawer();
+  closeValuationDrawer();
 });
 
 bootstrapAuth();
 
+// ── Properties (F12) ─────────────────────────────────────────────────────────
+//
+// Operations creates and describes a property, Finance records its valuation,
+// and publishing is its own action — the same split as the F12 endpoints in
+// server.js. Nothing here authorises anything: requireOperator() refuses the
+// wrong role whatever this file draws. What this decides is whether a control
+// the server will refuse is drawn looking usable, and every one that is not
+// says which team owns it.
+//
+// Marketing COPY is still not editable. The property description is shown
+// read-only; REQ-OPS-13's banned-term lint needs the PRD's Appendix A language
+// rules, which are not in this repo.
+//
+// Every server string rendered below goes through escapeHtml/escapeAttr, and
+// server records are always held in variables named `row` or `detail`, which
+// are the names test-escaping.mjs scans for. This file has produced real
+// stored-XSS twice. Run `node test-escaping.mjs` after touching it.
+
+let propertyList = [];
+let propertyListError = '';
+let selectedPropertyId = '';
+let propertyDetail = null;
+// 'none' before anything is picked, 'create' for the blank new-property form,
+// 'edit' once a real property is selected.
+let propertyEditorMode = 'none';
+
+function canOperatorRecordValuations() {
+  return operatorHasRole(FINANCE_ROLES);
+}
+
+// The form's inputs, the field each is filled from on the detail response, and
+// the key it is sent back under. One table, so filling the form and reading it
+// back can never disagree about which input is which.
+const PROPERTY_FORM_FIELDS = [
+  ['propName', 'PropertyName', 'propertyName'],
+  ['propAddress', 'Address', 'address'],
+  ['propCity', 'City', 'city'],
+  ['propCountry', 'Country', 'country'],
+  ['propType', 'PropertyType', 'propertyType'],
+  ['propAcquisitionDate', 'AcquisitionDate', 'acquisitionDate'],
+  ['propBedrooms', 'Bedrooms', 'bedrooms'],
+  ['propBathrooms', 'Bathrooms', 'bathrooms'],
+  ['propSquareMeters', 'SquareMeters', 'squareMeters'],
+  ['propTotalFractions', 'TotalFractions', 'totalFractions'],
+  ['propManager', 'ManagerName', 'managerName'],
+  ['propInsurer', 'InsuranceProvider', 'insuranceProvider'],
+  ['propPolicyNumber', 'InsurancePolicyNumber', 'insurancePolicyNumber'],
+];
+
+function propertyAuditMeta() {
+  return `${authSession?.user?.Email || 'Ops'} • just now`;
+}
+
+function setPropertyFormError(message) {
+  const el = document.getElementById('propertyFormError');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('hidden', !message);
+}
+
+// Today in the operator's own timezone, as YYYY-MM-DD, for a date input's max.
+// Local on purpose: the server allows up to tomorrow in UTC, so an operator
+// east of UTC entering today's date is never refused.
+function localDateIso(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Restores a picker's choice after its options were rebuilt, but only if that
+// option still exists — assigning a value that is not in the list leaves the
+// picker showing nothing at all in some browsers.
+function restoreSelectValue(select, value) {
+  if (!select || !value) return;
+  if ([...select.options].some((option) => option.value === value)) select.value = value;
+}
+
+function renderPropertyTable() {
+  const tbody = document.getElementById('propertyTableBody');
+  const countLabel = document.getElementById('propertyCountLabel');
+  if (!tbody || !countLabel) return;
+
+  if (propertyListError) {
+    countLabel.textContent = '';
+    tbody.innerHTML = `<tr><td colspan="6" class="helper" style="text-align:center;padding:24px">Could not load properties: ${escapeHtml(propertyListError)}</td></tr>`;
+    return;
+  }
+
+  const drafts = propertyList.filter((row) => !row.IsPublished).length;
+  countLabel.textContent = propertyList.length === 0
+    ? 'No properties yet'
+    : `${propertyList.length} ${propertyList.length === 1 ? 'property' : 'properties'} • ${drafts} ${drafts === 1 ? 'draft' : 'drafts'}`;
+
+  if (propertyList.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="helper" style="text-align:center;padding:24px">No properties yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = propertyList
+    .map((row) => {
+      // Decided before the template rather than inside it: a conditional whose
+      // test is a server field reads to the escaping scanner as an unescaped
+      // interpolation, so the code moves rather than the rule.
+      const selectedClass = String(row.PropertyID) === String(selectedPropertyId) ? ' selected' : '';
+      const statusTag = row.IsPublished
+        ? '<span class="tag verified">Published</span>'
+        : '<span class="tag pending">Draft</span>';
+      const inactiveTag = row.IsActive === false ? ' <span class="tag suspended">Inactive</span>' : '';
+      const value = row.PropertyValue === null ? 'Not valued' : formatMoney(row.PropertyValue);
+      const price = row.FractionPrice === null ? '—' : formatMoney(row.FractionPrice);
+      const photos = `${Number(row.PublishedPhotoCount) || 0} of ${Number(row.PhotoCount) || 0} published`;
+
+      return `
+        <tr class="clickable-row${selectedClass}" data-propertyid="${escapeAttr(row.PropertyID)}" tabindex="0">
+          <td>
+            <strong>${escapeHtml(row.PropertyName)}</strong>
+            <div class="helper">${escapeHtml(row.City)}, ${escapeHtml(row.Country)}</div>
+          </td>
+          <td>${value}</td>
+          <td>${price}</td>
+          <td>${formatDateOnly(row.ValuationAsOf)}</td>
+          <td>${photos}</td>
+          <td>${statusTag}${inactiveTag}</td>
+        </tr>`;
+    })
+    .join('');
+}
+
+function showPropertyWorkspace(visible) {
+  const workspace = document.getElementById('propertyWorkspace');
+  if (workspace) workspace.hidden = !visible;
+}
+
+async function selectProperty(propertyId) {
+  selectedPropertyId = String(propertyId);
+  propertyEditorMode = 'edit';
+  propertyDetail = null;
+  setPropertyFormError('');
+  renderPropertyTable();
+  showPropertyWorkspace(true);
+  document.getElementById('propertyMediaSection').hidden = false;
+  document.getElementById('propertyStatusCard').innerHTML = '<p class="helper">Loading property…</p>';
+  setFormEnabled('propertyForm', false);
+
+  // The gallery loads alongside the details rather than after them — neither
+  // depends on the other, and a slow detail request should not also hold back
+  // the photos.
+  loadPropertyMedia(selectedPropertyId);
+
+  try {
+    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(propertyId)}`);
+    // A second click while this was in flight has already moved on; painting
+    // this response would show one property's details under another's row.
+    if (String(propertyId) !== selectedPropertyId) return;
+    propertyDetail = result.data;
+    renderPropertyWorkspace();
+  } catch (error) {
+    if (String(propertyId) !== selectedPropertyId) return;
+    document.getElementById('propertyStatusCard').innerHTML =
+      `<p class="helper" style="color:#ff6b6b">Could not load this property: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function startNewProperty() {
+  if (!canOperatorDoOperationsWork()) return;
+  selectedPropertyId = '';
+  propertyDetail = null;
+  propertyEditorMode = 'create';
+  mediaList = [];
+  setPropertyFormError('');
+  renderPropertyTable();
+  showPropertyWorkspace(true);
+  renderPropertyWorkspace();
+  document.getElementById('propName')?.focus();
+}
+
+function cancelNewProperty() {
+  propertyEditorMode = 'none';
+  setPropertyFormError('');
+  document.getElementById('propertyForm')?.reset();
+  showPropertyWorkspace(false);
+}
+
+// A property type the select cannot represent — one that predates the three
+// the investor filter knows — is kept as an extra option rather than silently
+// shown as "Not set", which a save would then have written back as a clear.
+function setPropertyTypeValue(value) {
+  const select = document.getElementById('propType');
+  if (!select) return;
+  select.querySelectorAll('option[data-legacy]').forEach((option) => option.remove());
+  if (value && ![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = `${value} (not an investor filter type)`;
+    option.dataset.legacy = 'true';
+    select.appendChild(option);
+  }
+  select.value = value || '';
+}
+
+function renderPropertyWorkspace() {
+  const isCreate = propertyEditorMode === 'create';
+  const detail = isCreate ? null : propertyDetail;
+  if (!isCreate && !detail) return;
+
+  for (const [inputId, apiKey] of PROPERTY_FORM_FIELDS) {
+    if (inputId === 'propType') continue;
+    const input = document.getElementById(inputId);
+    if (input) input.value = detail?.[apiKey] ?? '';
+  }
+  setPropertyTypeValue(detail?.PropertyType || '');
+
+  document.getElementById('propertyFormTitle').textContent = isCreate ? 'New property' : 'Property details';
+  document.getElementById('propertyFormSubtitle').textContent = isCreate
+    ? 'Saved as a draft. Investors see nothing until it is published.'
+    : 'Facts about the building. Money figures come from valuations, recorded by Finance.';
+  document.getElementById('propertySaveBtn').textContent = isCreate ? 'Create draft' : 'Save details';
+  document.getElementById('propertyCancelBtn').classList.toggle('hidden', !isCreate);
+
+  // The class, not the attribute: .kyc-detail-item sets its own display, which
+  // outranks the browser's rule for [hidden].
+  document.getElementById('propDescriptionBlock').classList.toggle('hidden', isCreate);
+  document.getElementById('propDescriptionText').textContent = detail?.PropertyDescription || 'None.';
+
+  const canEdit = canOperatorDoOperationsWork();
+  setFormEnabled('propertyForm', canEdit);
+  setNote('propertyFormRoleNote', canEdit, 'Property details are managed by Operations. Your role is Finance, so this form is read-only.');
+
+  // After the role gate, so a locked count stays locked for every role.
+  const fractionsInput = document.getElementById('propTotalFractions');
+  const fractionsHelp = document.getElementById('propFractionsHelp');
+  if (detail?.FractionStructureLocked) {
+    fractionsInput.disabled = true;
+    fractionsHelp.textContent = `Locked. ${detail.FractionStructureLockReason || ''}`;
+  } else {
+    fractionsHelp.textContent = 'The price per fraction is the valuation divided by this. It locks once the property is published or anyone expresses interest.';
+  }
+
+  renderPropertyStatusCard();
+
+  // Photos need a property to belong to, so the gallery is only offered once
+  // the draft exists.
+  document.getElementById('propertyMediaSection').hidden = isCreate;
+}
+
+function renderPropertyStatusCard() {
+  const card = document.getElementById('propertyStatusCard');
+  if (!card) return;
+
+  if (propertyEditorMode === 'create') {
+    card.innerHTML = `
+      <div class="card-title">
+        <div><h4>New property</h4></div>
+        <span class="tag pending">Draft</span>
+      </div>
+      <ol class="property-steps">
+        <li>Save the details. The property is created as a draft only staff can see.</li>
+        <li>Add its photos, and publish the ones investors should see.</li>
+        <li>Finance records a valuation, which sets the value and the price per fraction.</li>
+        <li>Publish the property.</li>
+      </ol>`;
+    return;
+  }
+
+  const detail = propertyDetail;
+  if (!detail) return;
+
+  const blockers = Array.isArray(detail.PublishBlockers) ? detail.PublishBlockers : [];
+  const statusTag = detail.IsPublished
+    ? '<span class="tag verified">Published</span>'
+    : '<span class="tag pending">Draft</span>';
+  const statusText = detail.IsPublished
+    ? 'Investors can see this property and its published photos.'
+    : 'Only staff can see this property.';
+
+  let publishControl;
+  if (!canOperatorDoOperationsWork()) {
+    publishControl = '<p class="helper role-note">Publishing is an Operations task.</p>';
+  } else if (detail.IsPublished) {
+    publishControl = '<button class="decline-btn" type="button" data-property-act="unpublish">Unpublish</button>';
+  } else if (blockers.length > 0) {
+    publishControl = '<button class="approve-btn" type="button" disabled title="Resolve the items above first">Publish to investors</button>';
+  } else {
+    publishControl = '<button class="approve-btn" type="button" data-property-act="publish">Publish to investors</button>';
+  }
+
+  const blockerList = !detail.IsPublished && blockers.length > 0
+    ? `<ul class="blocker-list">${blockers.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul>`
+    : '';
+
+  const valuations = Array.isArray(detail.Valuations) ? detail.Valuations : [];
+  // The current valuation: the ledger arrives most recent by date first, which
+  // is the same ordering the server projects onto the property row.
+  const row = valuations[0] || null;
+  const value = detail.PropertyValue === null ? 'Not valued' : formatMoney(detail.PropertyValue);
+  const price = detail.FractionPrice === null ? '—' : formatMoney(detail.FractionPrice);
+  const rent = detail.MonthlyRentalIncome === null ? 'Not stated' : formatMoney(detail.MonthlyRentalIncome);
+  const projectedYield = detail.ProjectedAnnualYield === null
+    ? 'Not stated'
+    : `${Number(detail.ProjectedAnnualYield).toFixed(2)}%`;
+  const fractions = Number(detail.TotalFractions).toLocaleString('en-US');
+  const countText = valuations.length === 1 ? '1 valuation recorded' : `${valuations.length} valuations recorded`;
+
+  let provenance;
+  if (row) {
+    provenance = `<p class="helper">As of ${formatDateOnly(row.ValuationDate)} • ${escapeHtml(row.Source)}</p>`;
+  } else if (detail.PropertyValue !== null) {
+    provenance = '<p class="helper">These figures predate the valuation record, so they carry no date or source. Recording a valuation gives them one.</p>';
+  } else {
+    provenance = '<p class="helper">No valuation recorded yet, so there are no figures to show investors.</p>';
+  }
+  const valuationButtonLabel = canOperatorRecordValuations() ? 'Record valuation' : 'Valuation history';
+
+  card.innerHTML = `
+    <div class="card-title">
+      <div><h4>Status</h4></div>
+      ${statusTag}
+    </div>
+    <p class="helper">${statusText}</p>
+    ${blockerList}
+    <div class="inline-actions property-status-actions">${publishControl}</div>
+    <p class="kyc-form-error hidden" id="propertyPublishError"></p>
+
+    <div class="property-status-section">
+      <div class="card-title">
+        <div>
+          <h4>Valuation</h4>
+          <p>${countText}</p>
+        </div>
+      </div>
+      <div class="kyc-detail-grid">
+        <div class="kyc-detail-item"><span class="kyc-detail-label">Property value</span><span class="kyc-detail-value">${value}</span></div>
+        <div class="kyc-detail-item"><span class="kyc-detail-label">Price per fraction</span><span class="kyc-detail-value">${price}</span></div>
+        <div class="kyc-detail-item"><span class="kyc-detail-label">Monthly rent</span><span class="kyc-detail-value">${rent}</span></div>
+        <div class="kyc-detail-item"><span class="kyc-detail-label">Projected yield</span><span class="kyc-detail-value">${projectedYield}</span></div>
+      </div>
+      <p class="helper">${fractions} fractions.</p>
+      ${provenance}
+      <div><button class="ghost-btn" type="button" data-property-act="valuations">${valuationButtonLabel}</button></div>
+    </div>`;
+}
+
+// For a new property, every filled-in field. For an existing one, only the
+// fields that differ from what was loaded — so an untouched field is never
+// re-sent, and a locked fraction count that was not changed is never offered
+// to the server as if it had been.
+function collectPropertyPayload() {
+  const payload = {};
+  for (const [inputId, apiKey, bodyKey] of PROPERTY_FORM_FIELDS) {
+    const value = document.getElementById(inputId).value.trim();
+    if (propertyEditorMode === 'create') {
+      if (value !== '') payload[bodyKey] = value;
+      continue;
+    }
+    const before = propertyDetail?.[apiKey];
+    const beforeText = before === null || before === undefined ? '' : String(before);
+    if (value !== beforeText) payload[bodyKey] = value === '' ? null : value;
+  }
+  return payload;
+}
+
+async function submitPropertyForm(event) {
+  event.preventDefault();
+  if (!canOperatorDoOperationsWork()) return;
+  setPropertyFormError('');
+
+  const isCreate = propertyEditorMode === 'create';
+  const payload = collectPropertyPayload();
+
+  if (isCreate) {
+    const missing = [
+      ['propertyName', 'property name'],
+      ['city', 'city'],
+      ['country', 'country'],
+      ['totalFractions', 'number of fractions'],
+    ].filter(([key]) => !payload[key]).map(([, label]) => label);
+    if (missing.length > 0) {
+      setPropertyFormError(`Fill in the ${missing.join(', ')}.`);
+      return;
+    }
+  } else if (Object.keys(payload).length === 0) {
+    setPropertyFormError('Nothing has changed.');
+    return;
+  }
+
+  const btn = document.getElementById('propertySaveBtn');
+  btn.disabled = true;
+  try {
+    const result = isCreate
+      ? await apiFetch('/api/ops/properties', { method: 'POST', body: JSON.stringify(payload) })
+      : await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedPropertyId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+
+    propertyDetail = result.data;
+    selectedPropertyId = String(result.data.PropertyID);
+    propertyEditorMode = 'edit';
+
+    if (isCreate) {
+      addAudit('Property created', propertyAuditMeta(), `${result.data.PropertyName} — saved as a draft.`);
+      mediaList = [];
+      loadPropertyMedia(selectedPropertyId);
+    } else {
+      addAudit('Property details saved', propertyAuditMeta(), `${result.data.PropertyName}: ${Object.keys(payload).join(', ')}.`);
+    }
+    renderAudit();
+    renderPropertyWorkspace();
+    await loadPropertyOptions();
+  } catch (error) {
+    setPropertyFormError(error.message || 'Could not save the property.');
+    btn.disabled = false;
+  }
+}
+
+async function setPropertyPublished(isPublished) {
+  if (!selectedPropertyId || !propertyDetail || !canOperatorDoOperationsWork()) return;
+
+  const name = propertyDetail.PropertyName;
+  const question = isPublished
+    ? `Publish "${name}"? Investors will be able to see it, its figures and its published photos.`
+    : `Unpublish "${name}"? Investors will stop seeing it straight away.`;
+  if (!window.confirm(question)) return;
+
+  const errorEl = document.getElementById('propertyPublishError');
+  try {
+    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedPropertyId)}/publish-state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isPublished }),
+    });
+    propertyDetail = result.data;
+    addAudit(isPublished ? 'Property published' : 'Property unpublished', propertyAuditMeta(), name);
+    renderAudit();
+    renderPropertyWorkspace();
+    await loadPropertyOptions();
+  } catch (error) {
+    if (errorEl) {
+      errorEl.textContent = error.message || 'Could not change what investors can see.';
+      errorEl.classList.remove('hidden');
+    }
+  }
+}
+
+// ── Valuation drawer ─────────────────────────────────────────────────────────
+// The shared .kyc-drawer and #drawerBackdrop, like the portfolio adjustment
+// drawer, and an append-only ledger like it: nothing here edits or removes an
+// earlier entry. Operations can open it to read the history; the form is
+// drawn disabled for them, because the endpoint is FINANCE_ROLES.
+
+function fillValuationPlaceholders() {
+  const detail = propertyDetail;
+  if (!detail) return;
+  const placeholder = (amount, fallback) => (amount === null ? fallback : `Current: ${Number(amount).toLocaleString('en-US')}`);
+  document.getElementById('valuationValue').placeholder = placeholder(detail.PropertyValue, 'e.g. 3500000');
+  document.getElementById('valuationRent').placeholder = placeholder(detail.MonthlyRentalIncome, 'e.g. 12000');
+  document.getElementById('valuationYield').placeholder = placeholder(detail.ProjectedAnnualYield, 'e.g. 6.5');
+}
+
+function updateValuationPricePreview() {
+  const preview = document.getElementById('valuationPricePreview');
+  if (!preview || !propertyDetail) return;
+  const fractions = Number(propertyDetail.TotalFractions);
+  const value = Number(document.getElementById('valuationValue').value);
+  const fractionText = fractions.toLocaleString('en-US');
+  if (!value || value <= 0 || !fractions) {
+    preview.textContent = `The price per fraction will be the value divided by ${fractionText} fractions.`;
+    return;
+  }
+  const perFraction = Math.round((value / fractions) * 100) / 100;
+  preview.textContent = `Price per fraction: ${formatMoney(perFraction)} (${formatMoney(value)} ÷ ${fractionText}).`;
+}
+
+function renderValuationHistory() {
+  const emptyEl = document.getElementById('valuationHistoryEmpty');
+  const listEl = document.getElementById('valuationHistoryList');
+  const valuations = Array.isArray(propertyDetail?.Valuations) ? propertyDetail.Valuations : [];
+
+  if (valuations.length === 0) {
+    emptyEl.classList.remove('hidden');
+    listEl.classList.add('hidden');
+    listEl.innerHTML = '';
+    return;
+  }
+
+  listEl.innerHTML = valuations
+    .map((row, index) => {
+      const currentTag = index === 0 ? ' <span class="tag verified">Current</span>' : '';
+      const rent = row.MonthlyRentalIncome === null ? 'not stated' : formatMoney(row.MonthlyRentalIncome);
+      const projectedYield = row.ProjectedAnnualYield === null
+        ? 'not stated'
+        : `${Number(row.ProjectedAnnualYield).toFixed(2)}%`;
+      const note = row.Note ? `<span class="kyc-history-meta">Note: ${escapeHtml(row.Note)}</span>` : '';
+      return `
+        <li class="kyc-history-item">
+          <span class="kyc-history-action approve">${formatMoney(row.PropertyValue)} as of ${formatDateOnly(row.ValuationDate)}${currentTag}</span>
+          <span class="kyc-history-meta">Rent ${rent} • Projected yield ${projectedYield} • ${formatMoney(row.FractionPrice)} per fraction (${Number(row.TotalFractions).toLocaleString('en-US')} fractions)</span>
+          <span class="kyc-history-meta">Source: ${escapeHtml(row.Source)}</span>
+          ${note}
+          <span class="kyc-history-meta">Recorded by ${escapeHtml(row.RecordedByFirstName)} ${escapeHtml(row.RecordedByLastName)} (${escapeHtml(row.RecordedByEmail)}) • ${formatDate(row.RecordedAt)}</span>
+        </li>`;
+    })
+    .join('');
+  emptyEl.classList.add('hidden');
+  listEl.classList.remove('hidden');
+}
+
+function openValuationDrawer() {
+  const detail = propertyDetail;
+  if (!detail) return;
+
+  const canRecord = canOperatorRecordValuations();
+  document.getElementById('valuationDrawerName').textContent = detail.PropertyName;
+  document.getElementById('valuationDrawerSubtitle').textContent =
+    `${Number(detail.TotalFractions).toLocaleString('en-US')} fractions • ${detail.IsPublished ? 'Published' : 'Draft'}`;
+
+  ['valuationValue', 'valuationRent', 'valuationYield', 'valuationDate', 'valuationSource', 'valuationNote']
+    .forEach((id) => { document.getElementById(id).value = ''; });
+  document.getElementById('valuationDate').max = localDateIso();
+  document.getElementById('valuationFormError').classList.add('hidden');
+  document.getElementById('valuationFormSuccess').classList.add('hidden');
+
+  setFormEnabled('valuationForm', canRecord);
+  setNote('valuationFormRoleNote', canRecord, 'Valuations are recorded by Finance. Your role is Operations, so this form is read-only.');
+
+  fillValuationPlaceholders();
+  updateValuationPricePreview();
+  renderValuationHistory();
+
+  document.getElementById('valuationDrawer').classList.remove('hidden');
+  showDrawerBackdrop();
+  refreshIcons();
+}
+
+function closeValuationDrawer() {
+  const drawer = document.getElementById('valuationDrawer');
+  if (!drawer || drawer.classList.contains('hidden')) return;
+  drawer.classList.add('hidden');
+  hideDrawerBackdrop();
+}
+
+async function submitValuation() {
+  if (!selectedPropertyId || !propertyDetail || !canOperatorRecordValuations()) return;
+
+  const read = (id) => document.getElementById(id).value.trim();
+  const errorEl = document.getElementById('valuationFormError');
+  const successEl = document.getElementById('valuationFormSuccess');
+  const showError = (message) => {
+    errorEl.textContent = message;
+    errorEl.classList.remove('hidden');
+  };
+  errorEl.classList.add('hidden');
+  successEl.classList.add('hidden');
+
+  const payload = {
+    propertyValue: read('valuationValue'),
+    monthlyRentalIncome: read('valuationRent') || null,
+    projectedAnnualYield: read('valuationYield') || null,
+    valuationDate: read('valuationDate'),
+    source: read('valuationSource'),
+    note: read('valuationNote') || null,
+  };
+  if (!payload.propertyValue || Number(payload.propertyValue) <= 0) return showError('Enter the property value.');
+  if (!payload.valuationDate) return showError('Enter the date the figures are as of.');
+  if (!payload.source) return showError('Say where the figures come from.');
+
+  const btn = document.getElementById('valuationSubmitBtn');
+  btn.disabled = true;
+  try {
+    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedPropertyId)}/valuations`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    propertyDetail = result.data;
+
+    const currentDate = formatDateOnly(propertyDetail.Valuations?.[0]?.ValuationDate);
+    if (!result.becameCurrent) {
+      successEl.textContent = `Recorded in the history. The current figures still come from a later valuation, dated ${currentDate}.`;
+    } else if (propertyDetail.IsPublished) {
+      successEl.textContent = 'Recorded. Investors now see these figures.';
+    } else {
+      successEl.textContent = 'Recorded. Investors will see these figures once the property is published.';
+    }
+    successEl.classList.remove('hidden');
+
+    addAudit(
+      'Valuation recorded',
+      propertyAuditMeta(),
+      `${propertyDetail.PropertyName}: ${formatMoney(payload.propertyValue)} as of ${formatDateOnly(payload.valuationDate)}.`,
+    );
+    renderAudit();
+
+    ['valuationValue', 'valuationRent', 'valuationYield', 'valuationDate', 'valuationSource', 'valuationNote']
+      .forEach((id) => { document.getElementById(id).value = ''; });
+    fillValuationPlaceholders();
+    updateValuationPricePreview();
+    renderValuationHistory();
+    renderPropertyWorkspace();
+    await loadPropertyOptions();
+  } catch (error) {
+    showError(error.message || 'Could not record the valuation.');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function refreshPropertiesTab() {
+  await loadPropertyOptions();
+  if (propertyEditorMode === 'edit' && selectedPropertyId) selectProperty(selectedPropertyId);
+}
+
+function bindPropertyEvents() {
+  const tbody = document.getElementById('propertyTableBody');
+  if (!tbody) return;
+
+  document.getElementById('newPropertyBtn').addEventListener('click', startNewProperty);
+  document.getElementById('refreshPropertiesBtn').addEventListener('click', refreshPropertiesTab);
+
+  tbody.addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-propertyid]');
+    if (tr) selectProperty(tr.dataset.propertyid);
+  });
+  // Rows are focusable (tabindex="0"), so they open from the keyboard too.
+  tbody.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const tr = e.target.closest('tr[data-propertyid]');
+    if (!tr) return;
+    e.preventDefault();
+    selectProperty(tr.dataset.propertyid);
+  });
+
+  document.getElementById('propertyForm').addEventListener('submit', submitPropertyForm);
+  document.getElementById('propertyCancelBtn').addEventListener('click', cancelNewProperty);
+
+  // Delegated, because the status card is re-rendered after every action.
+  document.getElementById('propertyStatusCard').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-property-act]');
+    if (!btn) return;
+    const act = btn.dataset.propertyAct;
+    if (act === 'publish') setPropertyPublished(true);
+    else if (act === 'unpublish') setPropertyPublished(false);
+    else if (act === 'valuations') openValuationDrawer();
+  });
+
+  document.getElementById('valuationDrawerCloseBtn').addEventListener('click', closeValuationDrawer);
+  document.getElementById('valuationSubmitBtn').addEventListener('click', submitValuation);
+  document.getElementById('valuationValue').addEventListener('input', updateValuationPricePreview);
+}
+
 // ── Property media (F12's media half) ────────────────────────────────────────
 //
-// Marketing COPY is deliberately not editable here. REQ-OPS-13 pairs "upload
-// and order media" with "edit content" and a banned-term lint over the content
-// fields; that lint needs the PRD's Appendix A language rules, which are not in
-// this repo. The one free-text field below is a photo caption, capped short and
-// described to the operator as a description rather than ad copy.
+// The gallery belongs to whichever property is selected in the table above —
+// selectedPropertyId — so a photo is always filed against the property on
+// screen, drafts included. Marketing COPY is deliberately not editable here;
+// the one free-text field is a photo caption, capped short and described to
+// the operator as a description rather than ad copy.
 //
 // Everything server-sourced rendered here — captions, filenames — goes through
 // escapeHtml/escapeAttr. Filenames are attacker-supplied in the general case
@@ -3377,7 +4061,6 @@ bootstrapAuth();
 // stored-XSS twice. Run `node test-escaping.mjs` after touching it.
 
 let mediaList = [];
-let selectedMediaPropertyId = '';
 let stagedMediaFile = null;
 
 function setMediaError(message) {
@@ -3395,7 +4078,7 @@ async function loadPropertyMedia(propertyId) {
   listEl.innerHTML = '';
 
   if (!propertyId) {
-    emptyEl.textContent = 'Choose a property above to see its photos.';
+    emptyEl.textContent = 'Select a property above to see its photos.';
     emptyEl.hidden = false;
     countEl.textContent = 'No property selected';
     return;
@@ -3417,9 +4100,14 @@ async function loadPropertyMedia(propertyId) {
 
   try {
     const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(propertyId)}/media`);
+    // Another property was selected while this was in flight. Rendering it now
+    // would put one property's photos under another's name — and the next
+    // upload would then look like it belonged to the wrong gallery.
+    if (String(propertyId) !== String(selectedPropertyId)) return;
     mediaList = Array.isArray(result.data) ? result.data : [];
     renderPropertyMedia();
   } catch (error) {
+    if (String(propertyId) !== String(selectedPropertyId)) return;
     emptyEl.textContent = `Could not load photos: ${error.message}`;
     emptyEl.hidden = false;
     countEl.textContent = '';
@@ -3487,6 +4175,13 @@ function renderPropertyMedia() {
   refreshIcons();
 }
 
+// The table's photo counts come from the property list, so they are refreshed
+// after anything that changes a gallery. Not awaited — the counts are a
+// convenience and must never hold up the gallery itself.
+function refreshPropertyPhotoCounts() {
+  loadPropertyOptions();
+}
+
 // Reorder sends the WHOLE list, not a "move up" instruction — the server
 // requires the complete set and rejects anything else, so the swap happens here
 // and the result is the new order in full.
@@ -3500,13 +4195,13 @@ async function movePropertyMedia(mediaId, direction) {
 
   setMediaError('');
   try {
-    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedMediaPropertyId)}/media/order`, {
+    const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedPropertyId)}/media/order`, {
       method: 'PUT',
       body: JSON.stringify({ mediaIds: ids }),
     });
     mediaList = Array.isArray(result.data) ? result.data : mediaList;
     renderPropertyMedia();
-    addAudit('Gallery reordered', `${authSession?.user?.Email || 'Ops'} • just now`, `Property #${selectedMediaPropertyId}.`);
+    addAudit('Gallery reordered', propertyAuditMeta(), `Property #${selectedPropertyId}.`);
     renderAudit();
   } catch (error) {
     setMediaError(`Could not reorder: ${error.message}`);
@@ -3525,9 +4220,10 @@ async function updatePropertyMedia(mediaId, patch, auditLabel) {
     if (i >= 0 && updated) mediaList[i] = updated;
     renderPropertyMedia();
     if (auditLabel) {
-      addAudit(auditLabel, `${authSession?.user?.Email || 'Ops'} • just now`, `Photo #${mediaId}, property #${selectedMediaPropertyId}.`);
+      addAudit(auditLabel, propertyAuditMeta(), `Photo #${mediaId}, property #${selectedPropertyId}.`);
       renderAudit();
     }
+    if ('isPublished' in patch) refreshPropertyPhotoCounts();
   } catch (error) {
     setMediaError(`Could not save: ${error.message}`);
   }
@@ -3539,8 +4235,9 @@ async function deletePropertyMedia(mediaId) {
     await apiFetch(`/api/ops/property-media/${encodeURIComponent(mediaId)}`, { method: 'DELETE' });
     mediaList = mediaList.filter((m) => String(m.MediaID) !== String(mediaId));
     renderPropertyMedia();
-    addAudit('Photo removed', `${authSession?.user?.Email || 'Ops'} • just now`, `Photo #${mediaId}, property #${selectedMediaPropertyId}.`);
+    addAudit('Photo removed', propertyAuditMeta(), `Photo #${mediaId}, property #${selectedPropertyId}.`);
     renderAudit();
+    refreshPropertyPhotoCounts();
   } catch (error) {
     setMediaError(`Could not remove: ${error.message}`);
   }
@@ -3561,9 +4258,8 @@ function stagePropertyMediaFile(file) {
   stagedMediaFile = file;
   emptyState.hidden = true;
   fileState.hidden = false;
-  // The uploader's own filename, so escaped like any other untrusted string
-  // even though it came from this machine — the rule does not have an
-  // exception for "probably fine".
+  // The uploader's own filename, set as text rather than markup — the rule
+  // does not have an exception for "probably fine".
   document.getElementById('mediaDropzoneName').textContent = file.name;
   document.getElementById('mediaDropzoneSize').textContent = `${(file.size / 1024).toFixed(0)} KB`;
 
@@ -3573,21 +4269,10 @@ function stagePropertyMediaFile(file) {
 }
 
 function bindPropertyMediaEvents() {
-  const select = document.getElementById('mediaPropertySelect');
   const dropzone = document.getElementById('mediaDropzone');
   const fileInput = document.getElementById('mediaFileInput');
   const listEl = document.getElementById('mediaList');
-  if (!select || !fileInput || !listEl) return;
-
-  select.addEventListener('change', () => {
-    selectedMediaPropertyId = select.value;
-    setMediaError('');
-    loadPropertyMedia(selectedMediaPropertyId);
-  });
-
-  document.getElementById('refreshMediaBtn').addEventListener('click', () => {
-    loadPropertyMedia(selectedMediaPropertyId);
-  });
+  if (!dropzone || !fileInput || !listEl) return;
 
   fileInput.addEventListener('change', () => stagePropertyMediaFile(fileInput.files[0] || null));
   document.getElementById('mediaDropzoneClear').addEventListener('click', (e) => {
@@ -3607,9 +4292,12 @@ function bindPropertyMediaEvents() {
     e.preventDefault();
     setMediaError('');
 
-    if (!selectedMediaPropertyId) { setMediaError('Choose a property first.'); return; }
+    if (!selectedPropertyId) { setMediaError('Select a property first.'); return; }
     if (!stagedMediaFile) { setMediaError('Choose a photo to upload.'); return; }
 
+    // Captured now, so the upload lands on the property that was on screen
+    // when the button was pressed even if another is selected mid-upload.
+    const targetPropertyId = selectedPropertyId;
     const btn = document.getElementById('mediaUploadBtn');
     btn.disabled = true;
     try {
@@ -3620,7 +4308,7 @@ function bindPropertyMediaEvents() {
         reader.readAsDataURL(stagedMediaFile);
       });
 
-      const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(selectedMediaPropertyId)}/media`, {
+      const result = await apiFetch(`/api/ops/properties/${encodeURIComponent(targetPropertyId)}/media`, {
         method: 'POST',
         body: JSON.stringify({
           fileBase64,
@@ -3629,13 +4317,16 @@ function bindPropertyMediaEvents() {
         }),
       });
 
-      if (result.data) mediaList.push(result.data);
-      renderPropertyMedia();
+      if (result.data && String(targetPropertyId) === String(selectedPropertyId)) {
+        mediaList.push(result.data);
+        renderPropertyMedia();
+      }
       document.getElementById('mediaCaptionInput').value = '';
       fileInput.value = '';
       stagePropertyMediaFile(null);
-      addAudit('Photo uploaded', `${authSession?.user?.Email || 'Ops'} • just now`, `Property #${selectedMediaPropertyId}. Not published yet.`);
+      addAudit('Photo uploaded', propertyAuditMeta(), `Property #${targetPropertyId}. Not published yet.`);
       renderAudit();
+      refreshPropertyPhotoCounts();
     } catch (error) {
       setMediaError(error.message || 'Could not upload that photo.');
     } finally {
@@ -3672,18 +4363,4 @@ function bindPropertyMediaEvents() {
     if (!item || next === (item.Caption || '')) return;
     updatePropertyMedia(mediaId, { caption: next }, 'Caption updated');
   }, true);
-}
-
-// Fills the property picker from the same /api/properties fetch the document
-// form uses. Kept as its own function rather than folded into
-// loadPropertyOptions() so a failure to populate one picker does not blank the
-// other.
-function fillMediaPropertySelect(properties) {
-  const select = document.getElementById('mediaPropertySelect');
-  if (!select) return;
-  const options = properties
-    .map((p) => `<option value="${escapeAttr(p.PropertyID)}">${escapeHtml(p.PropertyName)}</option>`)
-    .join('');
-  select.innerHTML = `<option value="">Choose a property…</option>${options}`;
-  if (selectedMediaPropertyId) select.value = selectedMediaPropertyId;
 }

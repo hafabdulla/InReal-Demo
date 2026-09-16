@@ -958,21 +958,24 @@
             </div>
           </section>
 
-          <!-- Property media (F12's media half). Marketing COPY is deliberately
-               not editable here — see the scope note on the endpoints in
-               server.js. The banned-term lint REQ-OPS-13 asks for needs the
-               PRD's Appendix A language rules, which are not in this repo. -->
+          <!-- Properties (F12). Operations creates and describes a property,
+               Finance records its valuation, and it reaches investors only when
+               someone presses Publish — the same split the endpoints enforce in
+               server.js. Marketing COPY is still not editable: the banned-term
+               lint REQ-OPS-13 asks for needs the PRD's Appendix A language
+               rules, which are not in this repo. -->
           <section class="panel" data-panel="properties">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Property content</p>
-                <h3>Photo gallery</h3>
+                <h3>Properties</h3>
               </div>
               <div class="inline-actions">
-                <select id="mediaPropertySelect" class="field" style="min-width: 260px">
-                  <option value="">Choose a property…</option>
-                </select>
-                <button class="ghost-btn" id="refreshMediaBtn" type="button">
+                <button class="primary-btn" id="newPropertyBtn" type="button">
+                  <i data-lucide="plus"></i>
+                  New property
+                </button>
+                <button class="ghost-btn" id="refreshPropertiesBtn" type="button">
                   <i data-lucide="refresh-cw"></i>
                   Refresh
                 </button>
@@ -980,8 +983,138 @@
             </div>
 
             <p class="panel-note">
+              A new property starts as a draft that only staff can see. Operations adds the details and photos,
+              Finance records the valuation, and nothing reaches an investor until someone presses Publish.
+            </p>
+            <p class="helper role-note" id="newPropertyRoleNote" hidden></p>
+
+            <div class="card table-card">
+              <div class="card-title">
+                <div>
+                  <h4>All properties</h4>
+                  <p id="propertyCountLabel">Loading…</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Value</th>
+                      <th>Price / fraction</th>
+                      <th>Valued as of</th>
+                      <th>Photos</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="propertyTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- The selected property, or a blank form for a new one. -->
+            <div id="propertyWorkspace" hidden>
+              <div class="split mt-16">
+                <div class="card" id="propertyStatusCard"></div>
+
+                <form class="card form" id="propertyForm" novalidate>
+                  <div class="card-title">
+                    <div>
+                      <h4 id="propertyFormTitle">Property details</h4>
+                      <p id="propertyFormSubtitle"></p>
+                    </div>
+                  </div>
+
+                  <div class="form-grid">
+                    <label class="span-2">
+                      Property name
+                      <input class="field" id="propName" maxlength="255" autocomplete="off" />
+                    </label>
+                    <label class="span-2">
+                      Address <span class="helper">(optional)</span>
+                      <input class="field" id="propAddress" maxlength="500" autocomplete="off" />
+                    </label>
+                    <label>
+                      City
+                      <input class="field" id="propCity" maxlength="100" autocomplete="off" />
+                    </label>
+                    <label>
+                      Country
+                      <input class="field" id="propCountry" maxlength="100" autocomplete="off" />
+                    </label>
+                    <label>
+                      Property type
+                      <select class="field" id="propType">
+                        <option value="">Not set</option>
+                        <option value="Residential">Residential</option>
+                        <option value="Commercial">Commercial</option>
+                        <option value="Hospitality">Hospitality</option>
+                      </select>
+                    </label>
+                    <label>
+                      Acquisition date <span class="helper">(optional)</span>
+                      <input class="field" id="propAcquisitionDate" type="date" />
+                    </label>
+                    <label>
+                      Bedrooms
+                      <input class="field" id="propBedrooms" type="number" min="0" step="1" inputmode="numeric" />
+                    </label>
+                    <label>
+                      Bathrooms
+                      <input class="field" id="propBathrooms" type="number" min="0" step="0.5" inputmode="decimal" />
+                    </label>
+                    <label>
+                      Floor area (m²)
+                      <input class="field" id="propSquareMeters" type="number" min="0" step="0.01" inputmode="decimal" />
+                    </label>
+                    <label>
+                      Number of fractions
+                      <input class="field" id="propTotalFractions" type="number" min="1" step="1" inputmode="numeric" />
+                      <span class="helper" id="propFractionsHelp"></span>
+                    </label>
+                    <label>
+                      Property manager <span class="helper">(optional)</span>
+                      <input class="field" id="propManager" maxlength="255" autocomplete="off" />
+                    </label>
+                    <label>
+                      Insurer <span class="helper">(optional)</span>
+                      <input class="field" id="propInsurer" maxlength="255" autocomplete="off" />
+                    </label>
+                    <label class="span-2">
+                      Insurance policy number <span class="helper">(optional)</span>
+                      <input class="field" id="propPolicyNumber" maxlength="100" autocomplete="off" />
+                    </label>
+                  </div>
+
+                  <div class="kyc-detail-item" id="propDescriptionBlock">
+                    <span class="kyc-detail-label">Description investors see</span>
+                    <span class="kyc-detail-value" id="propDescriptionText"></span>
+                    <span class="helper">Not editable yet. It is marketing copy on a financial product page, and the language check it has to pass has not been supplied.</span>
+                  </div>
+
+                  <p class="kyc-form-error hidden" id="propertyFormError"></p>
+                  <div class="inline-actions">
+                    <button class="primary-btn" type="submit" id="propertySaveBtn">Save details</button>
+                    <button class="ghost-btn hidden" type="button" id="propertyCancelBtn">Cancel</button>
+                  </div>
+                  <p class="helper role-note" id="propertyFormRoleNote" hidden></p>
+                </form>
+              </div>
+
+              <!-- The gallery for the selected property (F12's media half).
+                   Hidden while a new property is still unsaved: a photo needs a
+                   property to belong to. -->
+              <div id="propertyMediaSection">
+            <div class="panel-head mt-16">
+              <div>
+                <p class="eyebrow">Photos</p>
+                <h3>Photo gallery</h3>
+              </div>
+            </div>
+
+            <p class="panel-note">
               Images are stored privately and served through short-lived links — never a public URL.
-              Nothing reaches an investor until you publish it.
+              A photo reaches investors only once you publish it, and only while the property itself is published.
             </p>
 
             <div class="split upload-grid">
@@ -1025,8 +1158,79 @@
                   <p id="mediaCountLabel">No property selected</p>
                 </div>
               </div>
-              <p class="helper" id="mediaEmpty">Choose a property above to see its photos.</p>
+              <p class="helper" id="mediaEmpty">Select a property above to see its photos.</p>
               <ul class="media-grid" id="mediaList" hidden></ul>
+            </div>
+              </div><!-- /#propertyMediaSection -->
+            </div><!-- /#propertyWorkspace -->
+
+            <!-- Valuation drawer. Reuses the shared .kyc-drawer and
+                 #drawerBackdrop like the portfolio adjustment drawer, and like
+                 it this is an append-only ledger: nothing here edits or removes
+                 an earlier entry. Operations can open it to read the history;
+                 the form is drawn disabled for them because the endpoint is
+                 FINANCE_ROLES. -->
+            <div class="kyc-drawer hidden" id="valuationDrawer">
+              <div class="kyc-drawer-header">
+                <div>
+                  <p class="eyebrow">Valuation</p>
+                  <h4 id="valuationDrawerName">—</h4>
+                  <p class="helper" id="valuationDrawerSubtitle">—</p>
+                </div>
+                <button class="ghost-btn" id="valuationDrawerCloseBtn" type="button" aria-label="Close">
+                  <i data-lucide="x" style="width:16px;height:16px"></i>
+                </button>
+              </div>
+
+              <div class="kyc-drawer-body">
+                <p class="helper">
+                  The value, rent and projected yield investors see always come from the most recent valuation by date.
+                  Entries are permanent — to correct one, record another that says so.
+                </p>
+
+                <div class="kyc-form" id="valuationForm">
+                  <label class="kyc-form-label">
+                    Property value (USD)
+                    <input class="field" id="valuationValue" type="number" min="0" step="0.01" inputmode="decimal" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Monthly rental income (USD) <span class="helper">(leave blank if this valuation does not state one)</span>
+                    <input class="field" id="valuationRent" type="number" min="0" step="0.01" inputmode="decimal" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Projected annual yield (%) <span class="helper">(leave blank if not stated)</span>
+                    <input class="field" id="valuationYield" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Valuation date <span class="helper">(the date the figures are as of)</span>
+                    <input class="field" id="valuationDate" type="date" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Source <span class="helper">(required — for example the valuer and the report reference)</span>
+                    <input class="field" id="valuationSource" maxlength="200" autocomplete="off" />
+                  </label>
+                  <label class="kyc-form-label">
+                    Note <span class="helper">(optional)</span>
+                    <textarea class="field textarea" id="valuationNote" rows="2" maxlength="1000"></textarea>
+                  </label>
+                  <p class="helper" id="valuationPricePreview"></p>
+                  <p class="kyc-form-error hidden" id="valuationFormError"></p>
+                  <p class="form-success hidden" id="valuationFormSuccess"></p>
+                  <div class="kyc-decision-btns">
+                    <button class="approve-btn" id="valuationSubmitBtn" type="button" style="width:100%">
+                      <i data-lucide="plus-circle" style="width:15px;height:15px"></i>
+                      Record valuation
+                    </button>
+                  </div>
+                  <p class="helper role-note" id="valuationFormRoleNote" hidden></p>
+                </div>
+
+                <div class="kyc-history">
+                  <p class="kyc-form-label" style="margin-bottom:8px">Valuation history</p>
+                  <p class="helper" id="valuationHistoryEmpty">No valuations recorded for this property yet.</p>
+                  <ul class="kyc-history-list hidden" id="valuationHistoryList"></ul>
+                </div>
+              </div>
             </div>
           </section>
 

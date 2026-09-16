@@ -102,8 +102,10 @@ check(
 const htmlSource = readFileSync("./ops-admin-portal/app.js", "utf8");
 
 // Identifiers whose values originate server-side and can therefore carry
-// whatever an attacker typed into a signup form.
-const TAINTED_ROOT = /^(user|intent|doc|row|req|r|h|u)\b/;
+// whatever an attacker typed into a signup form. `detail` is the Properties
+// tab's name for a single server record, added with that tab so its status
+// card is scanned like every other render site.
+const TAINTED_ROOT = /^(user|intent|doc|row|req|r|h|u|detail)\b/;
 
 // Wrappers that make an interpolation safe: real escapers, plus formatters
 // that can only ever emit digits/dates, plus the internal enum-to-CSS-class
