@@ -398,7 +398,11 @@ function fillDocumentPropertyPickers() {
 function renderSummary() {
   const verified = state.apiUsers.filter((user) => user.status === 'Verified').length;
   const pending = state.apiUsers.filter((user) => user.status === 'Pending').length;
-  const reviewQueue = state.intents.filter((item) => item.workflowStatus === 'PendingOpsReview').length;
+  // Open means not closed. This used to filter on a workflow state only the
+  // retired payment flow ever set, so it would have read zero forever against
+  // the new shape (see D.48) — the same silent-zero the intents queue itself
+  // suffered from.
+  const openRequests = state.intents.filter((item) => item.status !== 'closed').length;
 
   els.summaryCards.innerHTML = `
     <div class="metric">
@@ -407,9 +411,9 @@ function renderSummary() {
       <div class="sub">${verified} verified, ${pending} pending</div>
     </div>
     <div class="metric">
-      <div class="label">Intents queue</div>
+      <div class="label">Expressions of interest</div>
       <div class="value">${state.intents.length}</div>
-      <div class="sub">${reviewQueue} awaiting ops review</div>
+      <div class="sub">${openRequests} open</div>
     </div>
     <div class="metric">
       <div class="label">Assigned documents</div>
@@ -422,7 +426,7 @@ function renderSummary() {
 function renderOverview() {
   const pendingUsers = state.apiUsers.filter((user) => user.status === 'Pending').length;
   const suspendedUsers = state.apiUsers.filter((user) => user.status === 'Suspended').length;
-  const pendingIntents = state.intents.filter((item) => item.workflowStatus === 'PendingOpsReview').length;
+  const openIntents = state.intents.filter((item) => item.status !== 'closed').length;
 
   els.overviewGrid.innerHTML = `
     <div class="info-card">
@@ -436,9 +440,9 @@ function renderOverview() {
       <p class="small">Accounts flagged for compliance follow-up.</p>
     </div>
     <div class="info-card">
-      <h4>Intent reviews</h4>
-      <div class="big">${pendingIntents}</div>
-      <p class="small">Investment intents waiting for operations review.</p>
+      <h4>Open interest</h4>
+      <div class="big">${openIntents}</div>
+      <p class="small">Expressions of interest not yet closed. Non-binding — nothing is allocated or reserved.</p>
     </div>
   `;
 }
@@ -494,13 +498,35 @@ function renderUsers() {
     .join('');
 }
 
+// An expression of interest is identified by its request id. Displayed with a
+// prefix so it reads as a reference in conversation with an investor, without
+// being a payment reference — Phase 1 shows an investor no wire reference at
+// all (D-10), and this one never leaves the operator side.
+function formatRequestRef(requestId) {
+  if (requestId === null || requestId === undefined || requestId === '') return '—';
+  return `REQ-${String(requestId).padStart(5, '0')}`;
+}
+
+// The three statuses the database allows (migration 20), in operator English.
+// An unknown value falls through as itself rather than being hidden, so a
+// status added server-side shows up here as a visible oddity instead of a
+// blank cell. Escaped at the call site either way.
+function requestStatusLabel(status) {
+  const labels = {
+    submitted: 'Submitted',
+    in_progress: 'In progress',
+    closed: 'Closed',
+  };
+  return labels[status] || status || '—';
+}
+
 function renderIntents() {
-  els.intentCountLabel.textContent = `${state.intents.length} intent${state.intents.length === 1 ? '' : 's'}`;
+  els.intentCountLabel.textContent = `${state.intents.length} request${state.intents.length === 1 ? '' : 's'}`;
 
   if (state.intents.length === 0) {
     els.intentTableBody.innerHTML = `
       <tr>
-        <td colspan="6" class="helper">No investment intents in the queue.</td>
+        <td colspan="6" class="helper">No expressions of interest yet.</td>
       </tr>
     `;
     return;
@@ -510,12 +536,12 @@ function renderIntents() {
     .map(
       (intent) => `
       <tr>
-        <td><strong>${escapeHtml(intent.referenceCode || '—')}</strong></td>
+        <td><strong>${escapeHtml(formatRequestRef(intent.requestId))}</strong></td>
         <td>${escapeHtml(intent.user?.name || '—')}<br /><span class="helper">${escapeHtml(intent.user?.email || '')}</span></td>
         <td>${escapeHtml(intent.propertyName || '—')}</td>
         <td>${formatMoney(intent.amount, intent.currency)}</td>
-        <td><span class="tag">${escapeHtml(intent.workflowStatus || '—')}</span></td>
-        <td>${escapeHtml(intent.proofStatus || '—')}</td>
+        <td><span class="tag">${escapeHtml(requestStatusLabel(intent.status))}</span></td>
+        <td>${formatDate(intent.submittedAt)}</td>
       </tr>
     `,
     )

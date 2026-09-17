@@ -687,16 +687,20 @@ const REQUIRE_KYC_DOCUMENTS = String(process.env.REQUIRE_KYC_DOCUMENTS || '').to
 
 // The smallest amount an investor may register interest for.
 //
-// ⚠️ OPEN PRODUCT QUESTION, not a settled figure. The live homepage advertises
-// "from $500" in two places; the pilot investor pack sent to real prospects
-// says $3,000 (see D.42 in the tracker). Both are published, and they
-// disagree. This defaults to the figure a prospect can actually see on the
-// public site, because refusing someone who is acting on the advertised
-// minimum is the worse of the two errors while an expression of interest is
-// non-binding and allocates nothing. One env var, one constant, one place to
-// change when the answer arrives — do not scatter this number into the
-// frontend as a literal.
-const MIN_INDICATIVE_AMOUNT = Number(process.env.MIN_INDICATIVE_AMOUNT || 500);
+// USD 3,000, decided 17 September 2026 — the figure in the pilot investor pack
+// that has already gone out to real prospects (D.42), chosen over the "from
+// $500" the live homepage still advertises in two places.
+//
+// ⚠️ THE PUBLIC SITE NOW CONTRADICTS THIS. `src/components/Hero.jsx` carries
+// "$500" in its opening paragraph and again in a "Minimum Investment" tile, so
+// a prospect who reads the homepage and then registers interest for $500 is
+// refused by a number they were never shown. That copy has to follow this
+// decision. Until it does, the mismatch is in the product, not in this file.
+//
+// One env var, one constant, one place to change — the refusal names the
+// minimum back to the caller, so do not copy this number into the frontend as
+// a literal.
+const MIN_INDICATIVE_AMOUNT = Number(process.env.MIN_INDICATIVE_AMOUNT || 3000);
 
 function getAuthenticatedUserId(req) {
   const authHeader = req.headers.authorization || '';
