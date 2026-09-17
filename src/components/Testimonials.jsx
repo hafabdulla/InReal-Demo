@@ -7,12 +7,14 @@ export function Testimonials() {
   const { t } = useTranslation();
 
   const testimonials = [
-    {
-      name: 'Sarah Johnson',
-      role: 'First-time Investor',
-      rating: 5,
-      text: "InReal made it incredibly easy to start investing in real estate. I started with just $500 and I'm already seeing returns!",
-    },
+    // A sixth testimonial was removed on 18 September 2026: an invented
+    // first-time investor saying she "started with just $500" and was "already
+    // seeing returns". Both halves were wrong — $500 has not been the minimum
+    // since 17 September, and InReal is pre-launch with no settled transaction
+    // behind any return claim.
+    //
+    // The four below are invented too, and three of them make return claims of
+    // their own. See the note at the end of this file.
     {
       name: 'Michael Chen',
       role: 'Portfolio Diversifier',
@@ -131,3 +133,24 @@ export function Testimonials() {
     </section>
   );
 }
+
+// ⚠️ THIS COMPONENT IS NOT RENDERED ANYWHERE, AND SHOULD NOT BE UNTIL ITS
+// CONTENT IS REAL.
+//
+// Nothing imports it, and none of these strings appear in the deployed bundle
+// (checked against the live site, 18 September 2026). That is the only reason
+// the copy below has never been a live problem.
+//
+// All four remaining testimonials are invented, attributed to invented people,
+// each with a five-star rating. Three of them make claims about money: "the
+// returns exceed my expectations", "consistent returns with zero hassle",
+// "the passive income is exactly what I needed". InReal is pre-launch — no
+// transaction has settled and there is no return to report — which is exactly
+// why PO-9 had the "$2.5M invested / 750 investors / 15% average returns"
+// tiles taken off the login page on 31 July, and why the same figures were
+// removed from the homepage hero on 07 August. An unqualified return claim on
+// a public financial page is a compliance matter, not a copy decision.
+//
+// So: rendering this file as it stands would undo two product-owner decisions
+// at once. If a testimonials section is wanted, it needs real investors who
+// have agreed to be quoted, and whatever risk disclosure counsel requires.
