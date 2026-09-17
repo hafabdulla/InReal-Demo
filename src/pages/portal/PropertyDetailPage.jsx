@@ -10,7 +10,6 @@ import {
   Bed,
   Bath,
   Maximize2,
-  FileText,
 } from 'lucide-react';
 import { getApiBase, formatCalendarDate } from '@/lib/utils';
 import { fadeUp, staggerContainer, staggerItem } from '@/animations.js';
@@ -274,10 +273,14 @@ export default function PropertyDetailPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-3">
-            <h2 className="font-semibold text-gray-900 flex items-center gap-2"><FileText className="w-4 h-4 text-gray-400" /> Documents</h2>
-            <p className="text-sm text-gray-500">Document storage is locked behind authenticated access. Use the backend proof endpoints or curl-based demo flow.</p>
-          </div>
+          {/* A Documents card used to sit here. It listed nothing and its only
+              text was a note to developers — "use the backend proof endpoints
+              or curl-based demo flow" — shown to investors. Removed rather
+              than reworded: investor-visible property documents are not built
+              (REQ-USR-15), and a card that promises them while listing nothing
+              is the same convincing-shell problem as the password form with no
+              handler (D.17) and the interest queue nothing could fill (D.46).
+              It comes back with the feature, not before it. */}
         </motion.div>
       </motion.div>
     </div>
