@@ -685,6 +685,19 @@ const REQUIRE_OPERATOR_2FA = String(process.env.REQUIRE_OPERATOR_2FA || '').toLo
 // flag. Only the approval block is gated.
 const REQUIRE_KYC_DOCUMENTS = String(process.env.REQUIRE_KYC_DOCUMENTS || '').toLowerCase() === 'true';
 
+// The smallest amount an investor may register interest for.
+//
+// ⚠️ OPEN PRODUCT QUESTION, not a settled figure. The live homepage advertises
+// "from $500" in two places; the pilot investor pack sent to real prospects
+// says $3,000 (see D.42 in the tracker). Both are published, and they
+// disagree. This defaults to the figure a prospect can actually see on the
+// public site, because refusing someone who is acting on the advertised
+// minimum is the worse of the two errors while an expression of interest is
+// non-binding and allocates nothing. One env var, one constant, one place to
+// change when the answer arrives — do not scatter this number into the
+// frontend as a literal.
+const MIN_INDICATIVE_AMOUNT = Number(process.env.MIN_INDICATIVE_AMOUNT || 500);
+
 function getAuthenticatedUserId(req) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -1997,11 +2010,18 @@ async function fractionStructureLock(propertyId, isPublished, query = q) {
   if (isPublished) {
     return { locked: true, reason: 'The property is published, so investors can already see its price per fraction.' };
   }
+  // The intent count reads investor_requests, not transactions. Expressions of
+  // interest moved there with migration 20; leaving this pointed at the old
+  // storage would have quietly unlocked the fraction count the moment the move
+  // happened, letting an operator re-price fractions AFTER investors had
+  // registered interest at the old price. Every status counts, including
+  // closed ones: someone expressed interest at a price that was current at the
+  // time, and closing their request afterwards does not unsay it.
   const counts = await query(
     `SELECT
        (SELECT COUNT(*) FROM investments WHERE property_id = $1 AND is_deleted = false)::int AS holdings,
-       (SELECT COUNT(*) FROM transactions
-         WHERE related_property_id = $1 AND transaction_type = 'InvestmentIntent')::int AS intents`,
+       (SELECT COUNT(*) FROM investor_requests
+         WHERE property_id = $1 AND request_type = 'invest_interest')::int AS intents`,
     [propertyId]
   );
   if (counts[0].holdings > 0) {
@@ -4163,49 +4183,107 @@ app.post('/api/investment-intents', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
 
-    if (!propertyId || !amount || amount <= 0) {
-      return res.status(400).json({ success: false, error: 'userId, propertyId and amount are required' });
+    if (!propertyId || !Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ success: false, error: 'propertyId and a positive amount are required' });
     }
 
+    // Prices on `properties` carry no currency column — they are USD, and the
+    // ceiling check below compares this amount against one of them. Accepting
+    // another currency would compare two different units and silently pass a
+    // limit it should have failed, so it is refused by name rather than
+    // coerced.
+    if (currency !== 'USD') {
+      return res.status(400).json({ success: false, error: 'CURRENCY_NOT_SUPPORTED', supported: ['USD'] });
+    }
+
+    // KYC-approved, identity-verified, and the property published and active.
+    // Unchanged, and deliberately ahead of everything below: HC-7 says no
+    // interest is registered for an investor whose KYC is not verified.
     await verifyUserAndProperty(authenticatedUserId, propertyId);
 
-    const referenceCode = generateTransferReference();
-    const intentDescription = {
-      type: 'InvestmentIntent',
-      referenceCode,
-      workflowStatus: 'AwaitingTransfer',
-      proofStatus: 'NotSubmitted',
-      amount,
-      currency,
-      createdAt: new Date().toISOString(),
-      transferInstructions: {
-        beneficiaryName: process.env.BANK_BENEFICIARY_NAME || 'InReal Client Funds',
-        bankName: process.env.BANK_NAME || 'Demo Escrow Bank',
-        iban: process.env.BANK_IBAN || 'TH00 0000 0000 0000 0000',
-        swift: process.env.BANK_SWIFT || 'DEMOTHBK',
-        requiredReference: referenceCode,
-      },
-    };
+    const outcome = await withTransaction(async (tx) => {
+      const properties = await tx(
+        `SELECT fraction_price, fractions_available, total_fractions
+           FROM properties WHERE property_id = $1`,
+        [propertyId]
+      );
+      if (properties.length === 0) return { status: 404, error: 'Property not found' };
 
-    const created = await q(
-      `INSERT INTO transactions (
-        user_id, transaction_type, amount, currency, related_property_id,
-        description, status, transaction_date, created_at
-      ) VALUES ($1, 'InvestmentIntent', $2, $3, $4, $5::jsonb, 'Pending', NOW(), NOW())
-      RETURNING transaction_id AS "TransactionID"`,
-      [authenticatedUserId, amount, currency, propertyId, JSON.stringify(intentDescription)]
-    );
+      const fractionPrice = Number(properties[0].fraction_price);
+      if (!Number.isFinite(fractionPrice) || fractionPrice <= 0) {
+        // A published property always has a valuation and a valuation always
+        // produces a price (migration 19). If this fires, the publish gate has
+        // been bypassed — it is not something the investor did wrong, so it is
+        // a 409 naming the property rather than a 400 blaming the request.
+        return { status: 409, error: 'PROPERTY_NOT_PRICED' };
+      }
 
+      if (amount < MIN_INDICATIVE_AMOUNT) {
+        return {
+          status: 400,
+          error: 'BELOW_MINIMUM',
+          minimum: MIN_INDICATIVE_AMOUNT,
+          currency: 'USD',
+        };
+      }
+
+      // The ceiling is what is actually still on offer. fractions_available is
+      // NULL on older rows, in which case the whole property is the bound.
+      const fractionsOffered = Number(
+        properties[0].fractions_available ?? properties[0].total_fractions
+      );
+      if (Number.isFinite(fractionsOffered) && fractionsOffered > 0) {
+        const ceiling = fractionsOffered * fractionPrice;
+        if (amount > ceiling) {
+          return { status: 400, error: 'ABOVE_AVAILABLE', maximum: ceiling, currency: 'USD' };
+        }
+      }
+
+      // The row and its first history entry in one transaction — the same rule
+      // as a KYC decision and its audit record. A request with no submission
+      // event would be a request nobody can prove arrived.
+      const created = await tx(
+        `INSERT INTO investor_requests (
+           user_id, request_type, property_id, indicative_amount, currency,
+           fraction_price_at_submission, status
+         ) VALUES ($1, 'invest_interest', $2, $3, $4, $5, 'submitted')
+         RETURNING request_id, submitted_at`,
+        [authenticatedUserId, propertyId, amount, currency, fractionPrice]
+      );
+
+      await tx(
+        `INSERT INTO investor_request_events (
+           request_id, event_type, to_status, actor_user_id
+         ) VALUES ($1, 'submitted', 'submitted', $2)`,
+        [created[0].request_id, authenticatedUserId]
+      );
+
+      return { status: 201, request: created[0], fractionPrice };
+    });
+
+    if (outcome.status !== 201) {
+      const { status, ...body } = outcome;
+      return res.status(status).json({ success: false, ...body });
+    }
+
+    // ⚠️ No transfer instructions, no bank details and no wire reference in
+    // this response — decision D-10 and REQ-USR-16 both keep them out of
+    // Phase 1, and an earlier version of this endpoint returned all four
+    // (D.46). An indicative amount stays clear of solicitation only while it
+    // promises no allocation, no price and no way to send money. Do not add
+    // them back here "just for the confirmation screen".
     res.status(201).json({
       success: true,
       data: {
-        transactionId: created[0].TransactionID,
-        referenceCode,
+        requestId: outcome.request.request_id,
+        requestType: 'invest_interest',
+        propertyId,
         amount,
         currency,
-        status: 'Pending',
-        workflowStatus: 'AwaitingTransfer',
-        transferInstructions: intentDescription.transferInstructions,
+        status: 'submitted',
+        submittedAt: outcome.request.submitted_at,
+        fractionPriceAtSubmission: outcome.fractionPrice,
+        binding: false,
       },
     });
   } catch (error) {
@@ -4417,45 +4495,45 @@ app.get('/api/user/:userId/intents', async (req, res) => {
 
     const rows = await q(
       `SELECT
-        t.transaction_id,
-        t.amount,
-        t.currency,
-        t.related_property_id,
-        t.description,
-        t.status,
-        t.transaction_date,
+        r.request_id,
+        r.indicative_amount,
+        r.currency,
+        r.fraction_price_at_submission,
+        r.property_id,
+        r.status,
+        r.submitted_at,
         p.property_name,
         p.city,
         p.country
-      FROM transactions t
-      LEFT JOIN properties p ON t.related_property_id = p.property_id
-      WHERE t.user_id = $1
-        AND t.transaction_type = 'InvestmentIntent'
-      ORDER BY t.created_at DESC
+      FROM investor_requests r
+      LEFT JOIN properties p ON r.property_id = p.property_id
+      WHERE r.user_id = $1
+        AND r.request_type = 'invest_interest'
+      ORDER BY r.submitted_at DESC, r.request_id DESC
       LIMIT 100`,
       [userId]
     );
 
-    const intents = rows.map((row) => {
-      const d = parseDescription(row.description);
-      return {
-        transactionId: row.transaction_id,
-        referenceCode: d.referenceCode,
-        amount: row.amount,
-        currency: row.currency,
-        status: row.status,
-        workflowStatus: d.workflowStatus || 'Unknown',
-        proofStatus: d.proofStatus || 'Unknown',
-        property: {
-          propertyId: row.related_property_id,
-          name: row.property_name,
-          city: row.city,
-          country: row.country,
-        },
-        proof: d.proof || null,
-        createdAt: row.transaction_date,
-      };
-    });
+    // Built field by field rather than passing the row through, the same way
+    // GET /api/user/kyc-documents is — so a column added to this table later
+    // (an operator's internal note, an assignee) cannot reach an investor by
+    // default. Nothing from investor_request_events is exposed here at all:
+    // that history is operator-side.
+    const intents = rows.map((row) => ({
+      requestId: row.request_id,
+      amount: row.indicative_amount,
+      currency: row.currency,
+      status: row.status,
+      fractionPriceAtSubmission: row.fraction_price_at_submission,
+      property: {
+        propertyId: row.property_id,
+        name: row.property_name,
+        city: row.city,
+        country: row.country,
+      },
+      submittedAt: row.submitted_at,
+      binding: false,
+    }));
 
     res.json({ success: true, data: intents });
   } catch (error) {
@@ -7233,49 +7311,62 @@ app.get('/api/ops/investment-intents', async (req, res) => {
     const adminUserId = await requireAdmin(req, res);
     if (!adminUserId) return;
 
+    // Reads investor_requests, where expressions of interest actually live as
+    // of migration 20. This queue was previously filtered down to four
+    // workflow states that only the old payment flow ever set — which is part
+    // of why it has never shown a row (D.46). No status filter now: an
+    // operator's worklist shows open and closed alike, and REQ-OPS-15's real
+    // filters belong in the UI over this list.
     const rows = await q(
       `SELECT
-        t.transaction_id,
-        t.user_id,
-        t.amount,
-        t.currency,
-        t.related_property_id,
-        t.description,
-        t.status,
-        t.transaction_date,
+        r.request_id,
+        r.user_id,
+        r.request_type,
+        r.indicative_amount,
+        r.currency,
+        r.fraction_price_at_submission,
+        r.property_id,
+        r.status,
+        r.assigned_to_admin_id,
+        r.submitted_at,
+        to_char(r.inquired_on, 'YYYY-MM-DD') AS inquired_on,
+        r.closed_at,
         u.email,
         u.first_name,
         u.last_name,
-        p.property_name
-      FROM transactions t
-      JOIN users u ON t.user_id = u.user_id
-      LEFT JOIN properties p ON t.related_property_id = p.property_id
-      WHERE t.transaction_type = 'InvestmentIntent'
-      ORDER BY t.created_at DESC
+        p.property_name,
+        a.email AS assignee_email
+      FROM investor_requests r
+      JOIN users u ON r.user_id = u.user_id
+      LEFT JOIN properties p ON r.property_id = p.property_id
+      LEFT JOIN users a ON r.assigned_to_admin_id = a.user_id
+      ORDER BY r.submitted_at DESC, r.request_id DESC
       LIMIT 200`
     );
 
-    const queue = rows
-      .map((row) => ({ row, description: parseDescription(row.description) }))
-      .filter((entry) => ['PendingOpsReview', 'AwaitingTransfer', 'Approved', 'Rejected'].includes(entry.description.workflowStatus || ''))
-      .map((entry) => ({
-        transactionId: entry.row.transaction_id,
-        referenceCode: entry.description.referenceCode,
-        user: {
-          userId: entry.row.user_id,
-          email: entry.row.email,
-          name: `${entry.row.first_name || ''} ${entry.row.last_name || ''}`.trim(),
-        },
-        propertyName: entry.row.property_name,
-        amount: entry.row.amount,
-        currency: entry.row.currency,
-        workflowStatus: entry.description.workflowStatus,
-        proofStatus: entry.description.proofStatus,
-        proof: entry.description.proof || null,
-        status: entry.row.status,
-        createdAt: entry.row.transaction_date,
-        reviewNotes: entry.description.reviewNotes || null,
-      }));
+    const queue = rows.map((row) => ({
+      requestId: row.request_id,
+      requestType: row.request_type,
+      user: {
+        userId: row.user_id,
+        email: row.email,
+        name: `${row.first_name || ''} ${row.last_name || ''}`.trim(),
+      },
+      propertyId: row.property_id,
+      propertyName: row.property_name,
+      amount: row.indicative_amount,
+      currency: row.currency,
+      fractionPriceAtSubmission: row.fraction_price_at_submission,
+      status: row.status,
+      assignedTo: row.assigned_to_admin_id
+        ? { adminId: row.assigned_to_admin_id, email: row.assignee_email }
+        : null,
+      // A DATE, serialised as one — see the DATE-as-timestamp note in
+      // CLAUDE.md. submittedAt beside it is a real instant.
+      inquiredOn: row.inquired_on,
+      submittedAt: row.submitted_at,
+      closedAt: row.closed_at,
+    }));
 
     res.json({ success: true, data: queue });
   } catch (error) {
