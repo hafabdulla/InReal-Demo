@@ -180,7 +180,7 @@ export default function HeroPhones() {
                   bottom bezel and it was being clipped. */}
               {[
                 ['Monthly rent', '$2,340'],
-                ['Ownership from', '$500'],
+                ['Ownership from', '$3,000'],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between">
                   <span className="text-[7px] text-ir-dark/45 lg:text-[9px]">{k}</span>

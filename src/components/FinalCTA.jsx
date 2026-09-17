@@ -16,7 +16,7 @@ export default function FinalCTA() {
         <div className="ir-container">
           <motion.div variants={staggerContainer(0.12)} initial="hidden" whileInView="visible" viewport={sectionViewport} className="text-center max-w-[800px] mx-auto">
             <motion.div variants={lineGrow} className="w-10 md:w-12 h-[3px] bg-ir-teal mx-auto mb-6 md:mb-8 rounded-full origin-center" />
-            <motion.h2 variants={staggerItem} className="text-[clamp(2rem,7vw,4.5rem)] font-bold tracking-[-0.03em] text-white leading-[1.05]">Your first investment starts with <span className="ir-teal-text">$500</span></motion.h2>
+            <motion.h2 variants={staggerItem} className="text-[clamp(2rem,7vw,4.5rem)] font-bold tracking-[-0.03em] text-white leading-[1.05]">Your first investment starts with <span className="ir-teal-text">$3,000</span></motion.h2>
             <motion.p variants={staggerItem} className="mt-5 md:mt-6 text-body md:text-h4 font-normal text-ir-white/65 max-w-[480px] mx-auto leading-relaxed">2 minutes to sign up. No credit card required.</motion.p>
             <motion.div variants={staggerItem} className="mt-7 md:mt-9"><a href={PORTAL_URL} className="ir-btn-primary text-body !px-8 md:!px-10 !py-3.5 md:!py-4 group">Create Your Free Account <svg className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></a></motion.div>
             <motion.div variants={staggerItem} className="mt-8 md:mt-10 flex flex-wrap items-center justify-center gap-4 md:gap-6 text-caption text-ir-white/55">

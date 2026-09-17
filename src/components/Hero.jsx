@@ -20,8 +20,15 @@ const PORTAL_URL = '#register'
 // The minimum is kept because it is true and matches the product and the
 // paragraph above it. DO NOT add a figure here that the pilots have not
 // actually produced.
+//
+// $3,000 since 17 September 2026. It was $500 here and in eight other places
+// on this site while the pilot investor pack already sent to prospects said
+// $3,000, and the server now refuses anything under $3,000 by name. If this
+// figure changes again it has to change in `MIN_INDICATIVE_AMOUNT` on the
+// server FIRST — that constant is what actually decides, and this is only the
+// promise made about it.
 const STATS = [
-  { value: 500, prefix: '$', suffix: '', label: 'Minimum Investment' },
+  { value: 3000, prefix: '$', suffix: '', label: 'Minimum Investment' },
 ]
 
 export default function Hero() {
@@ -57,7 +64,7 @@ export default function Hero() {
             </motion.div>
 
             <motion.p variants={fadeUp} initial="hidden" animate="visible" transition={{ delay: 0.6 }} className="mt-5 md:mt-6 max-w-[500px] text-body md:text-[clamp(1.05rem,1.7vw,1.25rem)] leading-relaxed text-ir-dark/65">
-              Own a piece of real estate from $500. High-yield properties across global markets, fully managed.
+              Own a piece of real estate from $3,000. High-yield properties across global markets, fully managed.
             </motion.p>
 
             <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, ease: EASE_PREMIUM, delay: 0.8 }} className="mt-7 md:mt-8 flex flex-col sm:flex-row items-stretch sm:items-start gap-3 sm:gap-4">

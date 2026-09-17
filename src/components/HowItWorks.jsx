@@ -227,11 +227,11 @@ const STEPS = [
   {
     number: '02',
     label: 'Invest',
-    title: 'Own a piece of the ones you love, from only $500',
+    title: 'Own a piece of the ones you love, from only $3,000',
     description: 'Skip the hassle. Buy shares in your favorite properties, no matter where you are in the world. Clear terms, transparent fees, real ownership.',
     image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=900&h=700&fit=crop&q=85',
     type: 'image',
-    badge: 'From $500',
+    badge: 'From $3,000',
   },
   {
     number: '03',
