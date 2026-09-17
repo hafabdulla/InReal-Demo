@@ -115,6 +115,10 @@ Each has its own `JWT_SECRET` and `TOTP_ENCRYPTION_KEY`. **A migration run local
 
 One recurring gremlin: the terminal used for testing has repeatedly shown **blank output on certain caught PowerShell errors**, even when the underlying rejection genuinely happened. If a test result looks ambiguous (no visible error, but no visible success either), don't assume either outcome — re-run with explicit status-code/response-body capture before concluding anything. The same rule covers transport errors (`ENOTFOUND`, "remote name could not be resolved", "underlying connection was closed") — those are the local network, not the application, and a security-critical assertion that lands on one must be re-run standalone rather than written off.
 
+**A restart that reuses the port serves the old code, and looks like it worked.** `npm run dev:backend` while something already holds port 5000 starts, prints `Port 5000 is already in use. Reusing the existing backend and continuing`, and exits — so the previous process keeps serving and a change you just made appears not to exist. This cost a full verification cycle on 17 Sep: a new field was absent from every response because the server predating it was still answering. Stop the old process first (`Stop-Process -Id <pid> -Force`, after `netstat -ano | findstr :5000`), and note that on this machine that PID was the `npm run dev` parent, so stopping it took the Vite dev server down too.
+
+**`curl` in this Git Bash cannot reach HTTPS at all.** Every request fails instantly with `(43) A libcurl function was given a bad argument` and an HTTP code of `000` — in under a tenth of a second, so nothing leaves the machine. It is not the service being down and not a network problem. Node's `fetch` works against the same URLs, and every live check on 17 Sep was run that way.
+
 Two practical notes for a live pass:
 
 - **Force TLS 1.2 before hitting the Render URL from PowerShell 5.1**, or the first request dies with "The underlying connection was closed": `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`.
