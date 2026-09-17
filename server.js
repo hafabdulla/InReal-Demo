@@ -1424,7 +1424,15 @@ app.get('/api/properties/:id', async (req, res) => {
 
     res.json({
       success: true,
-      data: { ...rows[0], Media: await signPropertyMedia(media) },
+      data: {
+        ...rows[0],
+        Media: await signPropertyMedia(media),
+        // Published so the express-interest form can state the minimum before
+        // someone types an amount, instead of the frontend keeping its own
+        // copy of the figure and drifting from the constant that actually
+        // decides. Same number the refusal names back on a rejected amount.
+        MinimumIndicativeAmount: MIN_INDICATIVE_AMOUNT,
+      },
     });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { getApiBase, formatCalendarDate } from '@/lib/utils';
 import { fadeUp, staggerContainer, staggerItem } from '@/animations.js';
+import ExpressInterest from './ExpressInterest';
 
 function money(value) {
   const n = Number(value) || 0;
@@ -72,7 +73,15 @@ export default function PropertyDetailPage() {
           images: Array.isArray(data.Media) && data.Media.length > 0
             ? data.Media.filter((m) => m.Url).map((m) => ({ url: m.Url, caption: m.Caption }))
             : (data.ImageURL ? [{ url: data.ImageURL, caption: null }] : []),
-          minInvestment: fractionPrice,
+          // The price of one fraction. This used to be labelled "Min.
+          // Investment" on the page below, which it never was — the minimum is
+          // a platform-wide figure the server owns, and showing the fraction
+          // price under that label told an investor the minimum was $890 when
+          // it is $3,000.
+          fractionPrice,
+          // Published by the property endpoint from the one server constant,
+          // so this page never carries its own copy of the figure.
+          minimumIndicativeAmount: Number(data.MinimumIndicativeAmount) || null,
           totalValue: propertyValue,
           rentalYieldPct: projectedYield,
           // No appreciation figure. This page used to show 40% of the projected
@@ -213,8 +222,8 @@ export default function PropertyDetailPage() {
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div className="bg-gray-50 rounded-xl p-3">
-                <p className="text-xs text-gray-400">Min. Investment</p>
-                <p className="text-sm font-semibold text-gray-900 mt-0.5">{money(property.minInvestment)}</p>
+                <p className="text-xs text-gray-400">Price per fraction</p>
+                <p className="text-sm font-semibold text-gray-900 mt-0.5">{money(property.fractionPrice)}</p>
               </div>
               <div className="bg-gray-50 rounded-xl p-3">
                 <p className="text-xs text-gray-400">Property Value</p>
@@ -238,6 +247,14 @@ export default function PropertyDetailPage() {
         </motion.div>
 
         <motion.div variants={staggerItem} className="space-y-6">
+          {/* First in the column on purpose: it is the one thing an investor
+              can actually do on this page. */}
+          <ExpressInterest
+            propertyId={property.id}
+            propertyName={property.name}
+            minimumAmount={property.minimumIndicativeAmount}
+          />
+
           <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">
             <h2 className="font-semibold text-gray-900">Property Snapshot</h2>
             <div className="space-y-3 text-sm text-gray-600">
