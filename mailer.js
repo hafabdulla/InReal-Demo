@@ -353,3 +353,51 @@ export async function sendBankDetailChangeNotice({ to, firstName, stage, occurre
 
   return deliver({ to, subject: heading, text, html });
 }
+
+/**
+ * The identity counterpart of the bank notice above: sent to the email on file
+ * when a change to legal name, nationality, residence or date of birth is
+ * requested, and again when it is applied. Pairs with
+ * POST /api/user/identity-change-requests and
+ * POST /api/ops/identity-change-requests/:id/approve.
+ *
+ * Why an identity change warrants a notice at all: a name change is the first
+ * half of a payout-redirection chain. Bank verification checks that the
+ * account holder matches the investor's name, so someone who has taken over a
+ * login and can change the name first makes their own account "match". The
+ * real owner hearing about the first step is what breaks the chain.
+ *
+ * Same omissions as the bank notice, for the same reasons: no proposed values
+ * and no link.
+ */
+export async function sendIdentityChangeNotice({ to, firstName, stage, occurredAt, portalUrl, supportEmail }) {
+  const when = new Date(occurredAt || Date.now()).toUTCString();
+  const contactLine = supportEmail
+    ? `If you did not make this request, contact InReal immediately at ${supportEmail}.`
+    : 'If you did not make this request, contact InReal support immediately.';
+
+  const isApplied = stage === 'applied';
+  const heading = isApplied ? 'Your personal details have been updated' : 'A change to your personal details was requested';
+  const bodyLines = isApplied
+    ? [
+        `A change to the personal details InReal holds for you (name, nationality, residence or date of birth) was reviewed and applied on ${when}.`,
+        contactLine,
+      ]
+    : [
+        `A request to change the personal details InReal holds for you (name, nationality, residence or date of birth) was submitted on ${when}.`,
+        'Nothing has changed yet. Our team reviews every request before it is applied.',
+        contactLine,
+      ];
+
+  const { text, html } = buildEmail({
+    logoUrl: buildLogoUrl(portalUrl),
+    heading,
+    greetingName: firstName,
+    bodyLines,
+    code: null,
+    actionUrl: null,
+    footerNote: 'For your security this email never includes the details themselves.',
+  });
+
+  return deliver({ to, subject: heading, text, html });
+}

@@ -15,7 +15,7 @@ import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
-import { isMailConfigured, sendAccountSetupEmail, sendPasswordResetEmail, sendBankDetailChangeNotice } from './mailer.js';
+import { isMailConfigured, sendAccountSetupEmail, sendPasswordResetEmail, sendBankDetailChangeNotice, sendIdentityChangeNotice } from './mailer.js';
 
 dotenv.config();
 
@@ -6975,12 +6975,14 @@ app.put('/api/user/profile/identity', async (req, res) => {
 // an admin has to separately approve. See bank-detail-request below for the
 // step-up requirement that gates even creating that pending row.
 
-// D-9: tell the email on file that a bank-detail change was requested, and
-// again when it is applied, and record whether that actually got through.
+// Tell the email on file that a change was requested, and again when it is
+// applied, and record whether that actually got through. D-9 requires this for
+// bank details; identity changes get the same treatment because a name change
+// is the first step of a payout-redirection chain (see mailer.js).
 //
 // Not awaited by the caller. The change must not wait on, or fail because of,
 // an email provider — mailer.js never throws for the same reason — but the
-// outcome is written to bank_detail_request_events either way, so "was the
+// outcome is written to the flow's events table either way, so "was the
 // investor told?" has a durable answer the reviewer can see. The .catch is
 // load-bearing: a floating rejection would take the process down.
 //
@@ -6988,12 +6990,20 @@ app.put('/api/user/profile/identity', async (req, res) => {
 // (the site also shows support@inreal.com; .io was picked). Override with
 // SUPPORT_CONTACT_EMAIL rather than editing this if it changes.
 const DEFAULT_SUPPORT_CONTACT_EMAIL = 'support@inreal.io';
-function notifyPriorContactOfBankChange(requestId, userId, stage) {
+
+// Fixed map, never caller-supplied: the table name is interpolated into SQL.
+const PRIOR_CONTACT_NOTICES = {
+  bank: { eventsTable: 'bank_detail_request_events', send: sendBankDetailChangeNotice, logTag: 'bank_detail' },
+  identity: { eventsTable: 'identity_change_request_events', send: sendIdentityChangeNotice, logTag: 'identity_change' },
+};
+
+function notifyPriorContact(kind, requestId, userId, stage) {
+  const notice = PRIOR_CONTACT_NOTICES[kind];
   (async () => {
     const users = await q(`SELECT email, first_name FROM users WHERE user_id = $1`, [userId]);
     let outcome = { delivered: false, reason: 'no_email_on_file' };
     if (users.length > 0 && users[0].email) {
-      outcome = await sendBankDetailChangeNotice({
+      outcome = await notice.send({
         to: users[0].email,
         firstName: users[0].first_name,
         stage,
@@ -7003,14 +7013,18 @@ function notifyPriorContactOfBankChange(requestId, userId, stage) {
       });
     }
     await q(
-      `INSERT INTO bank_detail_request_events (request_id, event_type, channel, delivered, delivery_detail, note)
+      `INSERT INTO ${notice.eventsTable} (request_id, event_type, channel, delivered, delivery_detail, note)
        VALUES ($1, 'prior_contact_notified', 'email', $2, $3, $4)`,
       [requestId, outcome.delivered, outcome.delivered ? 'sent' : String(outcome.reason || 'unknown').slice(0, 100), `stage=${stage}`]
     );
     if (!outcome.delivered) {
-      console.warn(`[bank_detail.notice_not_delivered] request_id=${requestId} stage=${stage} reason=${outcome.reason}`);
+      console.warn(`[${notice.logTag}.notice_not_delivered] request_id=${requestId} stage=${stage} reason=${outcome.reason}`);
     }
-  })().catch((error) => console.error('[bank_detail] prior-contact notice failed unexpectedly:', error));
+  })().catch((error) => console.error(`[${notice.logTag}] prior-contact notice failed unexpectedly:`, error));
+}
+
+function notifyPriorContactOfBankChange(requestId, userId, stage) {
+  notifyPriorContact('bank', requestId, userId, stage);
 }
 
 function maskAccountNumber(accountNumber) {
@@ -7255,6 +7269,636 @@ app.post('/api/user/profile/bank-detail-request', async (req, res) => {
 });
 
 
+
+// ── Identity change requests (REQ-USR-14 / REQ-OPS-14, the identity half) ──
+// An APPROVED investor's legal name, nationalities, country of residence and
+// date of birth are locked (PUT /api/user/profile/identity refuses them after
+// approval). REQ-USR-14 says those fields "route to support"; this is that
+// route. The investor proposes a change with evidence, an Operations reviewer
+// decides, and nothing reaches `users` except through that decision.
+//
+// Deliberately NOT here:
+//   - usPerson and participantType. Those are eligibility declarations, not
+//     details that get corrected; an approved participant who has become a US
+//     person is an offboarding question for compliance, not a profile edit.
+//     (A new US nationality IS caught — US is an excluded jurisdiction — and
+//     blocks approval like any other.)
+//   - Email. Out of scope for the pilot (REQ-USR-14), and it is the channel
+//     the notice below goes to.
+//   - A step-up code. Extending step-up beyond bank details is an open product
+//     question (tracker E.1), so this does not decide it by building it.
+
+// The only columns this route can ever write, and the request keys that map to
+// them. Anything else in a request body is refused, not ignored.
+const IDENTITY_CHANGE_FIELDS = {
+  firstName: 'first_name',
+  lastName: 'last_name',
+  nationalities: 'nationalities',
+  countryOfResidence: 'country_of_residence',
+  dateOfBirth: 'date_of_birth',
+};
+
+// Plain-English names, for the investor's own list and the reviewer's drawer.
+const IDENTITY_CHANGE_FIELD_LABELS = {
+  first_name: 'First name',
+  last_name: 'Last name',
+  nationalities: 'Nationality',
+  country_of_residence: 'Country of residence',
+  date_of_birth: 'Date of birth',
+};
+
+// Screening keys on name and jurisdiction, so a change to either is a
+// "material change in Participant circumstances" under Manual §6 and triggers
+// event-driven re-screening by the Compliance Owner. Nothing in the platform
+// performs screening (it is manual in Phase 1); this only makes the obligation
+// visible at the moment it arises instead of relying on someone remembering.
+const IDENTITY_RESCREEN_COLUMNS = new Set(['first_name', 'last_name', 'nationalities', 'country_of_residence']);
+
+const IDENTITY_EVIDENCE_LABELS = {
+  identity_update: 'New identity document',
+  address_update: 'New proof of address',
+};
+
+const IDENTITY_FILE_KEYS = ['identityFileBase64', 'identityFileName', 'addressFileBase64', 'addressFileName', 'addressIssuedOn'];
+
+// Order-insensitive: nationalities are a set. Listing the same two in a
+// different order is not a change, and must not become a request.
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const x = [...a].sort();
+  const y = [...b].sort();
+  return x.every((v, i) => v === y[i]);
+}
+
+// Validates the proposed values and returns only the columns that actually
+// differ from what is on file. Validation matches PUT /api/user/profile/identity
+// field for field, so a value an applicant could not have declared cannot be
+// proposed here either — with one deliberate difference: an under-18 date of
+// birth is RECORDED rather than refused. For an applicant, refusing stores
+// nothing about a minor who never became a participant. For an approved
+// participant, it is a disclosure about someone already on the books, and
+// throwing it away would lose exactly the fact compliance needs; it is stopped
+// at approval instead (see identityChangeEligibility).
+function parseIdentityProposal(body, current) {
+  const updates = {};
+
+  for (const key of ['firstName', 'lastName']) {
+    if (!(key in body)) continue;
+    const value = String(body[key] ?? '').trim();
+    if (value.length === 0 || value.length > 100) {
+      return { ok: false, error: `${key} must be between 1 and 100 characters` };
+    }
+    // Control characters and angle brackets have no place in a legal name and
+    // are how a name becomes markup somewhere it is rendered.
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f<>]/.test(value)) {
+      return { ok: false, error: `${key} contains characters that cannot appear in a name` };
+    }
+    updates[IDENTITY_CHANGE_FIELDS[key]] = value;
+  }
+
+  if ('nationalities' in body) {
+    const raw = body.nationalities;
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > 5) {
+      return { ok: false, error: 'nationalities must list between 1 and 5 two-letter country codes' };
+    }
+    const normalized = raw.map((c) => String(c ?? '').trim().toUpperCase());
+    const invalid = normalized.filter((c) => !/^[A-Z]{2}$/.test(c));
+    if (invalid.length > 0) {
+      return { ok: false, error: `Invalid country code(s): ${invalid.join(', ')}. Use 2-letter ISO codes.` };
+    }
+    updates.nationalities = [...new Set(normalized)];
+  }
+
+  if ('countryOfResidence' in body) {
+    const value = String(body.countryOfResidence ?? '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(value)) {
+      return { ok: false, error: 'countryOfResidence must be a 2-letter ISO country code' };
+    }
+    updates.country_of_residence = value;
+  }
+
+  if ('dateOfBirth' in body) {
+    const value = String(body.dateOfBirth ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return { ok: false, error: 'dateOfBirth must be a calendar date in YYYY-MM-DD format' };
+    }
+    const age = ageInYearsUtc(value);
+    if (age === null) return { ok: false, error: 'dateOfBirth is not a real calendar date' };
+    if (age < 0) return { ok: false, error: 'dateOfBirth cannot be in the future' };
+    if (age > 120) return { ok: false, error: 'Please check the year — that date of birth is not plausible.' };
+    updates.date_of_birth = value;
+  }
+
+  const changed = {};
+  const prior = {};
+  for (const [column, value] of Object.entries(updates)) {
+    const was = current[column] ?? null;
+    const differs = column === 'nationalities'
+      ? !sameStringArray(was || [], value)
+      : (was || null) !== (value || null);
+    if (differs) {
+      changed[column] = value;
+      prior[column] = was;
+    }
+  }
+  return { ok: true, changed, prior };
+}
+
+// Would applying this leave the investor eligible? Assessed on the WHOLE
+// resulting profile, not just the changed fields — a new residence is judged
+// together with the nationalities already on file (Appendix A.16: highest risk
+// wins). Returns the jurisdiction assessment too, so the reviewer sees the tier
+// the change produces before deciding.
+function identityChangeEligibility(current, changed) {
+  const merged = { ...current, ...changed };
+  const jurisdiction = assessJurisdiction({
+    countryCode: merged.country_code,
+    countryOfResidence: merged.country_of_residence,
+    nationalities: merged.nationalities,
+  });
+  const reasons = [];
+  if (!jurisdiction.canApprove) reasons.push(jurisdiction.reason);
+  if (merged.date_of_birth) {
+    const age = ageInYearsUtc(merged.date_of_birth);
+    if (age !== null && age < MINIMUM_PARTICIPANT_AGE) {
+      reasons.push(`The date of birth makes the participant under ${MINIMUM_PARTICIPANT_AGE} (Manual §3).`);
+    }
+  }
+  return { eligible: reasons.length === 0, reasons, jurisdiction };
+}
+
+// Which evidence a change needs. Name and date of birth are read off an
+// identity document; residence off a proof of address. Nationality needs
+// none: PO-11 — "the investor self-declares ALL nationalities they have ... not
+// us chasing proof of every possible passport" — and the declaration, recorded
+// here in the investor's own request, is what creates the consequence.
+function requiredIdentityEvidence(changed) {
+  return {
+    identity: 'first_name' in changed || 'last_name' in changed || 'date_of_birth' in changed,
+    address: 'country_of_residence' in changed,
+  };
+}
+
+async function loadIdentityForChange(userId, runner = q) {
+  const rows = await runner(
+    `SELECT kyc_status, country_code, first_name, last_name, nationalities, country_of_residence,
+            -- Text, not a DATE: see the DATE-as-timestamp note in CLAUDE.md.
+            to_char(date_of_birth, 'YYYY-MM-DD') AS date_of_birth
+     FROM users WHERE user_id = $1 AND is_active = true AND is_deleted = false`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+async function storeInvestorEvidence(userId, fileBase64, fileName) {
+  const validation = validateUploadedFile(fileBase64);
+  if (!validation.ok) return validation;
+  const { fileBuffer, extension } = validation;
+  const correctedFileName = withDetectedExtension(fileName, extension);
+  const storagePath = `${userId}/${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  await ensureDocumentsBucket();
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from(DOCUMENTS_BUCKET)
+    .upload(storagePath, fileBuffer, {
+      contentType: contentTypeForDetectedExtension(extension),
+      upsert: false,
+    });
+  if (uploadError) {
+    console.error('Supabase Storage upload error:', uploadError);
+    return { ok: false, storageFailed: true, error: 'Could not store document' };
+  }
+  return {
+    ok: true,
+    storagePath,
+    fileName: correctedFileName,
+    mimeType: contentTypeForDetectedExtension(extension),
+  };
+}
+
+// POST /api/user/identity-change-requests — an approved investor proposing a
+// change to a locked identity field. Never writes to `users`.
+app.post('/api/user/identity-change-requests', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+
+    const body = req.body || {};
+    const allowed = new Set([...Object.keys(IDENTITY_CHANGE_FIELDS), 'reason', ...IDENTITY_FILE_KEYS]);
+    const unexpected = Object.keys(body).filter((k) => !allowed.has(k));
+    if (unexpected.length > 0) {
+      return res.status(400).json({ success: false, error: `Unexpected field(s): ${unexpected.join(', ')}` });
+    }
+
+    const current = await loadIdentityForChange(userId);
+    if (!current) return res.status(404).json({ success: false, error: 'User not found' });
+
+    // Only a locked profile needs this route. A Pending applicant edits the
+    // same fields directly and should be told so, not sent into a queue.
+    if (current.kyc_status !== 'Approved') {
+      return res.status(409).json({
+        success: false,
+        code: 'IDENTITY_NOT_LOCKED',
+        error: 'Your verification is still in progress, so you can edit these details yourself on your Profile page.',
+      });
+    }
+
+    const reason = String(body.reason ?? '').trim();
+    if (reason.length === 0) {
+      return res.status(400).json({ success: false, error: 'Please tell us why these details are changing (for example, a name change after marriage, or a move abroad).' });
+    }
+    if (reason.length > 1000) {
+      return res.status(400).json({ success: false, error: 'Please keep the reason under 1000 characters.' });
+    }
+
+    const parsed = parseIdentityProposal(body, current);
+    if (!parsed.ok) return res.status(400).json({ success: false, error: parsed.error });
+    if (Object.keys(parsed.changed).length === 0) {
+      return res.status(400).json({ success: false, error: 'Nothing to change — the details you entered match what we already hold.' });
+    }
+
+    // Evidence: required exactly where it is needed, and refused where it is
+    // not — the same allow-list-and-reject stance as every profile endpoint,
+    // so a client that thinks it attached something useful cannot be quietly
+    // wrong about it.
+    const needs = requiredIdentityEvidence(parsed.changed);
+    const hasIdentityFile = Boolean(body.identityFileBase64 || body.identityFileName);
+    const hasAddressFile = Boolean(body.addressFileBase64 || body.addressFileName || body.addressIssuedOn);
+
+    if (needs.identity && (typeof body.identityFileBase64 !== 'string' || typeof body.identityFileName !== 'string' || !body.identityFileBase64 || !body.identityFileName)) {
+      return res.status(400).json({ success: false, error: 'A change of name or date of birth needs a copy of a current passport or national ID showing the new details.' });
+    }
+    if (!needs.identity && hasIdentityFile) {
+      return res.status(400).json({ success: false, error: 'An identity document is only needed for a change of name or date of birth.' });
+    }
+    let addressIssuedOn = null;
+    if (needs.address) {
+      if (typeof body.addressFileBase64 !== 'string' || typeof body.addressFileName !== 'string' || !body.addressFileBase64 || !body.addressFileName) {
+        return res.status(400).json({ success: false, error: 'A change of residence needs a proof of address in the new country, less than three months old.' });
+      }
+      const dateCheck = validateProofOfAddressDate(body.addressIssuedOn);
+      if (!dateCheck.ok) return res.status(400).json({ success: false, error: dateCheck.error.replace('documentIssuedOn', 'addressIssuedOn') });
+      addressIssuedOn = dateCheck.value;
+    } else if (hasAddressFile) {
+      return res.status(400).json({ success: false, error: 'A proof of address is only needed for a change of residence.' });
+    }
+
+    // Validate file contents before storing either, so a bad second file does
+    // not leave the first one orphaned in the bucket.
+    for (const [present, payload] of [[needs.identity, body.identityFileBase64], [needs.address, body.addressFileBase64]]) {
+      if (!present) continue;
+      const check = validateUploadedFile(payload);
+      if (!check.ok) return res.status(400).json({ success: false, error: check.error });
+    }
+
+    const open = await q(`SELECT 1 FROM identity_change_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`, [userId]);
+    if (open.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'You already have a change to your details waiting for review. You can submit another once it has been decided.',
+      });
+    }
+
+    const identityFile = needs.identity ? await storeInvestorEvidence(userId, body.identityFileBase64, body.identityFileName) : null;
+    if (identityFile && !identityFile.ok) return res.status(500).json({ success: false, error: identityFile.error });
+    const addressFile = needs.address ? await storeInvestorEvidence(userId, body.addressFileBase64, body.addressFileName) : null;
+    if (addressFile && !addressFile.ok) return res.status(500).json({ success: false, error: addressFile.error });
+
+    const insertEvidence = async (tx, file, type, issuedOn) => {
+      if (!file) return null;
+      const rows = await tx(
+        `INSERT INTO user_documents (
+           user_id, category, label, file_name, original_file_name, mime_type,
+           uploaded_by_admin_id, visibility, source, kyc_document_type, document_issued_on
+         ) VALUES ($1, 'KYC', $2, $3, $4, $5, NULL, 'investor_visible', 'investor', $6, $7)
+         RETURNING document_id AS "DocumentID"`,
+        [userId, IDENTITY_EVIDENCE_LABELS[type], file.storagePath, file.fileName, file.mimeType, type, issuedOn]
+      );
+      return rows[0].DocumentID;
+    };
+
+    let created;
+    try {
+      created = await withTransaction(async (tx) => {
+        const identityDocumentId = await insertEvidence(tx, identityFile, 'identity_update', null);
+        const addressDocumentId = await insertEvidence(tx, addressFile, 'address_update', addressIssuedOn);
+        const rows = await tx(
+          `INSERT INTO identity_change_requests
+             (user_id, proposed_values, prior_values, investor_reason, identity_document_id, address_document_id)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING request_id AS "RequestID", created_at AS "CreatedAt"`,
+          [userId, JSON.stringify(parsed.changed), JSON.stringify(parsed.prior), reason, identityDocumentId, addressDocumentId]
+        );
+        await tx(
+          `INSERT INTO identity_change_request_events (request_id, event_type, actor_user_id) VALUES ($1, 'submitted', $2)`,
+          [rows[0].RequestID, userId]
+        );
+        return rows[0];
+      });
+    } catch (error) {
+      // The partial unique index is the real one-pending guard; the SELECT
+      // above only gives the friendly message in the common case. Two
+      // near-simultaneous submissions land here.
+      if (error.code === '23505' && String(error.constraint || '').includes('one_pending')) {
+        return res.status(409).json({
+          success: false,
+          error: 'You already have a change to your details waiting for review. You can submit another once it has been decided.',
+        });
+      }
+      throw error;
+    }
+
+    console.log(`[identity_change.requested] user_id=${userId} request_id=${created.RequestID} fields=${Object.keys(parsed.changed).join(',')}`);
+    notifyPriorContact('identity', created.RequestID, userId, 'requested');
+
+    res.status(201).json({
+      success: true,
+      data: { requestId: String(created.RequestID), createdAt: created.CreatedAt, status: 'pending' },
+      message: 'Your request has been sent for review. We will update your details once it has been checked.',
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/user/identity-change-requests — the investor's own requests.
+// Rebuilt field by field: the reviewer's notes, the reviewer's identity and
+// the eligibility assessment never leave the server on this route.
+app.get('/api/user/identity-change-requests', async (req, res) => {
+  try {
+    const userId = requireAuthenticatedUserId(req, res);
+    if (!userId) return;
+    const rows = await q(
+      `SELECT request_id, status, proposed_values, reason_code, created_at, reviewed_at
+       FROM identity_change_requests WHERE user_id = $1
+       ORDER BY created_at DESC, request_id DESC LIMIT 10`,
+      [userId]
+    );
+    res.json({
+      success: true,
+      data: rows.map((row) => ({
+        RequestID: String(row.request_id),
+        Status: row.status,
+        Fields: Object.keys(row.proposed_values || {}).map((col) => IDENTITY_CHANGE_FIELD_LABELS[col] || col),
+        ProposedValues: {
+          FirstName: row.proposed_values?.first_name,
+          LastName: row.proposed_values?.last_name,
+          Nationalities: row.proposed_values?.nationalities,
+          CountryOfResidence: row.proposed_values?.country_of_residence,
+          DateOfBirth: row.proposed_values?.date_of_birth,
+        },
+        RejectionReason: row.status === 'rejected'
+          ? DOCUMENT_REJECTION_REASONS[row.reason_code] || DOCUMENT_REJECTION_REASONS.other
+          : null,
+        CreatedAt: row.created_at,
+        ReviewedAt: row.reviewed_at,
+      })),
+    });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/ops/identity-change-requests — the Operations queue. Operations
+// owns people and documents; this is KYC data, not money (D.25 role matrix).
+app.get('/api/ops/identity-change-requests', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+
+    const rows = await q(
+      `SELECT r.request_id, r.user_id, r.proposed_values, r.prior_values, r.investor_reason, r.created_at,
+              r.identity_document_id, r.address_document_id,
+              u.email, u.kyc_status, u.country_code, u.first_name, u.last_name, u.nationalities, u.country_of_residence,
+              to_char(u.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+              di.original_file_name AS identity_file_name,
+              da.original_file_name AS address_file_name,
+              to_char(da.document_issued_on, 'YYYY-MM-DD') AS address_issued_on,
+              n.delivered AS notice_delivered, n.delivery_detail AS notice_detail
+       FROM identity_change_requests r
+       JOIN users u ON u.user_id = r.user_id
+       LEFT JOIN user_documents di ON di.document_id = r.identity_document_id
+       LEFT JOIN user_documents da ON da.document_id = r.address_document_id
+       LEFT JOIN LATERAL (
+         SELECT delivered, delivery_detail FROM identity_change_request_events
+         WHERE request_id = r.request_id AND event_type = 'prior_contact_notified'
+         ORDER BY created_at DESC, event_id DESC LIMIT 1
+       ) n ON true
+       WHERE r.status = 'pending'
+       ORDER BY r.created_at ASC, r.request_id ASC`
+    );
+
+    const data = rows.map((row) => {
+      const changed = row.proposed_values || {};
+      const eligibility = identityChangeEligibility(row, changed);
+      return {
+        RequestID: String(row.request_id),
+        UserID: String(row.user_id),
+        FirstName: row.first_name,
+        LastName: row.last_name,
+        Email: row.email,
+        CreatedAt: row.created_at,
+        InvestorReason: row.investor_reason,
+        Changes: Object.keys(changed).map((col) => ({
+          Field: col,
+          Label: IDENTITY_CHANGE_FIELD_LABELS[col] || col,
+          From: row.prior_values?.[col] ?? null,
+          To: changed[col],
+        })),
+        IdentityDocumentID: row.identity_document_id,
+        IdentityFileName: row.identity_file_name,
+        AddressDocumentID: row.address_document_id,
+        AddressFileName: row.address_file_name,
+        AddressIssuedOn: row.address_issued_on,
+        NoticeDelivered: row.notice_delivered,
+        NoticeDetail: row.notice_detail,
+        JurisdictionTierAfter: eligibility.jurisdiction.tier,
+        JurisdictionReasonAfter: eligibility.jurisdiction.reason,
+        EligibleAfter: eligibility.eligible,
+        IneligibleReasons: eligibility.reasons,
+        RescreenRequired: Object.keys(changed).some((col) => IDENTITY_RESCREEN_COLUMNS.has(col)),
+      };
+    });
+    res.json({ success: true, data, count: data.length });
+  } catch (error) {
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/identity-change-requests/:id/approve — applies the proposed
+// values to `users`, and nothing else. Row-locked like every decision here.
+app.post('/api/ops/identity-change-requests/:id/approve', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+    const requestId = Number(req.params.id);
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid request id' });
+    }
+
+    const result = await withTransaction(async (tx) => {
+      const locked = await tx(
+        `SELECT request_id, user_id, status, proposed_values, prior_values, identity_document_id, address_document_id
+         FROM identity_change_requests WHERE request_id = $1 FOR UPDATE`,
+        [requestId]
+      );
+      if (locked.length === 0) throw Object.assign(new Error('Request not found'), { httpStatus: 404 });
+      const request = locked[0];
+      if (request.status !== 'pending') {
+        throw Object.assign(new Error(`This request is already '${request.status}' — a decision was already recorded`), { httpStatus: 409 });
+      }
+
+      // An operator must not approve their own change. Operators are also
+      // users, and the whole point of the queue is a second person.
+      if (Number(request.user_id) === Number(adminUserId)) {
+        throw Object.assign(new Error('You cannot approve a change to your own details. Another operator must review it.'), { httpStatus: 403, code: 'SELF_REVIEW' });
+      }
+
+      // Lock the investor's row too, and check it still says what the request
+      // was made against. If something else changed these fields since, the
+      // "from" values the reviewer just checked are no longer true.
+      await tx(`SELECT 1 FROM users WHERE user_id = $1 FOR UPDATE`, [request.user_id]);
+      const current = await loadIdentityForChange(request.user_id, tx);
+      if (!current) throw Object.assign(new Error('Investor not found'), { httpStatus: 404 });
+      const changed = request.proposed_values || {};
+      for (const col of Object.keys(changed)) {
+        const now = current[col] ?? null;
+        const then = request.prior_values?.[col] ?? null;
+        const same = col === 'nationalities' ? sameStringArray(now || [], then || []) : (now || null) === (then || null);
+        if (!same) {
+          throw Object.assign(
+            new Error(`The investor's ${IDENTITY_CHANGE_FIELD_LABELS[col] || col} has changed since this request was made. Reject it and ask them to submit again.`),
+            { httpStatus: 409, code: 'IDENTITY_CHANGED_SINCE_REQUEST' }
+          );
+        }
+      }
+
+      // Defensive: the submit route already required these, but a decision is
+      // the moment the evidence has to exist, so it is checked here too.
+      const needs = requiredIdentityEvidence(changed);
+      if ((needs.identity && !request.identity_document_id) || (needs.address && !request.address_document_id)) {
+        throw Object.assign(new Error('This request is missing the evidence it needs and cannot be approved.'), { httpStatus: 409, code: 'IDENTITY_EVIDENCE_MISSING' });
+      }
+
+      // THE ELIGIBILITY STOP. An operator approval must never move a
+      // participant into an excluded jurisdiction, or under age, while their
+      // account stays Approved — and it must never silently decline them
+      // either. Both are compliance decisions (tracker Q-11). So the change is
+      // refused here and the request stays pending: the investor's declaration
+      // is already on record in the request itself, which is what PO-11's
+      // "we can walk away if you lied" rests on, and nothing is lost by
+      // waiting for a compliance answer.
+      const eligibility = identityChangeEligibility(current, changed);
+      if (!eligibility.eligible) {
+        throw Object.assign(
+          new Error(`Applying this change would make the investor ineligible: ${eligibility.reasons.join(' ')} This needs a compliance decision, not an operator approval. Leave it pending and escalate it to the Compliance Owner.`),
+          { httpStatus: 409, code: 'IDENTITY_CHANGE_MAKES_INELIGIBLE' }
+        );
+      }
+
+      const columns = Object.keys(changed).filter((col) => Object.values(IDENTITY_CHANGE_FIELDS).includes(col));
+      const setClauses = columns.map((col, i) => `${col} = $${i + 1}`);
+      const values = columns.map((col) => changed[col]);
+      await tx(
+        `UPDATE users SET ${setClauses.join(', ')}, updated_at = NOW() WHERE user_id = $${values.length + 1}`,
+        [...values, request.user_id]
+      );
+
+      await tx(
+        `UPDATE identity_change_requests SET status = 'approved', reviewed_by = $1, reviewed_at = NOW() WHERE request_id = $2`,
+        [adminUserId, requestId]
+      );
+      await tx(
+        `INSERT INTO identity_change_request_events (request_id, event_type, actor_admin_id, note)
+         VALUES ($1, 'approved', $2, $3)`,
+        [requestId, adminUserId, `fields=${columns.join(',')}`]
+      );
+      return { userId: request.user_id, rescreen: columns.some((col) => IDENTITY_RESCREEN_COLUMNS.has(col)) };
+    });
+
+    console.log(`[identity_change.approved] request_id=${requestId} user_id=${result.userId} reviewed_by=${adminUserId}`);
+    notifyPriorContact('identity', requestId, result.userId, 'applied');
+
+    res.json({
+      success: true,
+      message: result.rescreen
+        ? 'Change applied. This is a material change under Manual §6: the Compliance Owner must re-screen this participant.'
+        : 'Change applied.',
+      rescreenRequired: result.rescreen,
+    });
+  } catch (error) {
+    if (error.httpStatus) {
+      return res.status(error.httpStatus).json({ success: false, error: error.message, ...(error.code ? { code: error.code } : {}) });
+    }
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /api/ops/identity-change-requests/:id/reject — a structured reason the
+// investor sees (about the evidence, never the person), plus optional internal
+// notes they never see. Evidence is retained with the request, not live.
+app.post('/api/ops/identity-change-requests/:id/reject', async (req, res) => {
+  try {
+    const adminUserId = await requireOperator(req, res, OPERATIONS_ROLES);
+    if (!adminUserId) return;
+    const requestId = Number(req.params.id);
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid request id' });
+    }
+    const { reasonCode, notes } = req.body || {};
+    if (!Object.prototype.hasOwnProperty.call(DOCUMENT_REJECTION_REASONS, reasonCode)) {
+      return res.status(400).json({
+        success: false,
+        error: `reasonCode is required and must be one of: ${Object.keys(DOCUMENT_REJECTION_REASONS).join(', ')}`,
+      });
+    }
+    const internalNotes = notes === undefined || notes === null ? '' : String(notes).trim();
+    if (internalNotes.length > 2000) {
+      return res.status(400).json({ success: false, error: 'notes must be under 2000 characters' });
+    }
+
+    const result = await withTransaction(async (tx) => {
+      const locked = await tx(
+        `SELECT request_id, user_id, status, identity_document_id, address_document_id
+         FROM identity_change_requests WHERE request_id = $1 FOR UPDATE`,
+        [requestId]
+      );
+      if (locked.length === 0) throw Object.assign(new Error('Request not found'), { httpStatus: 404 });
+      const request = locked[0];
+      if (request.status !== 'pending') {
+        throw Object.assign(new Error(`This request is already '${request.status}' — a decision was already recorded`), { httpStatus: 409 });
+      }
+      if (Number(request.user_id) === Number(adminUserId)) {
+        throw Object.assign(new Error('You cannot decide a change to your own details. Another operator must review it.'), { httpStatus: 403, code: 'SELF_REVIEW' });
+      }
+
+      await tx(
+        `UPDATE identity_change_requests
+         SET status = 'rejected', reviewed_by = $1, reviewed_at = NOW(), reason_code = $2, reviewer_notes = $3
+         WHERE request_id = $4`,
+        [adminUserId, reasonCode, internalNotes || null, requestId]
+      );
+      const evidenceIds = [request.identity_document_id, request.address_document_id].filter(Boolean);
+      if (evidenceIds.length > 0) {
+        await tx(`UPDATE user_documents SET is_superseded = true WHERE document_id = ANY($1::int[])`, [evidenceIds]);
+      }
+      await tx(
+        `INSERT INTO identity_change_request_events (request_id, event_type, actor_admin_id, note)
+         VALUES ($1, 'rejected', $2, $3)`,
+        [requestId, adminUserId, `reason=${reasonCode}${internalNotes ? `; ${internalNotes}` : ''}`]
+      );
+      return { userId: request.user_id };
+    });
+
+    console.log(`[identity_change.rejected] request_id=${requestId} user_id=${result.userId} reviewed_by=${adminUserId} reason=${reasonCode}`);
+    res.json({ success: true, message: 'Change rejected.' });
+  } catch (error) {
+    if (error.httpStatus) {
+      return res.status(error.httpStatus).json({ success: false, error: error.message, ...(error.code ? { code: error.code } : {}) });
+    }
+    console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
 
 app.get('/api/user/documents', async (req, res) => {
   try {

@@ -8,10 +8,22 @@
       "port": 5000
     },
     {
+      "name": "backend-5001",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set API_PORT=5001&& node server.js"],
+      "port": 5001
+    },
+    {
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:frontend"],
       "port": 3000
+    },
+    {
+      "name": "frontend-3001",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set VITE_API_URL=http://localhost:5001&& npx vite --port 3001 --strictPort"],
+      "port": 3001
     },
     {
       "name": "admin-portal",

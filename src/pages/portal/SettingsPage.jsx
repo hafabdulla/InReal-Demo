@@ -18,6 +18,7 @@ import { getApiBase } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { COUNTRIES, countryName } from '@/lib/countries';
 import { getKycDisplay, KYC_TONE_CLASSES } from '@/lib/kycStatus';
+import IdentityChangeRequestCard from '@/pages/portal/IdentityChangeRequestCard';
 
 // Whole years between a YYYY-MM-DD birthday and today, in UTC, mirroring
 // ageInYearsUtc() in server.js. Returns null for anything that is not a real
@@ -783,7 +784,9 @@ export default function SettingsPage() {
                 </div>
 
                 <p className="text-xs text-portal-tertiary">
-                  Need to update your legal name or email address? Contact support — these require a fresh identity check and can't be changed here.
+                  {identityLocked
+                    ? 'Has your legal name changed? Use "Change your details" below. To change your email address, contact support.'
+                    : "Need to update your legal name or email address? Contact support — these require a fresh identity check and can't be changed here."}
                 </p>
               </div>
 
@@ -823,7 +826,7 @@ export default function SettingsPage() {
                       />
                     </div>
                     <p className="text-xs text-portal-tertiary">
-                      Your verification is complete, so these details are now locked. Contact support if they need to change — an update requires a fresh identity check.
+                      Your verification is complete, so these details are now locked. If they have changed, use "Change your details" below — our team checks every change before it is applied.
                     </p>
                   </>
                 ) : (
@@ -1000,6 +1003,13 @@ export default function SettingsPage() {
                   </>
                 )}
               </div>
+
+              {/* REQ-USR-14: after approval, identity changes route through a
+                  reviewed request rather than an edit. Pending applicants still
+                  edit directly in the card above. */}
+              {identityLocked && (
+                <IdentityChangeRequestCard user={user} session={session} toast={toast} />
+              )}
 
               {/* The one genuinely editable field on this page, deliberately
                   separated into its own card with its own save action —

@@ -2253,6 +2253,7 @@ function canOperatorManageOperators() {
 const TAB_VISIBILITY_GUARDS = {
   operators: canOperatorManageOperators,
   'bank-requests': canOperatorSeeFinanceData,
+  'identity-requests': canOperatorDoOperationsWork,
 };
 
 function canOperatorSeeTab(tab) {
@@ -2276,6 +2277,13 @@ function applyOperatorRoleVisibility() {
   const bankRequestsNav = document.getElementById('navBankRequests');
   if (bankRequestsNav) {
     bankRequestsNav.classList.toggle('hidden', !canOperatorSeeFinanceData());
+  }
+
+  // Identity Requests is the Operations mirror of the above: KYC data, decided
+  // by OPERATIONS_ROLES on the server, so a finance_admin never sees the tab.
+  const identityRequestsNav = document.getElementById('navIdentityRequests');
+  if (identityRequestsNav) {
+    identityRequestsNav.classList.toggle('hidden', !canOperatorDoOperationsWork());
   }
 
   // Hiding the nav item does not move anyone off the panel it points at. Both
@@ -2847,6 +2855,205 @@ async function submitBankRequestDecision(action) {
   }
 }
 
+// ── Identity change requests (REQ-OPS-14, identity half) ────────────────────
+// Same table-and-drawer pattern as Bank Requests, gated to Operations. Every
+// server value below goes through escapeHtml/escapeAttr, and rows are named
+// `row` / `detail` so test-escaping.mjs's source scan actually inspects them.
+let identityRequestQueue = [];
+let selectedIdentityRequest = null;
+
+async function loadIdentityRequestQueue() {
+  const result = await apiFetch('/api/ops/identity-change-requests');
+  identityRequestQueue = result.data || [];
+}
+
+function formatIdentityValue(field, value) {
+  if (value === null || value === undefined || value === '') return '— (none on file)';
+  if (field === 'nationalities') return Array.isArray(value) ? value.join(', ') : String(value);
+  return String(value);
+}
+
+function renderIdentityRequestQueue() {
+  const countLabel = document.getElementById('identityRequestCountLabel');
+  const tbody = document.getElementById('identityRequestTableBody');
+  if (!countLabel || !tbody) return;
+
+  countLabel.textContent = `${identityRequestQueue.length} pending`;
+  if (identityRequestQueue.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="helper" style="text-align:center;padding:24px">No pending identity change requests.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = identityRequestQueue.map((row) => `
+      <tr class="kyc-row" data-requestid="${escapeAttr(row.RequestID)}">
+        <td>
+          <strong>${escapeHtml(row.FirstName)} ${escapeHtml(row.LastName)}</strong><br>
+          <span class="helper">${escapeHtml(row.Email)}</span>
+        </td>
+        <td>
+          ${escapeHtml((row.Changes || []).map((c) => c.Label).join(', '))}
+          ${row.EligibleAfter ? '' : '<br><span class="helper" style="color:var(--danger, #f87171)">Would make them ineligible</span>'}
+        </td>
+        <td>${formatDate(row.CreatedAt)}</td>
+        <td>
+          <button class="ghost-btn identity-review-btn" data-requestid="${escapeAttr(row.RequestID)}" style="font-size:0.8rem;padding:4px 10px">
+            Review
+          </button>
+        </td>
+      </tr>
+    `).join('');
+  refreshIcons();
+}
+
+function openIdentityRequestDrawer(requestId) {
+  const detail = identityRequestQueue.find((r) => String(r.RequestID) === String(requestId));
+  if (!detail) return;
+  selectedIdentityRequest = detail;
+
+  document.getElementById('identityDrawerName').textContent = `${detail.FirstName} ${detail.LastName}`;
+  document.getElementById('identityDrawerEmail').textContent = detail.Email;
+  document.getElementById('identityDrawerReason').textContent = detail.InvestorReason || '—';
+
+  document.getElementById('identityDrawerChanges').innerHTML = (detail.Changes || []).map((change) => `
+      <div class="kyc-detail-item">
+        <span class="kyc-detail-label">${escapeHtml(change.Label)}</span>
+        <span class="kyc-detail-value">
+          ${escapeHtml(formatIdentityValue(change.Field, change.From))}
+          <br>→ <strong>${escapeHtml(formatIdentityValue(change.Field, change.To))}</strong>
+        </span>
+      </div>
+    `).join('');
+
+  const idBtn = document.getElementById('identityDrawerIdDocBtn');
+  if (detail.IdentityDocumentID) {
+    document.getElementById('identityDrawerIdDoc').textContent = detail.IdentityFileName || `Document #${detail.IdentityDocumentID}`;
+    idBtn.classList.remove('hidden');
+  } else {
+    document.getElementById('identityDrawerIdDoc').textContent = 'Not needed for this change';
+    idBtn.classList.add('hidden');
+  }
+  const addrBtn = document.getElementById('identityDrawerAddrDocBtn');
+  if (detail.AddressDocumentID) {
+    const dated = detail.AddressIssuedOn ? ` (dated ${formatDateOnly(detail.AddressIssuedOn)})` : '';
+    document.getElementById('identityDrawerAddrDoc').textContent = `${detail.AddressFileName || `Document #${detail.AddressDocumentID}`}${dated}`;
+    addrBtn.classList.remove('hidden');
+  } else {
+    document.getElementById('identityDrawerAddrDoc').textContent = 'Not needed for this change';
+    addrBtn.classList.add('hidden');
+  }
+
+  let noticeText = 'Not recorded yet — refresh in a moment';
+  if (detail.NoticeDelivered === true) noticeText = 'Yes — sent to the email on file';
+  else if (detail.NoticeDelivered === false) noticeText = `No — not delivered (${detail.NoticeDetail || 'unknown reason'})`;
+  document.getElementById('identityDrawerNotice').textContent = noticeText;
+  document.getElementById('identityDrawerTier').textContent = detail.JurisdictionTierAfter || '—';
+
+  const ineligibleEl = document.getElementById('identityDrawerIneligible');
+  const approveBtn = document.getElementById('identityApproveBtn');
+  if (detail.EligibleAfter) {
+    ineligibleEl.classList.add('hidden');
+    ineligibleEl.textContent = '';
+    approveBtn.disabled = false;
+    approveBtn.title = '';
+  } else {
+    ineligibleEl.textContent = `Cannot be approved here: ${(detail.IneligibleReasons || []).join(' ')} Leave it pending and escalate to the Compliance Owner.`;
+    ineligibleEl.classList.remove('hidden');
+    approveBtn.disabled = true;
+    approveBtn.title = 'This change would make the investor ineligible and needs a compliance decision.';
+  }
+  document.getElementById('identityDrawerRescreen').classList.toggle('hidden', !detail.RescreenRequired);
+
+  document.getElementById('identityRejectReason').value = '';
+  document.getElementById('identityRejectNotes').value = '';
+  const errorEl = document.getElementById('identityFormError');
+  errorEl.classList.add('hidden');
+  errorEl.textContent = '';
+
+  document.getElementById('identityRequestDrawer').classList.remove('hidden');
+  showDrawerBackdrop();
+  refreshIcons();
+}
+
+function closeIdentityRequestDrawer() {
+  selectedIdentityRequest = null;
+  document.getElementById('identityRequestDrawer').classList.add('hidden');
+  hideDrawerBackdrop();
+}
+
+async function submitIdentityRequestDecision(action) {
+  if (!selectedIdentityRequest) return;
+  const errorEl = document.getElementById('identityFormError');
+  const reasonCode = document.getElementById('identityRejectReason').value;
+  const notes = document.getElementById('identityRejectNotes').value.trim();
+
+  if (action === 'reject' && !reasonCode) {
+    errorEl.textContent = 'Choose what the investor should be told before rejecting.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const approveBtn = document.getElementById('identityApproveBtn');
+  const rejectBtn = document.getElementById('identityRejectBtn');
+  const approveWasDisabled = approveBtn.disabled;
+  approveBtn.disabled = true;
+  rejectBtn.disabled = true;
+  errorEl.classList.add('hidden');
+
+  try {
+    const id = encodeURIComponent(selectedIdentityRequest.RequestID);
+    const result = action === 'approve'
+      ? await apiFetch(`/api/ops/identity-change-requests/${id}/approve`, { method: 'POST' })
+      : await apiFetch(`/api/ops/identity-change-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reasonCode, notes }) });
+
+    const investorName = `${selectedIdentityRequest.FirstName} ${selectedIdentityRequest.LastName}`;
+    addAudit(
+      `Identity change ${action === 'approve' ? 'approved' : 'rejected'} — ${investorName}`,
+      `${authSession?.user?.Email || 'Ops'} • just now`,
+      action === 'approve'
+        ? (result?.rescreenRequired ? 'Applied. Material change — Compliance Owner to re-screen.' : 'Applied to the account.')
+        : `Reason given: ${reasonCode}`,
+    );
+
+    closeIdentityRequestDrawer();
+    await loadIdentityRequestQueue();
+    renderIdentityRequestQueue();
+    renderAudit();
+    saveWorkspaceState();
+  } catch (err) {
+    errorEl.textContent = err.message || 'Decision could not be recorded. Try again.';
+    errorEl.classList.remove('hidden');
+    approveBtn.disabled = approveWasDisabled;
+    rejectBtn.disabled = false;
+    return;
+  }
+  approveBtn.disabled = false;
+  rejectBtn.disabled = false;
+}
+
+function bindIdentityRequestEvents() {
+  document.getElementById('refreshIdentityRequestsBtn').addEventListener('click', async () => {
+    await loadIdentityRequestQueue();
+    renderIdentityRequestQueue();
+  });
+  document.getElementById('identityRequestTableBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('.identity-review-btn');
+    if (btn) openIdentityRequestDrawer(btn.dataset.requestid);
+  });
+  document.getElementById('identityDrawerIdDocBtn').addEventListener('click', () => {
+    if (selectedIdentityRequest?.IdentityDocumentID) {
+      openDocumentViewer(selectedIdentityRequest.IdentityDocumentID, selectedIdentityRequest.IdentityFileName, 'Identity document');
+    }
+  });
+  document.getElementById('identityDrawerAddrDocBtn').addEventListener('click', () => {
+    if (selectedIdentityRequest?.AddressDocumentID) {
+      openDocumentViewer(selectedIdentityRequest.AddressDocumentID, selectedIdentityRequest.AddressFileName, 'Proof of address');
+    }
+  });
+  document.getElementById('identityDrawerCloseBtn').addEventListener('click', closeIdentityRequestDrawer);
+  document.getElementById('identityApproveBtn').addEventListener('click', () => submitIdentityRequestDecision('approve'));
+  document.getElementById('identityRejectBtn').addEventListener('click', () => submitIdentityRequestDecision('reject'));
+}
+
 function bindBankRequestEvents() {
   document.getElementById('refreshBankRequestsBtn').addEventListener('click', async () => {
     await loadBankRequestQueue();
@@ -3053,6 +3260,11 @@ async function refreshLiveData() {
     // machine) left behind in memory.
     bankRequestQueue = [];
   }
+  if (canOperatorDoOperationsWork()) {
+    loaders.push(loadIdentityRequestQueue());
+  } else {
+    identityRequestQueue = [];
+  }
 
   // Same reasoning for the operator roster, which is super-admin-only and is
   // never loaded here (it fetches on tab-open). clearAuthSession() already
@@ -3088,6 +3300,7 @@ function render() {
   renderQueue();
   renderKycQueue();
   renderBankRequestQueue();
+  renderIdentityRequestQueue();
   renderAudit();
   saveWorkspaceState();
   refreshIcons();
@@ -3174,6 +3387,8 @@ function resetWorkspaceForSignOut() {
   if (mediaThumb) mediaThumb.removeAttribute('src');
   bankRequestQueue = [];
   selectedBankRequest = null;
+  identityRequestQueue = [];
+  selectedIdentityRequest = null;
   selectedPortfolioUserId = null;
 
   state = structuredClone(defaultState);
@@ -3443,6 +3658,7 @@ document.getElementById('mfaCode').addEventListener('input', (e) => {
 bindWorkspaceEvents();
 bindKycEvents();
 bindBankRequestEvents();
+bindIdentityRequestEvents();
 bindPortfolioEvents();
 bindPropertyEvents();
 bindPropertyMediaEvents();

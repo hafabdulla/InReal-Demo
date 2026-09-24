@@ -98,6 +98,11 @@
             <i data-lucide="landmark"></i>
             <span>Bank Requests</span>
           </button>
+          <!-- Operations only; same reasoning as Bank Requests above, mirrored. -->
+          <button class="nav-item" id="navIdentityRequests" data-tab="identity-requests" data-title="Identity Requests">
+            <i data-lucide="id-card"></i>
+            <span>Identity Requests</span>
+          </button>
           <button class="nav-item" data-tab="users" data-title="Users">
             <i data-lucide="users"></i>
             <span>Users</span>
@@ -521,6 +526,144 @@
                     <button class="approve-btn" id="bankVerifyBtn" type="button">
                       <i data-lucide="check-circle" style="width:15px;height:15px"></i>
                       Verify & Apply
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- REQ-OPS-14, the identity half. Operations only (people and
+               documents), gated the same way as Bank Requests is for Finance. -->
+          <section class="panel" data-panel="identity-requests">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Locked details — reviewed before they change</p>
+                <h3>Identity change requests</h3>
+              </div>
+              <button class="ghost-btn" id="refreshIdentityRequestsBtn">
+                <i data-lucide="refresh-cw" style="width:16px;height:16px"></i>
+                Refresh
+              </button>
+            </div>
+
+            <div class="compliance-note">
+              <i data-lucide="info" style="width:14px;height:14px;flex-shrink:0"></i>
+              <span>
+                An approved investor asking to change their name, nationality, residence or date of birth. Approving writes the
+                new values to their account straight away. A change that would make them ineligible cannot be approved here —
+                leave it pending and escalate it to the Compliance Owner.
+              </span>
+            </div>
+
+            <div class="card table-card">
+              <div class="card-title">
+                <div>
+                  <h4>Pending requests</h4>
+                  <p id="identityRequestCountLabel">0 pending</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Investor</th>
+                      <th>Changing</th>
+                      <th>Requested</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="identityRequestTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="kyc-drawer hidden" id="identityRequestDrawer">
+              <div class="kyc-drawer-header">
+                <div>
+                  <p class="eyebrow">Decision</p>
+                  <h4 id="identityDrawerName">—</h4>
+                  <p class="helper" id="identityDrawerEmail">—</p>
+                </div>
+                <button class="ghost-btn" id="identityDrawerCloseBtn" type="button">
+                  <i data-lucide="x" style="width:16px;height:16px"></i>
+                </button>
+              </div>
+
+              <div class="kyc-drawer-body">
+                <div class="kyc-history">
+                  <p class="kyc-form-label" style="margin-bottom:8px">What would change</p>
+                  <div class="kyc-detail-grid" id="identityDrawerChanges"></div>
+                </div>
+
+                <div class="kyc-history">
+                  <p class="kyc-form-label" style="margin-bottom:8px">Investor's reason</p>
+                  <p class="helper" id="identityDrawerReason">—</p>
+                </div>
+
+                <div class="kyc-history">
+                  <p class="kyc-form-label" style="margin-bottom:8px">Evidence and notice</p>
+                  <div class="kyc-detail-grid">
+                    <div class="kyc-detail-item">
+                      <span class="kyc-detail-label">Identity document</span>
+                      <span class="kyc-detail-value" id="identityDrawerIdDoc">—</span>
+                      <button class="ghost-btn hidden" id="identityDrawerIdDocBtn" type="button" style="font-size:0.8rem;padding:4px 10px;margin-top:6px">
+                        View document
+                      </button>
+                    </div>
+                    <div class="kyc-detail-item">
+                      <span class="kyc-detail-label">Proof of address</span>
+                      <span class="kyc-detail-value" id="identityDrawerAddrDoc">—</span>
+                      <button class="ghost-btn hidden" id="identityDrawerAddrDocBtn" type="button" style="font-size:0.8rem;padding:4px 10px;margin-top:6px">
+                        View document
+                      </button>
+                    </div>
+                    <div class="kyc-detail-item">
+                      <span class="kyc-detail-label">Investor notified by email</span>
+                      <span class="kyc-detail-value" id="identityDrawerNotice">—</span>
+                    </div>
+                    <div class="kyc-detail-item">
+                      <span class="kyc-detail-label">Risk tier after the change</span>
+                      <span class="kyc-detail-value" id="identityDrawerTier">—</span>
+                    </div>
+                  </div>
+                </div>
+
+                <p class="kyc-form-error hidden" id="identityDrawerIneligible"></p>
+                <div class="compliance-note hidden" id="identityDrawerRescreen">
+                  <i data-lucide="alert-triangle" style="width:14px;height:14px;flex-shrink:0"></i>
+                  <span>
+                    Material change under Manual §6 — if you approve this, the Compliance Owner must re-screen this participant.
+                  </span>
+                </div>
+
+                <div class="kyc-form">
+                  <label class="kyc-form-label">
+                    If rejecting: what the investor is told
+                    <select class="field" id="identityRejectReason">
+                      <option value="">Select a reason…</option>
+                      <option value="unreadable">Document not readable</option>
+                      <option value="expired">Document expired</option>
+                      <option value="too_old">Proof of address too old</option>
+                      <option value="wrong_document_type">Wrong type of document</option>
+                      <option value="name_mismatch">Name does not match</option>
+                      <option value="incomplete">Document incomplete</option>
+                      <option value="other">Other — we will contact them</option>
+                    </select>
+                  </label>
+                  <label class="kyc-form-label">
+                    Internal notes <span class="helper">(never shown to the investor)</span>
+                    <textarea class="field textarea" id="identityRejectNotes" rows="3" placeholder="For the file only…"></textarea>
+                  </label>
+                  <p class="kyc-form-error hidden" id="identityFormError"></p>
+                  <div class="kyc-decision-btns">
+                    <button class="decline-btn" id="identityRejectBtn" type="button">
+                      <i data-lucide="x-circle" style="width:15px;height:15px"></i>
+                      Reject
+                    </button>
+                    <button class="approve-btn" id="identityApproveBtn" type="button">
+                      <i data-lucide="check-circle" style="width:15px;height:15px"></i>
+                      Approve &amp; Apply
                     </button>
                   </div>
                 </div>
