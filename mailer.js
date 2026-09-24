@@ -166,7 +166,8 @@ async function deliver({ to, subject, text, html }) {
 }
 
 /**
- * Shared shell for both messages.
+ * Shared shell for every message. `code` is optional: the bank-detail notice
+ * carries none, and renders no code box rather than an empty one.
  *
  * Copy rules that apply here as much as to any other investor-facing string
  * (PRD Appendix A, HC-1/HC-6): nothing about wallets, balances, funds, units,
@@ -193,8 +194,7 @@ function buildEmail({ heading, greetingName, bodyLines, code, actionUrl, actionL
     safeName,
     '',
     ...bodyLines,
-    '',
-    `Your code: ${code}`,
+    ...(code ? ['', `Your code: ${code}`] : []),
     ...(actionUrl ? ['', `${actionLabel}: ${actionUrl}`] : []),
     '',
     footerNote,
@@ -214,10 +214,14 @@ function buildEmail({ heading, greetingName, bodyLines, code, actionUrl, actionL
       ${bodyLines
         .map((line) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.6;">${escapeHtml(line)}</p>`)
         .join('\n      ')}
-      <div style="margin:24px 0;padding:16px;background:#f4f4f5;border-radius:8px;text-align:center;">
+      ${
+        code
+          ? `<div style="margin:24px 0;padding:16px;background:#f4f4f5;border-radius:8px;text-align:center;">
         <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#71717a;margin-bottom:8px;">Your code</div>
         <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;word-break:break-all;color:#18181b;">${escapeHtml(code)}</div>
-      </div>
+      </div>`
+          : ''
+      }
       ${
         actionUrl
           ? `<p style="margin:0 0 24px;text-align:center;">
@@ -296,4 +300,56 @@ export async function sendPasswordResetEmail({ to, firstName, code, portalUrl, e
   });
 
   return deliver({ to, subject: 'Reset your InReal password', text, html });
+}
+
+/**
+ * The D-9 notice: sent to the email already on file when a bank-detail change
+ * is requested, and again when an operator applies it. Pairs with
+ * POST /api/user/profile/bank-detail-request and
+ * POST /api/ops/bank-detail-requests/:id/verify.
+ *
+ * WHY THE EMAIL ON FILE IS "THE PRIOR CONTACT CHANNEL": an investor cannot
+ * change their own email address (REQ-USR-14 keeps it locked), so the address
+ * this goes to is one the person changing the bank details did not choose.
+ * That is the whole protection — someone holding a stolen session and a stolen
+ * phone can pass step-up, but cannot stop the real owner hearing about it.
+ *
+ * DELIBERATELY ABSENT: the new bank name, account number, or any part of
+ * either. A notice that repeats the destination would hand it to anyone who
+ * can read the mailbox, and the real owner only needs to know that a change
+ * happened and when. No link either — a message saying "your payout account
+ * changed, click here" is exactly the shape of a phishing email, and training
+ * investors to click it would undo the point of sending it.
+ */
+export async function sendBankDetailChangeNotice({ to, firstName, stage, occurredAt, portalUrl, supportEmail }) {
+  const when = new Date(occurredAt || Date.now()).toUTCString();
+  const contactLine = supportEmail
+    ? `If you did not make this request, contact InReal immediately at ${supportEmail}.`
+    : 'If you did not make this request, contact InReal support immediately.';
+
+  const isApplied = stage === 'applied';
+  const heading = isApplied ? 'Your bank details have been changed' : 'A change to your bank details was requested';
+  const bodyLines = isApplied
+    ? [
+        `The change to the bank account InReal holds on file for you was reviewed and applied on ${when}.`,
+        'Any future payments will be sent to the new account.',
+        contactLine,
+      ]
+    : [
+        `A request to change the bank account InReal holds on file for you was submitted on ${when}.`,
+        'Nothing has changed yet. Our team reviews every request before it is applied.',
+        contactLine,
+      ];
+
+  const { text, html } = buildEmail({
+    logoUrl: buildLogoUrl(portalUrl),
+    heading,
+    greetingName: firstName,
+    bodyLines,
+    code: null,
+    actionUrl: null,
+    footerNote: 'For your security this email never includes your account details.',
+  });
+
+  return deliver({ to, subject: heading, text, html });
 }

@@ -15,7 +15,7 @@ import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
-import { isMailConfigured, sendAccountSetupEmail, sendPasswordResetEmail } from './mailer.js';
+import { isMailConfigured, sendAccountSetupEmail, sendPasswordResetEmail, sendBankDetailChangeNotice } from './mailer.js';
 
 dotenv.config();
 
@@ -4755,9 +4755,23 @@ app.get('/api/ops/bank-detail-requests', async (req, res) => {
          r.prior_values_encrypted,
          r.status                   AS "Status",
          r.step_up_verified_at      AS "StepUpVerifiedAt",
-         r.created_at               AS "CreatedAt"
+         r.created_at               AS "CreatedAt",
+         r.document_id              AS "DocumentID",
+         d.original_file_name       AS "DocumentFileName",
+         -- Whether the investor was actually told (D-9). Mail is fail-soft, so
+         -- "sent" cannot be assumed; the reviewer sees the recorded outcome.
+         n.delivered                AS "NoticeDelivered",
+         n.delivery_detail          AS "NoticeDetail"
        FROM bank_detail_requests r
        JOIN users u ON u.user_id = r.user_id
+       LEFT JOIN user_documents d ON d.document_id = r.document_id
+       LEFT JOIN LATERAL (
+         SELECT delivered, delivery_detail
+         FROM bank_detail_request_events
+         WHERE request_id = r.request_id AND event_type = 'prior_contact_notified'
+         ORDER BY created_at DESC, event_id DESC
+         LIMIT 1
+       ) n ON true
        WHERE r.status = 'pending'
        ORDER BY r.created_at ASC`
     );
@@ -4771,6 +4785,10 @@ app.get('/api/ops/bank-detail-requests', async (req, res) => {
       Status: row.Status,
       StepUpVerifiedAt: row.StepUpVerifiedAt,
       CreatedAt: row.CreatedAt,
+      DocumentID: row.DocumentID,
+      DocumentFileName: row.DocumentFileName,
+      NoticeDelivered: row.NoticeDelivered,
+      NoticeDetail: row.NoticeDetail,
       ProposedValues: JSON.parse(decryptValue(row.proposed_values_encrypted)),
       PriorValues: row.prior_values_encrypted ? JSON.parse(decryptValue(row.prior_values_encrypted)) : null,
     }));
@@ -4798,7 +4816,7 @@ app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
 
     const result = await withTransaction(async (tx) => {
       const locked = await tx(
-        `SELECT request_id, user_id, proposed_values_encrypted, status FROM bank_detail_requests WHERE request_id = $1 FOR UPDATE`,
+        `SELECT request_id, user_id, proposed_values_encrypted, status, document_id FROM bank_detail_requests WHERE request_id = $1 FOR UPDATE`,
         [requestId]
       );
       if (locked.length === 0) {
@@ -4808,6 +4826,17 @@ app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
         throw Object.assign(
           new Error(`This request is already '${locked[0].status}' — decision was already recorded`),
           { httpStatus: 409 }
+        );
+      }
+
+      // REQ-OPS-14: verifying files the new bank document. A request with no
+      // document is one only the seven pre-migration-21 requests could be,
+      // and all of those are already decided — so this refuses nothing real,
+      // and guarantees no future change is applied on typed values alone.
+      if (!locked[0].document_id) {
+        throw Object.assign(
+          new Error('This request has no bank document attached and cannot be verified. Reject it and ask the investor to resubmit with one.'),
+          { httpStatus: 409, code: 'BANK_DOCUMENT_MISSING' }
         );
       }
 
@@ -4838,15 +4867,32 @@ app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
         [adminUserId, requestId]
       );
 
+      // The new document becomes the investor's current bank evidence, and the
+      // previous one is marked superseded — never deleted, never overwritten
+      // (REQ-OPS-14, Manual §9). Both stay attached to their own requests.
+      await tx(
+        `UPDATE user_documents SET is_superseded = true
+         WHERE user_id = $1 AND source = 'investor' AND kyc_document_type = 'bank_account'
+           AND is_superseded = false AND document_id <> $2`,
+        [locked[0].user_id, locked[0].document_id]
+      );
+
+      await tx(
+        `INSERT INTO bank_detail_request_events (request_id, event_type, actor_admin_id)
+         VALUES ($1, 'verified', $2)`,
+        [requestId, adminUserId]
+      );
+
       return { userId: locked[0].user_id };
     });
 
     console.log(`[bank_detail.change_verified] request_id=${requestId} user_id=${result.userId} reviewed_by=${adminUserId}`);
+    notifyPriorContactOfBankChange(requestId, result.userId, 'applied');
 
     res.json({ success: true, message: 'Bank detail change verified and applied.' });
   } catch (error) {
     if (error.httpStatus) {
-      return res.status(error.httpStatus).json({ success: false, error: error.message });
+      return res.status(error.httpStatus).json({ success: false, error: error.message, ...(error.code ? { code: error.code } : {}) });
     }
     console.error('API error:', error);
     if (String(error.message || '').includes('TOTP_ENCRYPTION_KEY')) {
@@ -4872,7 +4918,7 @@ app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
 
     const result = await withTransaction(async (tx) => {
       const locked = await tx(
-        `SELECT request_id, user_id, status FROM bank_detail_requests WHERE request_id = $1 FOR UPDATE`,
+        `SELECT request_id, user_id, status, document_id FROM bank_detail_requests WHERE request_id = $1 FOR UPDATE`,
         [requestId]
       );
       if (locked.length === 0) {
@@ -4890,6 +4936,21 @@ app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
          SET status = 'rejected', reviewed_by = $1, reviewed_at = NOW(), rejection_note = $2
          WHERE request_id = $3`,
         [adminUserId, String(rejectionNote).trim(), requestId]
+      );
+
+      // The rejected request's document is retained with it, but it is not the
+      // investor's current bank evidence, so it stops being a live row.
+      if (locked[0].document_id) {
+        await tx(
+          `UPDATE user_documents SET is_superseded = true WHERE document_id = $1`,
+          [locked[0].document_id]
+        );
+      }
+
+      await tx(
+        `INSERT INTO bank_detail_request_events (request_id, event_type, actor_admin_id, note)
+         VALUES ($1, 'rejected', $2, $3)`,
+        [requestId, adminUserId, String(rejectionNote).trim()]
       );
 
       return { userId: locked[0].user_id };
@@ -5970,7 +6031,12 @@ app.post('/api/ops/kyc-documents/:id/review', async (req, res) => {
     // Only an investor's own submission is signed off. An operator-assigned
     // document has no applicant claim to verify, so reviewing one would record
     // a finding about nothing.
-    if (documents[0].source !== 'investor') {
+    // The type check matters as much as the source check: an investor's bank
+    // evidence (migration 21) is also source = 'investor', and accepting it
+    // here would record an onboarding sign-off against a bank letter. Bank
+    // evidence is judged by Finance, as part of the change request it came with.
+    if (documents[0].source !== 'investor'
+        || !ONBOARDING_REQUIRED_DOCUMENT_TYPES.includes(documents[0].kyc_document_type)) {
       return res.status(400).json({
         success: false,
         error: 'Only investor-uploaded onboarding documents can be reviewed',
@@ -6909,6 +6975,44 @@ app.put('/api/user/profile/identity', async (req, res) => {
 // an admin has to separately approve. See bank-detail-request below for the
 // step-up requirement that gates even creating that pending row.
 
+// D-9: tell the email on file that a bank-detail change was requested, and
+// again when it is applied, and record whether that actually got through.
+//
+// Not awaited by the caller. The change must not wait on, or fail because of,
+// an email provider — mailer.js never throws for the same reason — but the
+// outcome is written to bank_detail_request_events either way, so "was the
+// investor told?" has a durable answer the reviewer can see. The .catch is
+// load-bearing: a floating rejection would take the process down.
+//
+// The address the notice sends a worried investor to. Chosen 24 Sep 2026
+// (the site also shows support@inreal.com; .io was picked). Override with
+// SUPPORT_CONTACT_EMAIL rather than editing this if it changes.
+const DEFAULT_SUPPORT_CONTACT_EMAIL = 'support@inreal.io';
+function notifyPriorContactOfBankChange(requestId, userId, stage) {
+  (async () => {
+    const users = await q(`SELECT email, first_name FROM users WHERE user_id = $1`, [userId]);
+    let outcome = { delivered: false, reason: 'no_email_on_file' };
+    if (users.length > 0 && users[0].email) {
+      outcome = await sendBankDetailChangeNotice({
+        to: users[0].email,
+        firstName: users[0].first_name,
+        stage,
+        occurredAt: new Date(),
+        portalUrl: getInvestorPortalUrl(),
+        supportEmail: process.env.SUPPORT_CONTACT_EMAIL || DEFAULT_SUPPORT_CONTACT_EMAIL,
+      });
+    }
+    await q(
+      `INSERT INTO bank_detail_request_events (request_id, event_type, channel, delivered, delivery_detail, note)
+       VALUES ($1, 'prior_contact_notified', 'email', $2, $3, $4)`,
+      [requestId, outcome.delivered, outcome.delivered ? 'sent' : String(outcome.reason || 'unknown').slice(0, 100), `stage=${stage}`]
+    );
+    if (!outcome.delivered) {
+      console.warn(`[bank_detail.notice_not_delivered] request_id=${requestId} stage=${stage} reason=${outcome.reason}`);
+    }
+  })().catch((error) => console.error('[bank_detail] prior-contact notice failed unexpectedly:', error));
+}
+
 function maskAccountNumber(accountNumber) {
   if (!accountNumber) return null;
   const digits = String(accountNumber);
@@ -6993,7 +7097,7 @@ app.post('/api/user/profile/bank-detail-request', async (req, res) => {
     const userId = requireAuthenticatedUserId(req, res);
     if (!userId) return;
 
-    const { code, accountHolderName, bankName, accountNumber, swiftBic, countryCode } = req.body;
+    const { code, accountHolderName, bankName, accountNumber, swiftBic, countryCode, fileBase64, fileName } = req.body || {};
 
     if (isTotpLocked(userId)) {
       return res.status(429).json({
@@ -7002,14 +7106,10 @@ app.post('/api/user/profile/bank-detail-request', async (req, res) => {
       });
     }
 
-    const hasValidCode = await verifyFreshTotpCode(userId, code);
-    if (!hasValidCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'A valid authenticator code is required to change bank details. Set up two-factor authentication in Security settings first if you haven\'t already.',
-      });
-    }
-
+    // Everything that can be checked without the code is checked BEFORE it.
+    // Codes are single-use (migration 12), so validating the form after
+    // spending one would make the investor wait for the next code just to
+    // correct a typo or attach the missing document.
     if (!accountHolderName || !bankName || !accountNumber || !countryCode) {
       return res.status(400).json({
         success: false,
@@ -7019,6 +7119,42 @@ app.post('/api/user/profile/bank-detail-request', async (req, res) => {
     const trimmedAccountNumber = String(accountNumber).trim();
     if (trimmedAccountNumber.length < 4) {
       return res.status(400).json({ success: false, error: 'Please enter a valid account number' });
+    }
+
+    // REQ-OPS-14: a change is verified against a document, not against typed
+    // values alone — a bank letter or recent statement showing the new account
+    // in the investor's own name. Same content rules as every other upload.
+    if (!fileBase64 || !fileName || typeof fileBase64 !== 'string' || typeof fileName !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Attach a bank letter or recent statement showing the new account in your name.',
+      });
+    }
+    const validation = validateUploadedFile(fileBase64);
+    if (!validation.ok) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+
+    // One open request at a time. Two pending requests would leave the
+    // operator choosing between destinations and the losing one's document
+    // looking current; the investor can wait for the first to be decided.
+    const openRequests = await q(
+      `SELECT 1 FROM bank_detail_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`,
+      [userId]
+    );
+    if (openRequests.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'You already have a bank detail change waiting for review. You can submit another once it has been decided.',
+      });
+    }
+
+    const hasValidCode = await verifyFreshTotpCode(userId, code);
+    if (!hasValidCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid authenticator code is required to change bank details. Set up two-factor authentication in Security settings first if you haven\'t already.',
+      });
     }
 
     const before = await q(
@@ -7051,21 +7187,58 @@ app.post('/api/user/profile/bank-detail-request', async (req, res) => {
         }
       : null;
 
-    const inserted = await q(
-      `INSERT INTO bank_detail_requests (user_id, proposed_values_encrypted, prior_values_encrypted, step_up_verified_at, status)
-       VALUES ($1, $2, $3, NOW(), 'pending')
-       RETURNING request_id AS "RequestID", created_at AS "CreatedAt"`,
-      [
-        userId,
-        encryptValue(JSON.stringify(proposedValues)),
-        priorValuesForStorage ? encryptValue(JSON.stringify(priorValuesForStorage)) : null,
-      ]
-    );
+    const { fileBuffer, extension } = validation;
+    const correctedFileName = withDetectedExtension(fileName, extension);
+    const storagePath = `${userId}/${Date.now()}-${correctedFileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    await ensureDocumentsBucket();
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from(DOCUMENTS_BUCKET)
+      .upload(storagePath, fileBuffer, {
+        contentType: contentTypeForDetectedExtension(extension),
+        upsert: false,
+      });
+    if (uploadError) {
+      console.error('Supabase Storage upload error:', uploadError);
+      return res.status(500).json({ success: false, error: 'Could not store document' });
+    }
 
-    // Matches the lightweight console-log audit pattern used elsewhere in
-    // this app (password-reset, account-setup, contact-info) — never logs
-    // the actual account number, only that a request happened.
+    // Document, request and history event commit together or not at all.
+    // The document is NOT marked current here — the previous bank evidence
+    // stays live until an operator verifies this change (see verify).
+    const inserted = await withTransaction(async (tx) => {
+      const documentRows = await tx(
+        `INSERT INTO user_documents (
+           user_id, category, label, file_name, original_file_name, mime_type,
+           uploaded_by_admin_id, visibility, source, kyc_document_type
+         ) VALUES ($1, 'Finance', 'Bank account evidence', $2, $3, $4, NULL, 'investor_visible', 'investor', 'bank_account')
+         RETURNING document_id AS "DocumentID"`,
+        [userId, storagePath, correctedFileName, contentTypeForDetectedExtension(extension)]
+      );
+
+      const requestRows = await tx(
+        `INSERT INTO bank_detail_requests (user_id, proposed_values_encrypted, prior_values_encrypted, step_up_verified_at, status, document_id)
+         VALUES ($1, $2, $3, NOW(), 'pending', $4)
+         RETURNING request_id AS "RequestID", created_at AS "CreatedAt"`,
+        [
+          userId,
+          encryptValue(JSON.stringify(proposedValues)),
+          priorValuesForStorage ? encryptValue(JSON.stringify(priorValuesForStorage)) : null,
+          documentRows[0].DocumentID,
+        ]
+      );
+
+      await tx(
+        `INSERT INTO bank_detail_request_events (request_id, event_type, actor_user_id)
+         VALUES ($1, 'submitted', $2)`,
+        [requestRows[0].RequestID, userId]
+      );
+
+      return requestRows;
+    });
+
+    // Never logs the account number, only that a request happened.
     console.log(`[bank_detail.change_requested] user_id=${userId} request_id=${inserted[0].RequestID}`);
+    notifyPriorContactOfBankChange(inserted[0].RequestID, userId, 'requested');
 
     res.json({
       success: true,

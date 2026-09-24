@@ -1775,7 +1775,9 @@ function closeDocumentViewer() {
   docViewerFile = null;
 }
 
-async function openDocumentViewer(documentId, fileName) {
+// `kicker` names what kind of document this is; the viewer is shared by the
+// KYC drawer (onboarding evidence) and the bank drawer (bank evidence).
+async function openDocumentViewer(documentId, fileName, kicker = 'Onboarding document') {
   const viewer = document.getElementById('docViewer');
   const body = document.getElementById('docViewerBody');
 
@@ -1784,6 +1786,7 @@ async function openDocumentViewer(documentId, fileName) {
   releaseDocViewerUrl();
   docViewerFile = { documentId, fileName };
 
+  document.getElementById('docViewerKicker').textContent = kicker;
   document.getElementById('docViewerTitle').textContent = fileName || `Document #${documentId}`;
   body.innerHTML = '<p class="helper">Loading…</p>';
   viewer.classList.remove('hidden');
@@ -2743,6 +2746,24 @@ function openBankRequestDrawer(requestId) {
   document.getElementById('bankDrawerEmail').textContent = request.Email;
   document.getElementById('bankDrawerStepUpAt').textContent = formatDate(request.StepUpVerifiedAt);
 
+  // The server refuses to verify without a document, so a missing one is
+  // said plainly here rather than discovered on the Verify click.
+  const documentBtn = document.getElementById('bankDrawerDocumentBtn');
+  if (request.DocumentID) {
+    document.getElementById('bankDrawerDocument').textContent = request.DocumentFileName || `Document #${request.DocumentID}`;
+    documentBtn.classList.remove('hidden');
+  } else {
+    document.getElementById('bankDrawerDocument').textContent = 'None attached — this request cannot be verified';
+    documentBtn.classList.add('hidden');
+  }
+
+  // Recorded outcome, never assumed: the notice is sent after the request is
+  // saved and can fail without blocking it.
+  let noticeText = 'Not recorded yet — refresh in a moment';
+  if (request.NoticeDelivered === true) noticeText = 'Yes — sent to the email on file';
+  else if (request.NoticeDelivered === false) noticeText = `No — not delivered (${request.NoticeDetail || 'unknown reason'})`;
+  document.getElementById('bankDrawerNotice').textContent = noticeText;
+
   const proposed = request.ProposedValues || {};
   document.getElementById('bankDrawerProposedHolder').textContent = proposed.accountHolderName || '—';
   document.getElementById('bankDrawerProposedBank').textContent = proposed.bankName || '—';
@@ -2835,6 +2856,12 @@ function bindBankRequestEvents() {
   document.getElementById('bankRequestTableBody').addEventListener('click', (e) => {
     const btn = e.target.closest('.bank-review-btn');
     if (btn) openBankRequestDrawer(btn.dataset.requestid);
+  });
+
+  document.getElementById('bankDrawerDocumentBtn').addEventListener('click', () => {
+    if (selectedBankRequest?.DocumentID) {
+      openDocumentViewer(selectedBankRequest.DocumentID, selectedBankRequest.DocumentFileName, 'Bank document');
+    }
   });
 
   document.getElementById('bankDrawerCloseBtn').addEventListener('click', closeBankRequestDrawer);

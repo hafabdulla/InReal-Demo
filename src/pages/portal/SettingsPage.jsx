@@ -46,6 +46,9 @@ function ageFromDateOfBirth(value) {
 }
 
 const MINIMUM_PARTICIPANT_AGE = 18; // matches server.js
+// A courtesy check only, so a large file fails before it is read and sent;
+// the server's 8 MB limit is the control.
+const BANK_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
 // Asked as three options rather than a yes/no, because the point of the
 // question is that the applicant has been asked and has answered — the manual's
@@ -561,6 +564,10 @@ export default function SettingsPage() {
     accountHolderName: '', bankName: '', accountNumber: '', swiftBic: '', countryCode: '', code: '',
   });
   const [bankFormError, setBankFormError] = useState('');
+  // The bank letter or statement for the new account (REQ-OPS-14). Held as the
+  // File itself and only read into base64 on submit, so an abandoned form
+  // never holds a copy of someone's statement in memory longer than needed.
+  const [bankFile, setBankFile] = useState(null);
   const [savingBankRequest, setSavingBankRequest] = useState(false);
 
   useEffect(() => {
@@ -593,6 +600,14 @@ export default function SettingsPage() {
       setBankFormError('All fields except SWIFT/BIC are required.');
       return;
     }
+    if (!bankFile) {
+      setBankFormError('Attach a bank letter or recent statement showing the new account in your name.');
+      return;
+    }
+    if (bankFile.size > BANK_FILE_MAX_BYTES) {
+      setBankFormError('That file is larger than 8 MB. Please attach a smaller copy.');
+      return;
+    }
     if (!/^\d{6}$/.test(code.trim())) {
       setBankFormError('Enter the 6-digit code from your authenticator app to confirm this change.');
       return;
@@ -600,6 +615,12 @@ export default function SettingsPage() {
 
     setSavingBankRequest(true);
     try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Could not read that file'));
+        reader.readAsDataURL(bankFile);
+      });
       const res = await fetch(`${getApiBase()}/api/user/profile/bank-detail-request`, {
         method: 'POST',
         headers: {
@@ -613,6 +634,8 @@ export default function SettingsPage() {
           swiftBic: bankForm.swiftBic.trim() || undefined,
           countryCode: countryCode.trim().toUpperCase(),
           code: code.trim(),
+          fileBase64,
+          fileName: bankFile.name,
         }),
       });
       const data = await res.json();
@@ -625,6 +648,7 @@ export default function SettingsPage() {
       setPendingBankRequest({ RequestID: data.data.requestId, Status: 'pending', CreatedAt: data.data.createdAt });
       setShowBankForm(false);
       setBankForm({ accountHolderName: '', bankName: '', accountNumber: '', swiftBic: '', countryCode: '', code: '' });
+      setBankFile(null);
       toast({ title: 'Request submitted', description: 'Your bank detail change is now pending review.' });
     } catch (error) {
       console.error('Failed to submit bank detail request:', error);
@@ -1505,6 +1529,23 @@ export default function SettingsPage() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-portal-secondary mb-1.5">
+                        Proof of the new account
+                      </label>
+                      <input
+                        type="file"
+                        accept="application/pdf,image/jpeg,image/png"
+                        onChange={(e) => setBankFile(e.target.files?.[0] || null)}
+                        className="portal-input text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-[#01CED1]/10 file:px-3 file:py-1 file:text-[#01CED1]"
+                      />
+                      <p className="text-xs text-portal-tertiary mt-1.5">
+                        A bank letter or recent statement showing this account in your name. PDF, JPG or PNG, up to 8 MB.
+                      </p>
+                    </div>
+                    <p className="text-xs text-portal-tertiary">
+                      We'll email the address on your account when you submit this and again if it's approved, so you'll know if anyone else tries to change it.
+                    </p>
+                    <div>
+                      <label className="block text-sm font-medium text-portal-secondary mb-1.5">
                         Authenticator Code <span className="text-portal-tertiary font-normal">(confirms it's really you)</span>
                       </label>
                       <input
@@ -1519,7 +1560,7 @@ export default function SettingsPage() {
                     </div>
                     {bankFormError && <p className="text-sm text-red-400">{bankFormError}</p>}
                     <div className="flex justify-end gap-2 pt-1">
-                      <button onClick={() => { setShowBankForm(false); setBankFormError(''); }} className="portal-btn-secondary text-sm py-2 px-4">
+                      <button onClick={() => { setShowBankForm(false); setBankFormError(''); setBankFile(null); }} className="portal-btn-secondary text-sm py-2 px-4">
                         Cancel
                       </button>
                       <button onClick={handleSubmitBankRequest} disabled={savingBankRequest} className="portal-btn-primary text-sm py-2 px-4 disabled:opacity-60">
