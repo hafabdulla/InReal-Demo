@@ -40,7 +40,7 @@ export default function FAQ() {
           </motion.div>
           <motion.p variants={staggerItem} className="mt-10 text-center text-body-sm text-ir-dark/50">
             Have a question not listed here?{' '}
-            <a href="mailto:hello@inreal.com" className="text-ir-teal hover:text-ir-teal-muted transition-colors underline underline-offset-2 font-medium">Talk to our investment team</a>
+            <a href="mailto:admin@investinreal.io" className="text-ir-teal hover:text-ir-teal-muted transition-colors underline underline-offset-2 font-medium">Talk to our investment team</a>
           </motion.p>
         </motion.div>
       </div>

@@ -4829,6 +4829,17 @@ app.post('/api/ops/bank-detail-requests/:id/verify', async (req, res) => {
         );
       }
 
+      // Operators are users too, with their own payout details. The separate
+      // approval D.8 requires is only separate if it is someone else's:
+      // without this, a finance_admin could redirect their own payouts with no
+      // second person involved. Same rule as identity change requests.
+      if (Number(locked[0].user_id) === Number(adminUserId)) {
+        throw Object.assign(
+          new Error('You cannot decide a change to your own bank details. Another operator must review it.'),
+          { httpStatus: 403, code: 'SELF_REVIEW' }
+        );
+      }
+
       // REQ-OPS-14: verifying files the new bank document. A request with no
       // document is one only the seven pre-migration-21 requests could be,
       // and all of those are already decided — so this refuses nothing real,
@@ -4930,6 +4941,14 @@ app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
           { httpStatus: 409 }
         );
       }
+      // Rejecting your own request is harmless on its own, but the rule is
+      // "no operator decides their own change", not "only approvals".
+      if (Number(locked[0].user_id) === Number(adminUserId)) {
+        throw Object.assign(
+          new Error('You cannot decide a change to your own bank details. Another operator must review it.'),
+          { httpStatus: 403, code: 'SELF_REVIEW' }
+        );
+      }
 
       await tx(
         `UPDATE bank_detail_requests
@@ -4961,7 +4980,7 @@ app.post('/api/ops/bank-detail-requests/:id/reject', async (req, res) => {
     res.json({ success: true, message: 'Bank detail change rejected.' });
   } catch (error) {
     if (error.httpStatus) {
-      return res.status(error.httpStatus).json({ success: false, error: error.message });
+      return res.status(error.httpStatus).json({ success: false, error: error.message, ...(error.code ? { code: error.code } : {}) });
     }
     console.error('API error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -6986,10 +7005,12 @@ app.put('/api/user/profile/identity', async (req, res) => {
 // investor told?" has a durable answer the reviewer can see. The .catch is
 // load-bearing: a floating rejection would take the process down.
 //
-// The address the notice sends a worried investor to. Chosen 24 Sep 2026
-// (the site also shows support@inreal.com; .io was picked). Override with
+// The address the notice sends a worried investor to. Confirmed 26 Sep 2026
+// as the one that actually receives mail, on the domain the business owns
+// (investinreal.io). The site had shown four addresses on two other domains
+// (support@inreal.io was the stopgap here). Override with
 // SUPPORT_CONTACT_EMAIL rather than editing this if it changes.
-const DEFAULT_SUPPORT_CONTACT_EMAIL = 'support@inreal.io';
+const DEFAULT_SUPPORT_CONTACT_EMAIL = 'admin@investinreal.io';
 
 // Fixed map, never caller-supplied: the table name is interpolated into SQL.
 const PRIOR_CONTACT_NOTICES = {

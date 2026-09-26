@@ -92,11 +92,11 @@ export default function AccountDeclinedNotice() {
             <p className="text-sm text-portal-secondary leading-relaxed">{copy.followUp}</p>
 
             <a
-              href="mailto:support@inreal.com"
+              href="mailto:admin@investinreal.io"
               className="inline-flex items-center gap-2 text-sm text-teal-300 hover:text-teal-200 transition-colors"
             >
               <Mail className="w-4 h-4" aria-hidden="true" />
-              support@inreal.com
+              admin@investinreal.io
             </a>
           </div>
 

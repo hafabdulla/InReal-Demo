@@ -15,7 +15,7 @@ const FOOTER_LINKS = {
   Platform: [{ label: 'How It Works', href: '#how-it-works' }, { label: 'Properties', href: '#properties' }, { label: 'Calculator', href: '#calculator' }, { label: 'FAQ', href: '#faq' }],
   Legal: [{ label: 'Terms & Conditions', to: '/terms' }, { label: 'Policies', to: '/policies' }, { label: 'Privacy Policy', href: '#' }, { label: 'Risk Disclosure', href: '#' }],
   Company: [{ label: 'About InReal', href: '#' }, { label: 'Team', href: '#' }, { label: 'Partners', href: '#' }, { label: 'Press', href: '#' }],
-  Connect: [{ label: 'hello@inreal.com', href: 'mailto:hello@inreal.com' }, { label: 'LinkedIn', href: '#' }, { label: 'Twitter / X', href: '#' }, { label: 'Instagram', href: '#' }],
+  Connect: [{ label: 'admin@investinreal.io', href: 'mailto:admin@investinreal.io' }, { label: 'LinkedIn', href: '#' }, { label: 'Twitter / X', href: '#' }, { label: 'Instagram', href: '#' }],
 }
 
 const linkClass = 'text-body-sm text-ir-text-secondary hover:text-ir-teal transition-colors duration-300'
