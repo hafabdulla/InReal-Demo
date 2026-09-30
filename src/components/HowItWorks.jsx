@@ -222,7 +222,7 @@ const STEPS = [
     description: 'Sign up in less than 3 minutes and browse our curated collection of high-yield properties, sourced by experts across multiple jurisdictions.',
     image: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=900&h=700&fit=crop&q=85',
     type: 'image',
-    badge: '12+ Properties Live',
+    badge: 'First Property Live',
   },
   {
     number: '02',

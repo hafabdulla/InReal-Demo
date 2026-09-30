@@ -3,7 +3,18 @@ import { motion } from 'framer-motion'
 import { fadeUp, staggerContainer, staggerItem, sectionViewport } from '../animations'
 
 const PORTAL_URL = '#register'
-const INVESTMENT_PRESETS = [500, 1000, 5000, 10000, 25000]
+// The presets were [500, 1000, 5000, 10000, 25000] until 30 Sep 2026. The first
+// two sat below the minimum this same page advertises, so the calculator would
+// model a $500 investment the platform refuses — and the custom box accepted
+// anything over $100. The 17 Sep sweep that replaced ten `$500` literals across
+// six components never reached this file.
+//
+// Same rule as Hero.jsx: `MIN_INDICATIVE_AMOUNT` on the server is what actually
+// decides, and this is only the promise made about it. If the minimum changes,
+// change it there FIRST. This page is static marketing and never calls the API,
+// which is exactly why it drifted in the first place.
+const MIN_INVESTMENT = 3000
+const INVESTMENT_PRESETS = [3000, 5000, 10000, 25000, 50000]
 
 export default function Calculator() {
   const [investment, setInvestment] = useState(5000)
@@ -23,8 +34,13 @@ export default function Calculator() {
     return { inv: investment, payFee, txFee, trg, of, irf, nr, apv: pv, cg, ef, npv, total, ret: total - investment, pct: (((total - investment) / investment) * 100).toFixed(1) }
   }, [investment, years, rentalYield, appreciation])
 
-  const handleCustom = (v) => { setCustomInput(v); const n = parseInt(v.replace(/[^0-9]/g, '')); if (!isNaN(n) && n >= 100) setInvestment(n) }
+  const handleCustom = (v) => { setCustomInput(v); const n = parseInt(v.replace(/[^0-9]/g, '')); if (!isNaN(n) && n >= MIN_INVESTMENT) setInvestment(n) }
   const fmt = (n) => '$' + Math.round(n).toLocaleString()
+
+  // The floor above ignores a too-small amount rather than applying it, so
+  // without this the breakdown would go on showing the last valid figure while
+  // the box reads "500" — the calculator would look broken rather than strict.
+  const customBelowMin = customInput !== '' && Number(customInput.replace(/[^0-9]/g, '')) < MIN_INVESTMENT
 
   const sliderClass = "w-full h-1 bg-ir-border-dark rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_12px_rgba(1,206,209,0.5)]"
 
@@ -53,6 +69,9 @@ export default function Calculator() {
                     {INVESTMENT_PRESETS.map((pr) => (<button key={pr} onClick={() => { setInvestment(pr); setCustomInput('') }} className={`px-3 py-1.5 rounded-ir text-body-sm font-mono transition-all duration-300 ${investment === pr && !customInput ? 'bg-ir-teal/20 text-ir-teal border border-ir-teal/40' : 'bg-white/5 text-ir-white/55 border border-white/10 hover:border-white/30 hover:text-white'}`}>${pr.toLocaleString()}</button>))}
                   </div>
                   <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-ir-white/40 font-mono">$</span><input type="text" value={customInput} onChange={(e) => handleCustom(e.target.value)} placeholder="Custom amount" className="w-full bg-white/5 border border-white/10 rounded-ir py-2.5 pl-7 pr-3 text-body font-mono text-white placeholder:text-ir-white/30 focus:outline-none focus:border-ir-teal focus:shadow-[0_0_0_3px_rgba(1,206,209,0.15)] transition-all duration-300" /></div>
+                  {customBelowMin && (
+                    <p className="mt-2 text-caption text-ir-caution">Minimum investment is {fmt(MIN_INVESTMENT)}.</p>
+                  )}
                 </div>
                 <div className="mb-7"><label className="text-caption text-ir-white/50 uppercase tracking-wider mb-3 block font-medium">Rental Yield: <span className="text-ir-teal font-mono">{rentalYield.toFixed(1)}%</span></label><input type="range" min="3" max="12" step="0.1" value={rentalYield} onChange={(e) => setRentalYield(parseFloat(e.target.value))} className={`${sliderClass} [&::-webkit-slider-thumb]:bg-ir-teal`} /><div className="flex justify-between mt-1 text-caption text-ir-white/30 font-mono"><span>3%</span><span>12%</span></div></div>
                 <div className="mb-7"><label className="text-caption text-ir-white/50 uppercase tracking-wider mb-3 block font-medium">Appreciation: <span className="text-ir-positive font-mono">{appreciation.toFixed(1)}%</span></label><input type="range" min="0" max="8" step="0.1" value={appreciation} onChange={(e) => setAppreciation(parseFloat(e.target.value))} className={`${sliderClass} [&::-webkit-slider-thumb]:bg-ir-positive`} /><div className="flex justify-between mt-1 text-caption text-ir-white/30 font-mono"><span>0%</span><span>8%</span></div></div>
