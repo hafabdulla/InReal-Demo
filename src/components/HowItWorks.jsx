@@ -83,10 +83,10 @@ function EarnDashboardRender() {
             <p className="text-[8px] text-ir-teal font-medium">View All</p>
           </div>
           {[
-            { prop: 'Sukhumvit 2BR', loc: 'Bangkok', date: 'Apr 2026', amt: '+$45.50' },
-            { prop: 'Dubai Marina 1BR', loc: 'Dubai', date: 'Apr 2026', amt: '+$72.00' },
-            { prop: 'Sukhumvit 2BR', loc: 'Bangkok', date: 'Mar 2026', amt: '+$45.50' },
-            { prop: 'Dubai Marina 1BR', loc: 'Dubai', date: 'Mar 2026', amt: '+$71.80' },
+            { prop: 'The Base Sukhumvit 77', loc: 'On Nut, Bangkok', date: 'Apr 2026', amt: '+$45.50' },
+            { prop: 'On Nut 1BR', loc: 'Bangkok', date: 'Apr 2026', amt: '+$72.00' },
+            { prop: 'The Base Sukhumvit 77', loc: 'On Nut, Bangkok', date: 'Mar 2026', amt: '+$45.50' },
+            { prop: 'On Nut 1BR', loc: 'Bangkok', date: 'Mar 2026', amt: '+$71.80' },
           ].map((t, i) => (
             <div key={i} className="flex items-center justify-between px-3 py-1.5 border-b border-ir-border-light last:border-0">
               <div className="flex items-center gap-2 min-w-0">
@@ -190,9 +190,9 @@ function GrowDashboardRender() {
             <p className="text-[9px] text-ir-dark font-semibold">My Investments</p>
           </div>
           {[
-            { p: 'Sukhumvit 2BR', l: 'Bangkok', v: '$4,150', r: '+9.4%' },
-            { p: 'Dubai Marina 1BR', l: 'Dubai', v: '$5,800', r: '+7.4%' },
-            { p: 'Orchard Studio', l: 'Singapore', v: '$2,500', r: '+5.8%' },
+            { p: 'The Base Sukhumvit 77', l: 'On Nut, Bangkok', v: '$4,150', r: '+8.1%' },
+            { p: 'On Nut 1BR', l: 'Bangkok', v: '$5,800', r: '+7.6%' },
+            { p: 'Phra Khanong 2BR', l: 'Bangkok', v: '$2,500', r: '+7.2%' },
           ].map((h, i) => (
             <div key={i} className="flex items-center justify-between px-3 py-1.5 border-b border-ir-border-light last:border-0">
               <div className="flex items-center gap-2 min-w-0">

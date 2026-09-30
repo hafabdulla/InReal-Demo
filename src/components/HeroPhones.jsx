@@ -24,7 +24,12 @@ import { EASE_PREMIUM } from '../animations'
 // what an investor will earn.
 
 const IMG_PROPERTY = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800&h=900&fit=crop&q=85'
-const IMG_CARD = 'https://images.unsplash.com/photo-1512453979798-5ea266f8880c?w=400&h=400&fit=crop&q=85'
+// Was photo-1512453979798 — the Dubai Marina shot, which after the 30 Sep
+// rename sat underneath a card captioned "The Base Sukhumvit 77, On Nut".
+// Same Bangkok condo frame the property card uses, so the two read as one
+// building. Still stock: real photography for the pilot property is uploaded
+// through the ops portal's media gallery, not hardcoded here.
+const IMG_CARD = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=400&h=400&fit=crop&q=85'
 
 /** iOS-style status bar. A strong realism cue for almost no markup. */
 function StatusBar({ dark = false }) {
@@ -160,7 +165,7 @@ export default function HeroPhones() {
           </div>
 
           <div className="flex-1 px-3 pt-2.5 lg:px-4 lg:pt-3">
-            <p className="text-[9.5px] font-bold leading-tight text-ir-dark lg:text-[12.5px]">2 Bed · Dubai Marina</p>
+            <p className="text-[9.5px] font-bold leading-tight text-ir-dark lg:text-[12.5px]">1 Bed · On Nut, Bangkok</p>
             <p className="mt-[1px] text-[7px] text-ir-dark/45 lg:text-[9px]">Residential · Fully managed</p>
 
             <p className="mt-2 font-mono text-[13px] font-bold text-ir-dark lg:mt-2.5 lg:text-[17px]">$412,000</p>
@@ -247,9 +252,9 @@ export default function HeroPhones() {
             <p className="mt-3 text-[6.5px] uppercase tracking-[0.12em] text-white/35 lg:mt-4 lg:text-[8.5px]">My properties</p>
             <div className="mt-1.5 space-y-1.5 lg:mt-2 lg:space-y-2.5">
               {[
-                ['Dubai Marina', '$5,200', 'from-[#0fb6bd] to-[#0a7f86]'],
-                ['Business Bay', '$4,100', 'from-[#26c6a6] to-[#12806c]'],
-                ['JVC', '$3,150', 'from-[#4aa3d8] to-[#1f6ea3]'],
+                ['On Nut', '$5,200', 'from-[#0fb6bd] to-[#0a7f86]'],
+                ['Phra Khanong', '$4,100', 'from-[#26c6a6] to-[#12806c]'],
+                ['Thong Lor', '$3,150', 'from-[#4aa3d8] to-[#1f6ea3]'],
               ].map(([name, amount, grad]) => (
                 <div key={name} className="flex items-center gap-2">
                   <div className={`h-5 w-5 shrink-0 rounded-md bg-gradient-to-br lg:h-7 lg:w-7 lg:rounded-lg ${grad}`} />
@@ -288,9 +293,9 @@ export default function HeroPhones() {
         <div className="relative h-[52px] w-full overflow-hidden rounded-lg bg-gradient-to-br from-[#1b6f8f] to-[#0d3f52] lg:h-[68px] lg:rounded-xl">
           <Photo src={IMG_CARD} className="h-full w-full object-cover" />
         </div>
-        <p className="mt-1.5 px-0.5 text-[8px] font-bold leading-tight text-ir-dark lg:text-[10px]">Business Bay Tower</p>
+        <p className="mt-1.5 px-0.5 text-[8px] font-bold leading-tight text-ir-dark lg:text-[10px]">The Base Sukhumvit 77</p>
         <div className="mt-[3px] flex items-center justify-between px-0.5 pb-0.5">
-          <span className="text-[6.5px] text-ir-dark/45 lg:text-[8px]">Downtown Dubai</span>
+          <span className="text-[6.5px] text-ir-dark/45 lg:text-[8px]">On Nut, Bangkok</span>
           <span className="font-mono text-[7px] font-bold text-ir-positive lg:text-[9px]">Funded</span>
         </div>
       </motion.div>
