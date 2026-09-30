@@ -218,8 +218,12 @@ const STEPS = [
   {
     number: '01',
     label: 'Browse',
-    title: 'Access prime real estate across global markets',
-    description: 'Sign up in less than 3 minutes and browse our curated collection of high-yield properties, sourced by experts across multiple jurisdictions.',
+    // Was "Access prime real estate across global markets" / "browse our
+    // curated collection of high-yield properties, sourced by experts across
+    // multiple jurisdictions" — a collection of one, in a single jurisdiction.
+    // Same overstatement the "12+ Properties Live" badge carried, in prose.
+    title: 'See the property, and every number behind it',
+    description: 'Sign up in under 3 minutes and review our pilot property in Bangkok in full — projected yields, the fee structure and the risks — before you commit to anything.',
     image: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=900&h=700&fit=crop&q=85',
     type: 'image',
     badge: 'First Property Live',
