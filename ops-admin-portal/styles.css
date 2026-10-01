@@ -507,6 +507,15 @@ h1, h2, h3, h4, p {
 label {
   display: grid;
   gap: 6px;
+  /* Without this the rows STRETCH. A label is a grid whose rows are auto-sized,
+     and `align-content` defaults to `stretch`, so in a taller-than-needed cell
+     the rows grow to fill it — pushing the input far below its own caption.
+     That happens constantly in `.form-grid`, where two labels share a row and
+     one of them carries a multi-line helper: the field beside it gets dragged
+     down by however many lines its neighbour needs. It reads as missing fields
+     and stray gaps rather than as a layout bug, which is why it survived until
+     someone photographed it. */
+  align-content: start;
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--portal-text-secondary);
