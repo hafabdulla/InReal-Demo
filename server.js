@@ -1307,12 +1307,26 @@ app.get('/api/properties', async (req, res) => {
         p.fraction_price AS "FractionPrice",
         p.monthly_rental_income AS "MonthlyRentalIncome",
         p.projected_annual_yield AS "ProjectedAnnualYield",
+        -- Return projections from the most recent valuation (migration 24).
+        -- Published so the public marketing site can render a property card
+        -- from the one record, instead of keeping a hardcoded second copy of
+        -- it that drifts — which is how the homepage came to describe a
+        -- property the portal had never heard of (D.56).
+        p.target_yield_min_pct AS "TargetYieldMinPct",
+        p.target_yield_max_pct AS "TargetYieldMaxPct",
+        p.target_appreciation_min_pct AS "TargetAppreciationMinPct",
+        p.target_appreciation_max_pct AS "TargetAppreciationMaxPct",
+        p.projected_net_annual_roi_pct AS "ProjectedNetAnnualRoiPct",
         p.current_occupancy_rate AS "CurrentOccupancyRate",
         p.status AS "Status",
         p.fractions_sold AS "FractionsSold",
         p.total_fractions AS "TotalFractions",
         p.property_description AS "PropertyDescription",
         p.image_url AS "ImageURL",
+        -- Raw and unaliased: resolved per property below, same as the detail
+        -- endpoint, so a card can state the real minimum without a second
+        -- request per property.
+        p.minimum_investment,
         to_char(v.valuation_date, 'YYYY-MM-DD') AS "ValuationAsOf"
       FROM properties p
       LEFT JOIN LATERAL (
@@ -1352,10 +1366,17 @@ app.get('/api/properties', async (req, res) => {
     // moment this deploys, before anyone has uploaded anything.
     res.json({
       success: true,
-      data: properties.map((p) => ({
-        ...p,
-        CoverImage: coverByProperty.get(String(p.PropertyID)) || null,
-      })),
+      data: properties.map((p) => {
+        // Same treatment as the detail endpoint: the raw column is pulled out
+        // of the spread so the response carries one minimum, resolved, under
+        // the name callers are meant to use.
+        const { minimum_investment: _ownMinimum, ...property } = p;
+        return {
+          ...property,
+          CoverImage: coverByProperty.get(String(p.PropertyID)) || null,
+          MinimumIndicativeAmount: resolvePropertyMinimum(p),
+        };
+      }),
     });
   } catch (error) {
     console.error('API error:', error); res.status(500).json({ success: false, error: 'Internal server error' });
@@ -1392,6 +1413,11 @@ app.get('/api/properties/:id', async (req, res) => {
         fraction_price AS "FractionPrice",
         monthly_rental_income AS "MonthlyRentalIncome",
         projected_annual_yield AS "ProjectedAnnualYield",
+        target_yield_min_pct AS "TargetYieldMinPct",
+        target_yield_max_pct AS "TargetYieldMaxPct",
+        target_appreciation_min_pct AS "TargetAppreciationMinPct",
+        target_appreciation_max_pct AS "TargetAppreciationMaxPct",
+        projected_net_annual_roi_pct AS "ProjectedNetAnnualRoiPct",
         actual_annual_yield AS "ActualAnnualYield",
         current_occupancy_rate AS "CurrentOccupancyRate",
         property_description AS "PropertyDescription",
@@ -1906,7 +1932,46 @@ const PROPERTY_VALUATION_FIELDS = {
   valuationDate: { kind: 'date', required: true, label: 'Valuation date' },
   source: { kind: 'text', max: 200, required: true, label: 'Source' },
   note: { kind: 'text', max: 1000, label: 'Note' },
+  // The return projections the public property card makes (migration 24).
+  //
+  // Here rather than on the edit form on purpose: these are forward-looking
+  // return claims shown to prospective investors, which is the most sensitive
+  // figure on the card, not the least. On a valuation they inherit the Finance
+  // gate, a date, a source and the append-only ledger — exactly what
+  // projectedAnnualYield above already gets, and for the same reason.
+  //
+  // Ranges are two numbers. Each pair is both-or-neither, enforced in the
+  // database and checked again below so a half-stated range is a named refusal
+  // rather than a constraint violation surfacing as a 500.
+  targetYieldMinPct: { kind: 'decimal', places: 2, max: 99.99, label: 'Target yield (low)' },
+  targetYieldMaxPct: { kind: 'decimal', places: 2, max: 99.99, label: 'Target yield (high)' },
+  targetAppreciationMinPct: { kind: 'decimal', places: 2, max: 99.99, label: 'Target appreciation (low)' },
+  targetAppreciationMaxPct: { kind: 'decimal', places: 2, max: 99.99, label: 'Target appreciation (high)' },
+  projectedNetAnnualRoiPct: { kind: 'decimal', places: 2, max: 99.99, label: 'Projected net annual ROI' },
 };
+
+// Both ends of a stated range, or neither. Returns an error string or null.
+// The database enforces this too (migration 24); this exists so the caller is
+// told which pair is wrong and in which direction, rather than being handed a
+// constraint name.
+function validateProjectionRanges(input) {
+  const pairs = [
+    ['targetYieldMinPct', 'targetYieldMaxPct', 'Target yield'],
+    ['targetAppreciationMinPct', 'targetAppreciationMaxPct', 'Target appreciation'],
+  ];
+  for (const [minKey, maxKey, label] of pairs) {
+    const min = input[minKey];
+    const max = input[maxKey];
+    if (min === null && max === null) continue;
+    if (min === null || max === null) {
+      return `${label} needs both a low and a high figure, or neither.`;
+    }
+    if (min > max) {
+      return `${label}'s low figure cannot be higher than its high figure.`;
+    }
+  }
+  return null;
+}
 
 // Sent to the edit endpoint, these are answered with where they DO change,
 // rather than "unknown field" — an operator or a script that sends one has a
@@ -2446,6 +2511,11 @@ app.post('/api/ops/properties/:propertyId/valuations', async (req, res) => {
       input[field] = result.value;
     }
 
+    const rangeError = validateProjectionRanges(input);
+    if (rangeError) {
+      return res.status(400).json({ success: false, error: rangeError });
+    }
+
     const outcome = await withTransaction(async (tx) => {
       // Locked so a concurrent change to the fraction count cannot land
       // between pricing this valuation and projecting it.
@@ -2468,9 +2538,13 @@ app.post('/api/ops/properties/:propertyId/valuations', async (req, res) => {
       const inserted = await tx(
         `INSERT INTO property_valuations
            (property_id, property_value, monthly_rental_income, projected_annual_yield,
-            total_fractions, fraction_price, valuation_date, source, note, recorded_by_admin_id)
+            total_fractions, fraction_price, valuation_date, source, note, recorded_by_admin_id,
+            target_yield_min_pct, target_yield_max_pct,
+            target_appreciation_min_pct, target_appreciation_max_pct,
+            projected_net_annual_roi_pct)
          VALUES ($1, $2::numeric, $3::numeric, $4::numeric,
-                 $5::int, ROUND($2::numeric / $5::int, 2), $6::date, $7, $8, $9)
+                 $5::int, ROUND($2::numeric / $5::int, 2), $6::date, $7, $8, $9,
+                 $10::numeric, $11::numeric, $12::numeric, $13::numeric, $14::numeric)
          RETURNING valuation_id`,
         [
           propertyId,
@@ -2482,6 +2556,11 @@ app.post('/api/ops/properties/:propertyId/valuations', async (req, res) => {
           input.source,
           input.note,
           adminUserId,
+          input.targetYieldMinPct,
+          input.targetYieldMaxPct,
+          input.targetAppreciationMinPct,
+          input.targetAppreciationMaxPct,
+          input.projectedNetAnnualRoiPct,
         ]
       );
 
@@ -2490,10 +2569,18 @@ app.post('/api/ops/properties/:propertyId/valuations', async (req, res) => {
             SET property_value = v.property_value,
                 monthly_rental_income = v.monthly_rental_income,
                 projected_annual_yield = v.projected_annual_yield,
+                target_yield_min_pct = v.target_yield_min_pct,
+                target_yield_max_pct = v.target_yield_max_pct,
+                target_appreciation_min_pct = v.target_appreciation_min_pct,
+                target_appreciation_max_pct = v.target_appreciation_max_pct,
+                projected_net_annual_roi_pct = v.projected_net_annual_roi_pct,
                 fraction_price = ROUND(v.property_value / p.total_fractions, 2),
                 updated_at = NOW()
            FROM (
-             SELECT valuation_id, property_value, monthly_rental_income, projected_annual_yield
+             SELECT valuation_id, property_value, monthly_rental_income, projected_annual_yield,
+                    target_yield_min_pct, target_yield_max_pct,
+                    target_appreciation_min_pct, target_appreciation_max_pct,
+                    projected_net_annual_roi_pct
                FROM property_valuations
               WHERE property_id = $1
               ORDER BY valuation_date DESC, valuation_id DESC

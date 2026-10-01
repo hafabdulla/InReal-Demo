@@ -4397,6 +4397,15 @@ async function submitValuation() {
     propertyValue: read('valuationValue'),
     monthlyRentalIncome: read('valuationRent') || null,
     projectedAnnualYield: read('valuationYield') || null,
+    // The return projections the public property card shows (migration 24).
+    // Recorded here rather than on the property edit form because they are
+    // forward-looking return claims to investors, so they belong with the rest
+    // of a valuation: Finance-gated, dated and sourced.
+    targetYieldMinPct: read('valuationYieldMin') || null,
+    targetYieldMaxPct: read('valuationYieldMax') || null,
+    targetAppreciationMinPct: read('valuationApprMin') || null,
+    targetAppreciationMaxPct: read('valuationApprMax') || null,
+    projectedNetAnnualRoiPct: read('valuationNetRoi') || null,
     valuationDate: read('valuationDate'),
     source: read('valuationSource'),
     note: read('valuationNote') || null,
@@ -4431,7 +4440,9 @@ async function submitValuation() {
     );
     renderAudit();
 
-    ['valuationValue', 'valuationRent', 'valuationYield', 'valuationDate', 'valuationSource', 'valuationNote']
+    ['valuationValue', 'valuationRent', 'valuationYield',
+     'valuationYieldMin', 'valuationYieldMax', 'valuationApprMin', 'valuationApprMax', 'valuationNetRoi',
+     'valuationDate', 'valuationSource', 'valuationNote']
       .forEach((id) => { document.getElementById(id).value = ''; });
     fillValuationPlaceholders();
     updateValuationPricePreview();

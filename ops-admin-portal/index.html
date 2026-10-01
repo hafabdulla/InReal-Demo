@@ -1376,6 +1376,24 @@
                     <input class="field" id="valuationYield" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" />
                   </label>
                   <label class="kyc-form-label">
+                    Target annual yield (%) <span class="helper">(the range shown to investors — enter both ends, or neither)</span>
+                    <span class="range-pair">
+                      <input class="field" id="valuationYieldMin" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" placeholder="Low" />
+                      <input class="field" id="valuationYieldMax" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" placeholder="High" />
+                    </span>
+                  </label>
+                  <label class="kyc-form-label">
+                    Target annual appreciation (%) <span class="helper">(both ends, or neither)</span>
+                    <span class="range-pair">
+                      <input class="field" id="valuationApprMin" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" placeholder="Low" />
+                      <input class="field" id="valuationApprMax" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" placeholder="High" />
+                    </span>
+                  </label>
+                  <label class="kyc-form-label">
+                    Projected net annual ROI (%) <span class="helper">(after costs and fees — the headline return figure on the public property card)</span>
+                    <input class="field" id="valuationNetRoi" type="number" min="0" max="99.99" step="0.01" inputmode="decimal" />
+                  </label>
+                  <label class="kyc-form-label">
                     Valuation date <span class="helper">(the date the figures are as of)</span>
                     <input class="field" id="valuationDate" type="date" />
                   </label>

@@ -1347,6 +1347,23 @@ tr.clickable-row.selected td {
   color: var(--portal-text-primary);
 }
 
+/* The two ends of a stated range (target yield, target appreciation) side by
+   side, so they read as one figure rather than two unrelated fields. The
+   parent .kyc-form-label is a grid, so this wrapper needs its own min-width: 0
+   — a grid item does not shrink below its content by default, and two number
+   inputs in a narrow drawer would otherwise push the panel wider instead of
+   fitting. Same trap noted in CLAUDE.md for .split layouts. */
+.range-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-width: 0;
+}
+
+.range-pair > .field {
+  min-width: 0;
+}
+
 .kyc-form-error {
   font-size: 0.82rem;
   color: var(--portal-danger);
