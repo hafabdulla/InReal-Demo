@@ -3,18 +3,25 @@ import { motion } from 'framer-motion'
 import { fadeUp, staggerContainer, staggerItem, sectionViewport } from '../animations'
 
 const PORTAL_URL = '#register'
-// The presets were [500, 1000, 5000, 10000, 25000] until 30 Sep 2026. The first
-// two sat below the minimum this same page advertises, so the calculator would
-// model a $500 investment the platform refuses — and the custom box accepted
-// anything over $100. The 17 Sep sweep that replaced ten `$500` literals across
-// six components never reached this file.
+// $250 since 1 October 2026 (PO-23), tracking the platform entry price in
+// Hero.jsx — read the note there before changing either.
 //
-// Same rule as Hero.jsx: `MIN_INDICATIVE_AMOUNT` on the server is what actually
-// decides, and this is only the promise made about it. If the minimum changes,
-// change it there FIRST. This page is static marketing and never calls the API,
-// which is exactly why it drifted in the first place.
-const MIN_INVESTMENT = 3000
-const INVESTMENT_PRESETS = [3000, 5000, 10000, 25000, 50000]
+// Briefly $3,000 on 30 Sep. Before that the presets were
+// [500, 1000, 5000, 10000, 25000] while this same page advertised a $3,000
+// minimum, so the calculator would model an investment the platform refuses,
+// and the custom box accepted anything over $100. The 17 Sep sweep that
+// replaced ten `$500` literals across six components never reached this file.
+//
+// This models the PLATFORM entry price, not any one property's minimum — the
+// pilot property asks $3,000 (migration 23). That is a fair simplification for
+// a what-if calculator and a misleading one for a property page, which is why
+// the property cards do not use this figure.
+//
+// Same rule as Hero.jsx: the server is what actually decides. Change it there
+// FIRST. This page is static marketing and never calls the API, which is
+// exactly why it drifted in the first place.
+const MIN_INVESTMENT = 250
+const INVESTMENT_PRESETS = [250, 1000, 5000, 10000, 25000]
 
 export default function Calculator() {
   const [investment, setInvestment] = useState(5000)

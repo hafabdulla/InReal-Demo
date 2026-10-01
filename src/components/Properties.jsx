@@ -24,6 +24,15 @@ const mobileViewport = {
 //   avg. annual ROI     8.1%   (net of the ~40% all-in cost and fee load)
 //   minimum ticket      $3,000
 //
+// ⚠️ THE $3,000 ABOVE IS NOT THE SITE-WIDE FIGURE AND MUST NOT BE SWEPT WITH
+// IT. The rest of the site says "from $250" (PO-23, 1 Oct), which is the
+// platform's entry price — the lowest any property may ask. This property asks
+// $3,000, because that is what its investor collateral states to prospects who
+// are holding it. Minimums are per property since migration 23, and this card
+// is where that property's real number appears. The placeholder below carries
+// $250 because it states no minimum of its own and so follows the platform
+// default. A future card copies whatever its property actually asks.
+//
 // `fundedPct: 0` is deliberate and is the one figure to confirm with the PO
 // before this goes in front of prospects. No subscription has settled on the
 // platform, so 0% is what is true here; if the raise is partly away offline,
@@ -57,7 +66,7 @@ const ALL_PROPERTIES = [
     targetYield: '7–9%',
     appreciation: '3–5%',
     tgtRoi: '',
-    minInvestment: '$3,000',
+    minInvestment: '$250',
     propertyValue: 'TBC',
     fundedPct: 0,
     status: 'Coming Soon',

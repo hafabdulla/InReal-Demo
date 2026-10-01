@@ -4,7 +4,13 @@ import { staggerContainer, staggerItem, sectionViewport, EASE_PREMIUM } from '..
 
 const FAQS = [
   { q: 'What exactly am I buying?', a: 'You acquire a beneficial participation interest in a specific property, held through a BVI Segregated Portfolio Company. This gives you true beneficial ownership rights, including your proportional share of rental income and capital appreciation, protected by BVI corporate law. This is not a token, not a REIT share, and not a revenue-share agreement.' },
-  { q: 'What is the minimum investment?', a: 'The minimum investment is $3,000 per property. There is no maximum. You can invest up to 100% of any property if available. If you acquire 100% ownership, the Sole Beneficial Owner Protocol activates, giving you personal use rights and tenant nomination privileges.' },
+  // Reworded 1 Oct 2026. It read "$3,000 per property", which stopped being
+  // true when minimums became per-property (migration 23): $250 is the lowest
+  // the platform allows, and each property states its own at or above it. The
+  // pilot property, The Base Sukhumvit 77, is $3,000 — the figure its investor
+  // collateral states. Naming one number here is what makes this answer wrong
+  // again the moment a second property is listed.
+  { q: 'What is the minimum investment?', a: 'Minimums start at $250, and each property sets its own — the amount is shown on that property\'s page before you commit to anything. Our current pilot property, The Base Sukhumvit 77, has a minimum of $3,000. There is no maximum. You can invest up to 100% of any property if available. If you acquire 100% ownership, the Sole Beneficial Owner Protocol activates, giving you personal use rights and tenant nomination privileges.' },
   { q: 'How do I earn returns?', a: 'You earn through two channels: rental income distributions (paid monthly from actual tenant rents) and capital appreciation when a property increases in value over time. Target yields vary by market, typically 5.8% to 9.4% annually, depending on location and property type.' },
   { q: 'What are the fees?', a: 'InReal charges a transparent, published fee schedule: a payment processing fee when you invest, an InReal transaction fee, and an ongoing management fee. There are no hidden charges. The full fee schedule is available before you invest, and you can model all fees in our calculator above.' },
   { q: 'How is my investment protected?', a: 'Each property sits in its own isolated portfolio, legally separated so one property\'s liabilities can never affect another. The structure operates under BVI Business Companies Act with an independent registered agent. Anti-encumbrance provisions prevent the platform from pledging your property as collateral.' },

@@ -687,6 +687,25 @@ const REQUIRE_KYC_DOCUMENTS = String(process.env.REQUIRE_KYC_DOCUMENTS || '').to
 // a literal.
 const MIN_INDICATIVE_AMOUNT = Number(process.env.MIN_INDICATIVE_AMOUNT || 3000);
 
+// A property's own minimum, falling back to the platform figure above.
+//
+// Migration 23 added `properties.minimum_investment`, because one number can no
+// longer serve: the pilot property's minimum is stated as $3,000 in collateral
+// already sent to named prospects, while the product owner wants $250 to be the
+// entry price for everything that follows.
+//
+// NULL means "no minimum of its own, follow the platform default" — not "no
+// minimum". Every caller that enforces or displays a minimum must go through
+// here, so the figure shown to an investor and the figure the server enforces
+// cannot drift apart. That drift is exactly what put "$500" on the public site
+// for weeks while the server refused anything under $3,000 (D.46).
+function resolvePropertyMinimum(row) {
+  const own = row == null ? null : row.minimum_investment;
+  if (own === null || own === undefined) return MIN_INDICATIVE_AMOUNT;
+  const amount = Number(own);
+  return Number.isFinite(amount) && amount > 0 ? amount : MIN_INDICATIVE_AMOUNT;
+}
+
 function getAuthenticatedUserId(req) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -1386,7 +1405,10 @@ app.get('/api/properties/:id', async (req, res) => {
           ORDER BY pv.valuation_date DESC, pv.valuation_id DESC
           LIMIT 1) AS "ValuationAsOf",
         is_active AS "IsActive",
-        is_deleted AS "IsDeleted"
+        is_deleted AS "IsDeleted",
+        -- Lower case and unaliased on purpose: resolvePropertyMinimum reads the
+        -- raw column, and the resolved figure is what reaches the client below.
+        minimum_investment
       FROM properties
       WHERE property_id = $1 AND is_active = true AND is_deleted = false AND is_published = true`,
       [id]
@@ -1407,16 +1429,26 @@ app.get('/api/properties/:id', async (req, res) => {
       [id]
     );
 
+    // The raw column is pulled out of the spread rather than shipped: every
+    // other field here is PascalCase, and the resolved figure below is the one
+    // callers are meant to use. Leaving it in would publish two minimums, one
+    // of them null for most properties.
+    const { minimum_investment: _ownMinimum, ...property } = rows[0];
+
     res.json({
       success: true,
       data: {
-        ...rows[0],
+        ...property,
         Media: await signPropertyMedia(media),
         // Published so the express-interest form can state the minimum before
         // someone types an amount, instead of the frontend keeping its own
-        // copy of the figure and drifting from the constant that actually
+        // copy of the figure and drifting from the figure that actually
         // decides. Same number the refusal names back on a rejected amount.
-        MinimumIndicativeAmount: MIN_INDICATIVE_AMOUNT,
+        //
+        // Per property since migration 23 — the pilot property keeps the
+        // $3,000 its collateral states while the platform default moves to
+        // $250 for everything after it.
+        MinimumIndicativeAmount: resolvePropertyMinimum(rows[0]),
       },
     });
   } catch (error) {
@@ -1852,6 +1884,13 @@ const PROPERTY_DETAIL_FIELDS = {
   bathrooms: { column: 'bathrooms', kind: 'decimal', places: 1, max: 99.9, label: 'Bathrooms' },
   squareMeters: { column: 'square_meter', kind: 'decimal', places: 2, max: 99999999.99, label: 'Floor area' },
   acquisitionDate: { column: 'acquisition_date', kind: 'date', label: 'Acquisition date' },
+  // The smallest amount an investor may register interest for on THIS property
+  // (migration 23). Blank clears it to NULL, which means "use the platform
+  // default" — see resolvePropertyMinimum. Not a valuation output and not
+  // derived from one, so it belongs here rather than behind FINANCE_ROLES with
+  // property_value; it is a commercial term the product owner sets per
+  // property, not a figure the valuation produces.
+  minimumInvestment: { column: 'minimum_investment', kind: 'decimal', places: 2, max: 1e12, positive: true, label: 'Minimum investment' },
   managerName: { column: 'manager_name', kind: 'text', max: 255, label: 'Property manager' },
   insuranceProvider: { column: 'insurance_provider', kind: 'text', max: 255, label: 'Insurer' },
   insurancePolicyNumber: { column: 'insurance_policy_number', kind: 'text', max: 100, label: 'Insurance policy number' },
@@ -2077,6 +2116,9 @@ async function loadOpsPropertyDetail(propertyId) {
        status AS "Status",
        is_active AS "IsActive",
        is_published AS "IsPublished",
+       -- NULL here is meaningful and is shown as such: it means this property
+       -- follows the platform default rather than stating a minimum of its own.
+       minimum_investment AS "MinimumInvestment",
        (SELECT COUNT(*)::int FROM property_media pm
          WHERE pm.property_id = properties.property_id) AS "PhotoCount",
        (SELECT (COUNT(*) FILTER (WHERE pm.is_published))::int FROM property_media pm
@@ -4200,7 +4242,7 @@ app.post('/api/investment-intents', async (req, res) => {
 
     const outcome = await withTransaction(async (tx) => {
       const properties = await tx(
-        `SELECT fraction_price, fractions_available, total_fractions
+        `SELECT fraction_price, fractions_available, total_fractions, minimum_investment
            FROM properties WHERE property_id = $1`,
         [propertyId]
       );
@@ -4215,11 +4257,17 @@ app.post('/api/investment-intents', async (req, res) => {
         return { status: 409, error: 'PROPERTY_NOT_PRICED' };
       }
 
-      if (amount < MIN_INDICATIVE_AMOUNT) {
+      // This property's own minimum, not the platform's — the two differ
+      // whenever a property states one (migration 23). The refusal names the
+      // figure back, so a caller refused here is told the same number the
+      // property page showed them rather than a global they never saw.
+      const propertyMinimum = resolvePropertyMinimum(properties[0]);
+
+      if (amount < propertyMinimum) {
         return {
           status: 400,
           error: 'BELOW_MINIMUM',
-          minimum: MIN_INDICATIVE_AMOUNT,
+          minimum: propertyMinimum,
           currency: 'USD',
         };
       }

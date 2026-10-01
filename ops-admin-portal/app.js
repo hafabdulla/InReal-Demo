@@ -3736,6 +3736,10 @@ const PROPERTY_FORM_FIELDS = [
   ['propBathrooms', 'Bathrooms', 'bathrooms'],
   ['propSquareMeters', 'SquareMeters', 'squareMeters'],
   ['propTotalFractions', 'TotalFractions', 'totalFractions'],
+  // Blank means "follow the platform minimum", which is why this is not
+  // defaulted to a number in the form — a default here would quietly opt every
+  // new property out of the platform figure (migration 23).
+  ['propMinimumInvestment', 'MinimumInvestment', 'minimumInvestment'],
   ['propManager', 'ManagerName', 'managerName'],
   ['propInsurer', 'InsuranceProvider', 'insuranceProvider'],
   ['propPolicyNumber', 'InsurancePolicyNumber', 'insurancePolicyNumber'],

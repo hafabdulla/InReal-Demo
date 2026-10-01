@@ -74,12 +74,14 @@ export default function PropertyDetailPage() {
             : (data.ImageURL ? [{ url: data.ImageURL, caption: null }] : []),
           // The price of one fraction. This used to be labelled "Min.
           // Investment" on the page below, which it never was — the minimum is
-          // a platform-wide figure the server owns, and showing the fraction
-          // price under that label told an investor the minimum was $890 when
-          // it is $3,000.
+          // a figure the server owns, and showing the fraction price under that
+          // label told an investor the minimum was $890 when it was $3,000.
           fractionPrice,
-          // Published by the property endpoint from the one server constant,
-          // so this page never carries its own copy of the figure.
+          // Published by the property endpoint, and **per property** since
+          // migration 23: this is that property's own minimum, or the platform
+          // default where it states none. So this page never carries its own
+          // copy of the figure, and the number shown here is always the one the
+          // server will enforce on the amount typed below it.
           minimumIndicativeAmount: Number(data.MinimumIndicativeAmount) || null,
           totalValue: propertyValue,
           rentalYieldPct: projectedYield,
